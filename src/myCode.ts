@@ -1,3 +1,12 @@
+import dartShipImage from "./assets/ships/dart.svg";
+import ufoShipImage from "./assets/ships/ufo.svg";
+import swordShipImage from "./assets/ships/sword.svg";
+import jackpotCrownImage from "./assets/ships/jackpot-crown.svg";
+import goldenCrownImage from "./assets/ships/golden-crown.svg";
+import prestigeCometImage from "./assets/ships/prestige-comet.png";
+import prestigeHaloImage from "./assets/ships/prestige-halo.png";
+import prestigeNovaImage from "./assets/ships/prestige-nova.png";
+
 const playerLabel = document.createElement("div");
 const world = document.createElement("main");
 const claimLabel = document.createElement("span");
@@ -113,9 +122,9 @@ const levels: Level[] = [
 
 const skins: { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean }[] = [
     { name: "Solar", color: "#ed7657", shape: "classic", required: 0 },
-    { name: "Mint Dart", color: "#62d6b2", shape: "dart", required: 3, image: "/src/assets/ships/dart.svg" },
-    { name: "Gold UFO", color: "#f6c46e", shape: "ring", required: 7, image: "/src/assets/ships/ufo.svg" },
-    { name: "Plasma Sword", color: "#b991ff", shape: "blade", required: 12, image: "/src/assets/ships/sword.svg" },
+    { name: "Mint Dart", color: "#62d6b2", shape: "dart", required: 3, image: dartShipImage },
+    { name: "Gold UFO", color: "#f6c46e", shape: "ring", required: 7, image: ufoShipImage },
+    { name: "Plasma Sword", color: "#b991ff", shape: "blade", required: 12, image: swordShipImage },
     { name: "Aurora", color: "#6ecbff", shape: "classic", required: 18 },
     { name: "Titan Core", color: "#ffdf72", shape: "ring", required: 24, boss: true },
     { name: "Eclipse", color: "#f58bff", shape: "blade", required: 0, secret: true },
@@ -167,14 +176,14 @@ const trails: TrailStyle[] = [
 ];
 const avatars: AvatarStyle[] = [
     { name: "Classic", color: "#ed7657", shape: "classic", required: 0, defaultSkin: 0 },
-    { name: "Dart", color: "#62d6b2", shape: "dart", required: 0, image: "/src/assets/ships/dart.svg", defaultSkin: 1 },
-    { name: "UFO", color: "#f6c46e", shape: "ring", required: 0, image: "/src/assets/ships/ufo.svg", defaultSkin: 2 },
-    { name: "Sword", color: "#b991ff", shape: "blade", required: 0, image: "/src/assets/ships/sword.svg", defaultSkin: 3 },
-    { name: "Jackpot Crown", color: "#ffe36e", shape: "classic", required: 0, defaultSkin: 17, jackpot: true, image: "/src/assets/ships/jackpot-crown.svg" },
-    { name: "Prestige Comet", color: "#fff6a8", shape: "dart", required: 0, defaultSkin: 1, prestige: 1, image: "/src/assets/ships/prestige-comet.png" },
-    { name: "Prestige Halo", color: "#b8fff1", shape: "ring", required: 0, defaultSkin: 2, prestige: 2, image: "/src/assets/ships/prestige-halo.png" },
-    { name: "Prestige Nova", color: "#ffb6e6", shape: "blade", required: 0, defaultSkin: 3, prestige: 3, image: "/src/assets/ships/prestige-nova.png" },
-    { name: "Golden Pilot", color: "#ffe36e", shape: "classic", required: 0, defaultSkin: 17, golden: true, image: "/src/assets/ships/golden-crown.svg" },
+    { name: "Dart", color: "#62d6b2", shape: "dart", required: 0, image: dartShipImage, defaultSkin: 1 },
+    { name: "UFO", color: "#f6c46e", shape: "ring", required: 0, image: ufoShipImage, defaultSkin: 2 },
+    { name: "Sword", color: "#b991ff", shape: "blade", required: 0, image: swordShipImage, defaultSkin: 3 },
+    { name: "Jackpot Crown", color: "#ffe36e", shape: "classic", required: 0, defaultSkin: 17, jackpot: true, image: jackpotCrownImage },
+    { name: "Prestige Comet", color: "#fff6a8", shape: "dart", required: 0, defaultSkin: 1, prestige: 1, image: prestigeCometImage },
+    { name: "Prestige Halo", color: "#b8fff1", shape: "ring", required: 0, defaultSkin: 2, prestige: 2, image: prestigeHaloImage },
+    { name: "Prestige Nova", color: "#ffb6e6", shape: "blade", required: 0, defaultSkin: 3, prestige: 3, image: prestigeNovaImage },
+    { name: "Golden Pilot", color: "#ffe36e", shape: "classic", required: 0, defaultSkin: 17, golden: true, image: goldenCrownImage },
     // Prestige-exclusive avatars from special rolls
     { name: "Stellar Guard", color: "#ffcc33", shape: "classic", required: 0, defaultSkin: 19, prestige: 1, cssArt: "stellar-guard" },
     { name: "Quantum Dancer", color: "#b24bff", shape: "dart", required: 0, defaultSkin: 20, prestige: 1, cssArt: "quantum-dancer" },
@@ -830,12 +839,15 @@ function showCustomization() {
     };
     appendRarityGroups("Skins", skinsWithIndex, "customization-grid", (skin, _index, rarity) => {
         const button = document.createElement("button"); button.className = `loadout-choice ${selectedSkin === skin.originalIndex ? "selected" : ""}`; button.disabled = !isSkinUnlocked(skin, skin.originalIndex);
-        button.innerHTML = `<span>${skin.name}</span>${createRarityBadge(rarity)}`;
+        const swatch = skin.image
+            ? createShipArtMarkup(skin.image, `${skin.name} skin`, skin.color)
+            : `<i class="skin-color-swatch ship-${skin.shape}" style="--skin-color:${skin.color}" aria-hidden="true"></i>`;
+        button.innerHTML = `${swatch}<span>${skin.name}</span>${createRarityBadge(rarity)}`;
         button.addEventListener("click", () => { selectedSkin = skin.originalIndex; localStorage.setItem("orbit-skin", String(selectedSkin)); showCustomization(); }); return button;
     });
     appendRarityGroups("Trails", trailsWithIndex, "customization-grid", (trail, _index, rarity) => {
         const button = document.createElement("button"); button.className = `loadout-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trail);
-        button.innerHTML = `<span>${trail.name}</span>${createRarityBadge(rarity)}`;
+        button.innerHTML = `<i class="loadout-trail-mark trail-effect-${trail.effect}" style="--trail-color:${trail.color}" aria-hidden="true"></i><span>${trail.name}</span>${createRarityBadge(rarity)}`;
         button.addEventListener("click", () => { selectedTrail = trail.originalIndex; localStorage.setItem("orbit-trail", String(selectedTrail)); showCustomization(); }); return button;
     });
     appendRarityGroups("Avatars", avatarsWithIndex, "avatar-grid", (avatar, _index, rarity) => {
@@ -1807,18 +1819,200 @@ async function loadManagedUsers(container: HTMLElement) {
             const progress = document.createElement("textarea");
             progress.value = JSON.stringify(user.progress, null, 2);
             progress.setAttribute("aria-label", `Saved progress for ${user.username}`);
+            const progression = document.createElement("section");
+            progression.className = "tester-player-progression";
+            const progressionHeading = document.createElement("b");
+            progressionHeading.textContent = "Resources & skills";
+            progression.append(progressionHeading);
+            const numberFields = document.createElement("div");
+            numberFields.className = "tester-player-number-fields";
+            const readStoredNumber = (key: string, fallback = 0) => {
+                const value = Number(user.progress[key] ?? fallback);
+                return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+            };
+            const addProgressNumber = (labelText: string, key: string, maximum: number) => {
+                const label = document.createElement("label");
+                label.append(document.createTextNode(labelText));
+                const input = document.createElement("input");
+                input.type = "number";
+                input.min = "0";
+                input.max = String(maximum);
+                input.step = "1";
+                input.value = String(Math.min(readStoredNumber(key), maximum));
+                input.dataset.progressKey = key;
+                label.append(input);
+                numberFields.append(label);
+            };
+            addProgressNumber("Asteroids", "orbit-claims", 100000000);
+            addProgressNumber("Special asteroids", "orbit-special-claims", 100000000);
+            addProgressNumber("Prestige level", "orbit-prestige", 100);
+            addProgressNumber("Maximum prestige", "orbit-prestige-max", 100);
+
+            let inventory: Partial<Record<PowerupKind, number>> = {};
+            let inventoryNeedsRepair = false;
+            try {
+                const storedInventory: unknown = JSON.parse(user.progress["orbit-powerups"] ?? "{}");
+                if (storedInventory && typeof storedInventory === "object" && !Array.isArray(storedInventory)) {
+                    inventory = storedInventory as Partial<Record<PowerupKind, number>>;
+                    inventoryNeedsRepair = (Object.keys(powerupPrices) as PowerupKind[]).some((kind) =>
+                        inventory[kind] !== undefined && (!Number.isSafeInteger(inventory[kind]) || (inventory[kind] ?? -1) < 0));
+                } else inventoryNeedsRepair = true;
+            } catch {
+                inventoryNeedsRepair = true;
+            }
+            const skillsHeading = document.createElement("b");
+            skillsHeading.textContent = "Power-up skills";
+            progression.append(numberFields, skillsHeading);
+            if (inventoryNeedsRepair) {
+                const inventoryWarning = document.createElement("small");
+                inventoryWarning.textContent = "Saved power-up data is malformed; the values below will replace it when saved.";
+                progression.append(inventoryWarning);
+            }
+            const skillFields = document.createElement("div");
+            skillFields.className = "tester-player-number-fields";
+            (Object.keys(powerupPrices) as PowerupKind[]).forEach((kind) => {
+                const label = document.createElement("label");
+                label.append(document.createTextNode(powerupLabels[kind]));
+                const input = document.createElement("input");
+                input.type = "number";
+                input.min = "0";
+                input.max = "1000000";
+                input.step = "1";
+                const amount = inventory[kind];
+                input.value = String(Number.isSafeInteger(amount) && (amount ?? -1) >= 0 ? amount : 0);
+                input.dataset.powerup = kind;
+                label.append(input);
+                skillFields.append(label);
+            });
+            progression.append(skillFields);
+
+            const cosmeticUnlocks = document.createElement("div");
+            cosmeticUnlocks.className = "tester-player-unlocks";
+            (["skins", "trails", "avatars"] as const).forEach((kind) => {
+                const label = document.createElement("label");
+                const input = document.createElement("input");
+                input.type = "checkbox";
+                input.checked = user.progress[`orbit-unlock-${kind}`] === "1";
+                input.dataset.cosmeticUnlock = kind;
+                label.append(input, document.createTextNode(`Unlock all ${kind}`));
+                cosmeticUnlocks.append(label);
+            });
+            progression.append(cosmeticUnlocks);
+
+            const levelSection = document.createElement("details");
+            levelSection.className = "tester-player-levels";
+            const levelSummary = document.createElement("summary");
+            levelSummary.textContent = `Levels & clears (${levels.length})`;
+            const levelGroups = document.createElement("div");
+            levelGroups.className = "tester-player-level-groups";
+            const groupedLevels = [
+                { title: "Normal levels", matches: (level: Level) => !level.secret && !level.prestige },
+                { title: "Secret levels", matches: (level: Level) => Boolean(level.secret) },
+                { title: "Prestige levels", matches: (level: Level) => Boolean(level.prestige) },
+            ];
+            groupedLevels.forEach((group) => {
+                const groupPanel = document.createElement("fieldset");
+                const groupTitle = document.createElement("legend");
+                groupTitle.textContent = group.title;
+                groupPanel.append(groupTitle);
+                levels.forEach((level, index) => {
+                    if (!group.matches(level)) return;
+                    const row = document.createElement("div");
+                    row.className = "tester-player-level-row";
+                    const name = document.createElement("span");
+                    name.textContent = level.name;
+                    row.append(name);
+
+                    const accessLabel = document.createElement("label");
+                    const access = document.createElement("input");
+                    access.type = "checkbox";
+                    access.checked = level.secret
+                        ? level.secretId === "prestige-gate"
+                            ? user.progress["orbit-key-prestige-gate"] === "1"
+                            : level.secretId === "eclipse"
+                                ? user.progress["orbit-key-eclipse"] === "1" || user.progress["orbit-secret-unlocked"] === "1"
+                                : level.secretId
+                                    ? user.progress[`orbit-key-${level.secretId}`] === "1"
+                                    : user.progress["orbit-secret-unlocked"] === "1"
+                        : index === 0 || user.progress[`orbit-level-${index}`] === "1";
+                    access.dataset.levelAccess = String(index);
+                    accessLabel.append(access, document.createTextNode(" Access"));
+
+                    const clearLabel = document.createElement("label");
+                    const clear = document.createElement("input");
+                    clear.type = "checkbox";
+                    clear.checked = user.progress[`orbit-level-complete-${index}`] === "1";
+                    clear.dataset.levelClear = String(index);
+                    clearLabel.append(clear, document.createTextNode(" Cleared"));
+                    row.append(accessLabel, clearLabel);
+                    groupPanel.append(row);
+                });
+                levelGroups.append(groupPanel);
+            });
+            levelSection.append(levelSummary, levelGroups);
             const save = document.createElement("button");
             save.type = "submit";
             save.textContent = "Save profile";
             const result = document.createElement("small");
             result.setAttribute("role", "status");
-            form.append(username, banLabel, progress, save, result);
+            const progressHeading = document.createElement("b");
+            progressHeading.textContent = "Advanced saved profile data";
+            form.append(username, banLabel, progression, levelSection, progressHeading, progress, save, result);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 save.disabled = true;
                 result.textContent = "Saving player profile...";
                 try {
-                    const updatedProgress: unknown = JSON.parse(progress.value);
+                    const parsedProgress: unknown = JSON.parse(progress.value);
+                    if (!parsedProgress || typeof parsedProgress !== "object" || Array.isArray(parsedProgress)) {
+                        throw new Error("Saved profile data must be a JSON object.");
+                    }
+                    const updatedProgress = { ...(parsedProgress as Record<string, unknown>) };
+                    numberFields.querySelectorAll<HTMLInputElement>("input[data-progress-key]").forEach((input) => {
+                        const value = Number(input.value);
+                        if (!Number.isSafeInteger(value) || value < 0 || value > Number(input.max)) {
+                            throw new Error(`${input.closest("label")?.firstChild?.textContent?.trim() ?? "Progress"} must be a whole number between 0 and ${input.max}.`);
+                        }
+                        updatedProgress[input.dataset.progressKey!] = String(value);
+                    });
+                    const updatedInventory: Partial<Record<PowerupKind, number>> = { ...inventory };
+                    skillFields.querySelectorAll<HTMLInputElement>("input[data-powerup]").forEach((input) => {
+                        const value = Number(input.value);
+                        if (!Number.isSafeInteger(value) || value < 0 || value > 1000000) {
+                            throw new Error(`${powerupLabels[input.dataset.powerup as PowerupKind]} must be a whole number between 0 and 1000000.`);
+                        }
+                        updatedInventory[input.dataset.powerup as PowerupKind] = value;
+                    });
+                    updatedProgress["orbit-powerups"] = JSON.stringify(updatedInventory);
+                    cosmeticUnlocks.querySelectorAll<HTMLInputElement>("input[data-cosmetic-unlock]").forEach((input) => {
+                        const key = `orbit-unlock-${input.dataset.cosmeticUnlock}`;
+                        if (input.checked) updatedProgress[key] = "1";
+                        else delete updatedProgress[key];
+                    });
+                    const levelAccessUpdates = new Map<string, boolean>();
+                    levelSection.querySelectorAll<HTMLInputElement>("input[data-level-access]").forEach((input) => {
+                        const index = Number(input.dataset.levelAccess);
+                        const level = levels[index];
+                        if (!level) throw new Error("A selected level is no longer available. Refresh accounts and try again.");
+                        const key = level.secret
+                            ? level.secretId === "prestige-gate"
+                                ? "orbit-key-prestige-gate"
+                                : level.secretId
+                                    ? `orbit-key-${level.secretId}`
+                                    : "orbit-secret-unlocked"
+                            : `orbit-level-${index}`;
+                        levelAccessUpdates.set(key, Boolean(levelAccessUpdates.get(key) || input.checked));
+                        if (level.secretId === "eclipse") levelAccessUpdates.set("orbit-secret-unlocked", Boolean(levelAccessUpdates.get("orbit-secret-unlocked") || input.checked));
+                    });
+                    levelAccessUpdates.forEach((hasAccess, key) => {
+                        if (hasAccess) updatedProgress[key] = "1";
+                        else delete updatedProgress[key];
+                    });
+                    levelSection.querySelectorAll<HTMLInputElement>("input[data-level-clear]").forEach((input) => {
+                        const key = `orbit-level-complete-${input.dataset.levelClear}`;
+                        if (input.checked) updatedProgress[key] = "1";
+                        else delete updatedProgress[key];
+                    });
                     await apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
                         method: "PATCH",
                         body: JSON.stringify({ username: username.value, banned: banned.checked, progress: updatedProgress }),

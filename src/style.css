@@ -121,8 +121,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .player.ship-blade { border-radius: 8% 70% 8% 70%; transform: skewX(-12deg); }
 .player:has(.ship-art-image), .player:has(.ship-css-art) { border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; }
 .player .ship-art, .player .ship-art-image, .player .ship-css-art { position: absolute; inset: -7px; width: 56px; height: 70px; object-fit: contain; pointer-events: none; }
-.ship-art-image { position: relative; display: block; isolation: isolate; background: var(--ship-image) center / contain no-repeat; }
-.ship-art-image::after { position: absolute; inset: 0; content: ''; background: var(--ship-color); opacity: .82; mix-blend-mode: color; -webkit-mask: var(--ship-image) center / contain no-repeat; mask: var(--ship-image) center / contain no-repeat; pointer-events: none; }
+.ship-art-image { position: relative; display: block; flex: 0 0 auto; background-image: var(--ship-image); background-position: center; background-size: contain; background-repeat: no-repeat; isolation: isolate; }
+.ship-art-image::after { position: absolute; inset: 0; content: ''; background: var(--ship-color); opacity: .35; mix-blend-mode: color; -webkit-mask-image: var(--ship-image); mask-image: var(--ship-image); -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; pointer-events: none; }
 .ship-css-art { position: relative; display: block; flex: 0 0 auto; overflow: hidden; contain: layout paint size; isolation: isolate; background: var(--ship-color); box-shadow: 0 0 12px color-mix(in srgb, var(--ship-color) 82%, transparent); }
 .ship-css-stellar-guard { clip-path: polygon(50% 0, 87% 22%, 76% 90%, 50% 100%, 24% 90%, 13% 22%); background: radial-gradient(ellipse at 50% 36%, #bff7ff 0 13%, #21465f 14% 20%, transparent 21%), linear-gradient(90deg, #f8ae24, var(--ship-color) 40% 62%, #fff2a8); }
 .ship-css-quantum-dancer { clip-path: polygon(50% 0, 86% 50%, 50% 100%, 14% 50%); background: radial-gradient(circle at 50% 50%, #c6f9ff 0 16%, #263f75 17% 29%, transparent 30%), linear-gradient(135deg, #f0b6ff, var(--ship-color) 42% 58%, #6c248f); }
@@ -243,7 +243,19 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .trail-preview { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 42px; margin-top: 4px; }
 .trail-preview-particle { display: block; width: 14px; height: 25px; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color); animation-delay: var(--trail-delay); }
 .customization-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
-.loadout-choice { min-height: 42px; border: 1px solid #385267; color: #c4d1bd; background: #101b2b; font: .62rem 'DM Mono', monospace; cursor: pointer; }
+.loadout-choice { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 92px; padding: 8px 5px; border: 1px solid #385267; color: #c4d1bd; background: #101b2b; font: .62rem 'DM Mono', monospace; cursor: pointer; }
+.loadout-choice > span { line-height: 1.2; }
+.loadout-choice .rarity-badge { margin-left: 0; }
+.loadout-choice .ship-art-image { width: 34px; height: 34px; }
+.skin-color-swatch { display: block; width: 30px; height: 30px; border: 3px solid #f3f5e9; background: var(--skin-color); box-shadow: 0 0 12px var(--skin-color); }
+.skin-color-swatch.ship-classic { border-radius: 52% 52% 45% 45%; }
+.skin-color-swatch.ship-dart { clip-path: polygon(50% 0, 95% 70%, 66% 62%, 50% 100%, 34% 62%, 5% 70%); }
+.skin-color-swatch.ship-ring { border-radius: 50%; background: transparent; box-shadow: 0 0 0 4px var(--skin-color), 0 0 14px var(--skin-color); }
+.skin-color-swatch.ship-blade { clip-path: polygon(50% 0, 86% 28%, 68% 49%, 96% 100%, 50% 75%, 4% 100%, 32% 49%, 14% 28%); }
+.loadout-trail-mark { display: block; width: 30px; height: 9px; border-radius: 50%; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); }
+.loadout-trail-mark.trail-effect-spark { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 8px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); }
+.loadout-trail-mark.trail-effect-ribbon { width: 8px; height: 25px; border-radius: 50%; }
+.loadout-trail-mark.trail-effect-arc { width: 20px; height: 20px; border: 3px solid var(--trail-color); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; background: transparent; box-shadow: 0 0 10px var(--trail-color); }
 .loadout-choice:hover:not(:disabled), .loadout-choice.selected { border-color: #f6c46e; color: #f6c46e; box-shadow: inset 0 -3px #f6c46e; }
 .loadout-choice:disabled { opacity: .35; cursor: not-allowed; }
 .avatar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -587,6 +599,21 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-player-form label { display: flex; align-items: center; gap: 8px; color: #ed7657; font: .7rem 'DM Mono', monospace; }
 .tester-player-form input[type="checkbox"] { width: 18px; height: 18px; accent-color: #ed7657; }
 .tester-player-form small { min-height: 1.3em; }
+.tester-player-progression { display: grid; gap: 10px; padding: 12px; border: 1px solid #385267; }
+.tester-player-progression > b, .tester-player-form > b { color: #f6c46e; font: .7rem 'DM Mono', monospace; }
+.tester-player-number-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; }
+.tester-player-number-fields label { display: grid; gap: 5px; color: #c4d1bd; font: .62rem 'DM Mono', monospace; }
+.tester-player-number-fields input { width: 100%; min-width: 0; padding: 8px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.tester-player-unlocks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.tester-player-progression .tester-player-unlocks label { color: #c4d1bd; }
+.tester-player-levels { padding: 10px; border: 1px solid #385267; background: #101b2b; }
+.tester-player-levels > summary { color: #f6c46e; font: .7rem 'DM Mono', monospace; cursor: pointer; }
+.tester-player-level-groups { display: grid; gap: 10px; margin-top: 10px; }
+.tester-player-level-groups fieldset { min-width: 0; padding: 8px; border: 1px solid #385267; }
+.tester-player-level-groups legend { padding: 0 5px; color: #f6c46e; font: .65rem 'DM Mono', monospace; }
+.tester-player-level-row { display: grid; grid-template-columns: minmax(110px, 1fr) auto auto; align-items: center; gap: 8px; padding: 5px 0; color: #c4d1bd; font: .62rem 'DM Mono', monospace; }
+.tester-player-level-row label { color: #c4d1bd; font-size: .62rem; }
+.tester-player-level-row input[type="checkbox"] { width: 15px; height: 15px; }
 .custom-controls-settings { display: grid; gap: 8px; margin: 14px 0; padding: 14px; border: 1px solid #385267; }
 .custom-controls-settings h2 { margin: 0; color: #f6c46e; font-size: .95rem; }
 .custom-controls-settings p, .custom-controls-settings small { color: #99b3a6; font: .63rem/1.5 'DM Mono', monospace; }
