@@ -863,60 +863,17 @@ function showAccount() {
     const render = (messageText = "") => {
         const menu = document.createElement("main");
         menu.className = "menu-screen account-screen";
-        menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">Choose a unique username and password. Passwords are salted and hashed on the server.</p>`;
-        const form = document.createElement("form");
-        form.className = "account-form";
-        const usernameLabel = document.createElement("label");
-        usernameLabel.textContent = "Username";
-        const username = document.createElement("input");
-        username.name = "username";
-        username.autocomplete = "username";
-        username.minLength = 3;
-        username.maxLength = 20;
-        username.required = true;
-        username.pattern = "[A-Za-z0-9_]{3,20}";
-        username.title = "3-20 letters, numbers, or underscores.";
-        usernameLabel.append(username);
-        const passwordLabel = document.createElement("label");
-        passwordLabel.textContent = "Password";
-        const password = document.createElement("input");
-        password.name = "password";
-        password.type = "password";
-        password.autocomplete = registrationMode ? "new-password" : "current-password";
-        password.minLength = 10;
-        password.maxLength = 128;
-        password.required = true;
-        passwordLabel.append(password);
-        const message = document.createElement("small");
-        message.className = "online-service-status";
-        message.setAttribute("role", "status");
-        message.textContent = messageText;
-        const submit = document.createElement("button");
-        submit.className = "menu-button";
-        submit.type = "submit";
-        submit.textContent = registrationMode ? "Create account" : "Sign in";
-        const switchMode = createTextButton(registrationMode ? "I already have an account" : "Create a new account", () => { registrationMode = !registrationMode; render(); });
-        form.append(usernameLabel, passwordLabel, submit, message);
-        form.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            submit.disabled = true;
-            message.textContent = "Connecting to the account service...";
-            try {
-                const response = await apiRequest<{ user: OnlineUser }>(`/auth/${registrationMode ? "register" : "login"}`, {
-                    method: "POST",
-                    body: JSON.stringify({ username: username.value, password: password.value }),
-                });
-                currentOnlineUser = response.user;
-                updateOwnerAccountIndicator();
-                showLeaderboard();
-            } catch (error) {
-                message.textContent = error instanceof Error ? error.message : "The account service could not complete the request.";
-                submit.disabled = false;
-            }
-        });
+        menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${currentOnlineUser ? "Your" : registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">${currentOnlineUser ? "Your account is signed in on this device." : "Choose a unique username and password. Passwords are salted and hashed on the server."}</p>`;
         if (currentOnlineUser) {
             const signedIn = document.createElement("p");
-            signedIn.textContent = `Currently signed in as ${currentOnlineUser.username}.`;
+            signedIn.textContent = `Signed in as ${currentOnlineUser.username}${currentOnlineUser.role === "owner" ? " / OWNER" : ""}.`;
+            if (messageText) {
+                const message = document.createElement("small");
+                message.className = "online-service-status";
+                message.setAttribute("role", "status");
+                message.textContent = messageText;
+                menu.append(signedIn, message);
+            } else menu.append(signedIn);
             const signOut = createTextButton("Sign out", async () => {
                 try {
                     await apiRequest<void>("/auth/logout", { method: "POST" });
@@ -926,9 +883,61 @@ function showAccount() {
                     render(error instanceof Error ? error.message : "Could not sign out.");
                 }
             });
-            menu.append(signedIn, signOut);
+            menu.append(signOut);
+        } else {
+            const form = document.createElement("form");
+            form.className = "account-form";
+            const usernameLabel = document.createElement("label");
+            usernameLabel.textContent = "Username";
+            const username = document.createElement("input");
+            username.name = "username";
+            username.autocomplete = "username";
+            username.minLength = 3;
+            username.maxLength = 20;
+            username.required = true;
+            username.pattern = "[A-Za-z0-9_]{3,20}";
+            username.title = "3-20 letters, numbers, or underscores.";
+            usernameLabel.append(username);
+            const passwordLabel = document.createElement("label");
+            passwordLabel.textContent = "Password";
+            const password = document.createElement("input");
+            password.name = "password";
+            password.type = "password";
+            password.autocomplete = registrationMode ? "new-password" : "current-password";
+            password.minLength = 10;
+            password.maxLength = 128;
+            password.required = true;
+            passwordLabel.append(password);
+            const message = document.createElement("small");
+            message.className = "online-service-status";
+            message.setAttribute("role", "status");
+            message.textContent = messageText;
+            const submit = document.createElement("button");
+            submit.className = "menu-button";
+            submit.type = "submit";
+            submit.textContent = registrationMode ? "Create account" : "Sign in";
+            const switchMode = createTextButton(registrationMode ? "I already have an account" : "Create a new account", () => { registrationMode = !registrationMode; render(); });
+            form.append(usernameLabel, passwordLabel, submit, message);
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                submit.disabled = true;
+                message.textContent = "Connecting to the account service...";
+                try {
+                    const response = await apiRequest<{ user: OnlineUser }>(`/auth/${registrationMode ? "register" : "login"}`, {
+                        method: "POST",
+                        body: JSON.stringify({ username: username.value, password: password.value }),
+                    });
+                    currentOnlineUser = response.user;
+                    updateOwnerAccountIndicator();
+                    showLeaderboard();
+                } catch (error) {
+                    message.textContent = error instanceof Error ? error.message : "The account service could not complete the request.";
+                    submit.disabled = false;
+                }
+            });
+            menu.append(form, switchMode);
         }
-        menu.append(form, switchMode, createTextButton("Back", showMenu));
+        menu.append(createTextButton("Back", showMenu));
         document.body.replaceChildren(menu);
     };
     render();
