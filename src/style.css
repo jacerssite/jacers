@@ -370,12 +370,14 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; padding-top: 18px; border-top: 1px solid #385267; }
 .tester-entry b { display: block; color: #f3f5e9; font-size: .9rem; }
 .tester-entry small { display: block; margin-top: 5px; color: #99b3a6; font: .66rem 'DM Mono', monospace; }
-.tester-login, .tester-panel { display: grid; gap: 12px; width: min(560px, 90vw); margin: 0 auto 20px; padding: 20px; border: 1px solid #385267; background: #143746cc; }
+.tester-login { display: grid; gap: 12px; width: min(420px, calc(100vw - 32px)); min-width: 0; margin: 8px auto 12px; padding: 16px; border: 1px solid #385267; background: #143746cc; }
+.tester-panel { display: grid; gap: 12px; width: min(560px, 90vw); margin: 0 auto 20px; padding: 20px; border: 1px solid #385267; background: #143746cc; }
 .tester-screen { align-content: start; padding-top: 72px; padding-bottom: 72px; }
 .tester-panel { max-height: none; }
-.tester-login input, .tester-panel input[type="number"] { width: 100%; padding: 11px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .8rem 'DM Mono', monospace; }
+.tester-login input, .tester-panel input[type="number"] { display: block; width: 100%; min-width: 0; padding: 11px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .8rem 'DM Mono', monospace; }
+.tester-login .menu-button { width: 100%; min-width: 0; }
 .tester-login input:focus, .tester-panel input:focus { border-color: #f6c46e; outline: none; }
-.tester-login small { color: #99b3a6; font: .65rem 'DM Mono', monospace; }
+.tester-login small { min-width: 0; overflow-wrap: anywhere; color: #ed7657; font: .68rem/1.5 'DM Mono', monospace; }
 .tester-error { color: #ed7657 !important; }
 .tester-reward-settings { display: grid; gap: 10px; padding: 12px; border: 1px solid #385267; text-align: left; }
 .tester-reward-settings > .setting-title, .tester-reward-settings > .menu-copy { margin: 0; }

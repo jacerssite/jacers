@@ -24,7 +24,7 @@ The owner can edit or remove leaderboard entries and change the golden-skin clea
 
 ### Vercel deployment
 
-Import the repository into Vercel and use the project defaults. Vercel runs `npm run build`, publishes `dist`, serves the API through the serverless function in `api/[...path].mjs`, and rewrites non-file frontend routes to `index.html`. The function initializes the PostgreSQL schema and owner accounts when it first receives a request in a warm instance.
+Import the repository into Vercel and use the project defaults. Vercel runs `npm run build`, publishes `dist`, routes `/api/*` requests through the shared serverless function in `api/router.mjs`, and rewrites other non-file frontend routes to `index.html`. The router restores each original API path before passing the request to Express. It initializes the PostgreSQL schema and owner accounts when it first receives a request in a warm instance.
 
 Add `DATABASE_URL`, `OWNER_PASSWORD`, and `ADDITIONAL_OWNER_PASSWORD` as private Vercel environment variables for Production (and Preview if those deployments should have working accounts). Use a PostgreSQL provider that supports serverless connections; the API limits its Vercel connection pool to one connection per function instance. Vercel sets `NODE_ENV=production`, which enables secure session cookies. After setting or changing environment variables, redeploy the project.
 
