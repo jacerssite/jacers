@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*
@@ -26,4 +29,6 @@ dist-ssr
 *.tmp-ui-browser-2
 *.tmp-ui-browser-3
 %SystemDrive%
+.kilo
+.github
 
