@@ -121,8 +121,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .player.ship-blade { border-radius: 8% 70% 8% 70%; transform: skewX(-12deg); }
 .player:has(.ship-art-image), .player:has(.ship-css-art) { border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; }
 .player .ship-art, .player .ship-art-image, .player .ship-css-art { position: absolute; inset: -7px; width: 56px; height: 70px; object-fit: contain; pointer-events: none; }
-.ship-art-image { position: relative; display: block; flex: 0 0 auto; background-image: var(--ship-image); background-position: center; background-size: contain; background-repeat: no-repeat; isolation: isolate; }
-.ship-art-image::after { position: absolute; inset: 0; content: ''; background: var(--ship-color); opacity: .35; mix-blend-mode: color; -webkit-mask-image: var(--ship-image); mask-image: var(--ship-image); -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; pointer-events: none; }
+.ship-art-image { position: relative; display: block; flex: 0 0 auto; object-fit: contain; }
 .ship-css-art { position: relative; display: block; flex: 0 0 auto; overflow: hidden; contain: layout paint size; isolation: isolate; background: var(--ship-color); box-shadow: 0 0 12px color-mix(in srgb, var(--ship-color) 82%, transparent); }
 .ship-css-stellar-guard { clip-path: polygon(50% 0, 87% 22%, 76% 90%, 50% 100%, 24% 90%, 13% 22%); background: radial-gradient(ellipse at 50% 36%, #bff7ff 0 13%, #21465f 14% 20%, transparent 21%), linear-gradient(90deg, #f8ae24, var(--ship-color) 40% 62%, #fff2a8); }
 .ship-css-quantum-dancer { clip-path: polygon(50% 0, 86% 50%, 50% 100%, 14% 50%); background: radial-gradient(circle at 50% 50%, #c6f9ff 0 16%, #263f75 17% 29%, transparent 30%), linear-gradient(135deg, #f0b6ff, var(--ship-color) 42% 58%, #6c248f); }
@@ -231,17 +230,21 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .ship-preview .setting-title { margin: 0 0 4px; }
 .preview-stage { display: grid; place-items: center; width: 100%; min-height: 92px; margin: 4px 0; border: 1px solid #f6c46e44; background: radial-gradient(circle, #31596a, #101b2b 72%); }
 .preview-stage, .avatar-option { overflow: hidden; isolation: isolate; }
-.preview-stage .ship-art-image, .avatar-option .ship-art-image { overflow: hidden; contain: paint; }
-.preview-stage .ship-art-image::after, .avatar-option .ship-art-image::after { display: block; opacity: .56; mix-blend-mode: color; -webkit-mask-image: var(--ship-image); mask-image: var(--ship-image); -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+.preview-stage .ship-art-image, .avatar-option .ship-art-image { overflow: visible; }
 .preview-ship i { position: absolute; bottom: -18px; left: 19px; width: 17px; height: 22px; background: #f6c46e; clip-path: polygon(50% 100%, 0 0, 100% 0); }
 .ship-preview b { color: #f6c46e; }
 .ship-preview small { color: #99b3a6; font: .62rem 'DM Mono', monospace; }
 .preview-ship { position: relative; width: 62px; height: 78px; border: 4px solid #f4f3cf; border-radius: 52% 52% 45% 45%; background: var(--ship-color); box-shadow: 0 0 30px var(--ship-color); }
 .preview-ship span { position: absolute; top: 14px; left: 14px; width: 26px; height: 20px; border: 3px solid #143746; border-radius: 50%; background: #89d0bf; }
 .preview-ship-art, .preview-stage .ship-art-image, .preview-stage .ship-css-art { width: 52px; height: 60px; object-fit: contain; filter: drop-shadow(0 0 8px #f6c46e); }
-.preview-stage .ship-art-image { position: static; }
+.preview-stage .ship-art-image { position: static; filter: none; }
 .trail-preview { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 42px; margin-top: 4px; }
-.trail-preview-particle { display: block; width: 14px; height: 25px; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color); animation-delay: var(--trail-delay); }
+.trail-preview-particle { display: block; width: 14px; height: 25px; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 0 0 24px color-mix(in srgb, var(--trail-color) 65%, transparent); animation-delay: var(--trail-delay); }
+.trail-preview-particle.trail-effect-ember { animation: trail-flicker .55s ease-in-out infinite alternate; }
+.trail-preview-particle.trail-effect-comet { animation: trail-comet .65s ease-in-out infinite alternate; }
+.trail-preview-particle.trail-effect-spark { animation: trail-spark .7s ease-in-out infinite; }
+.trail-preview-particle.trail-effect-ribbon { animation: trail-ribbon .9s ease-in-out infinite alternate; }
+.trail-preview-particle.trail-effect-arc { animation: trail-arc .8s linear infinite; }
 .customization-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .loadout-choice { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 92px; padding: 8px 5px; border: 1px solid #385267; color: #c4d1bd; background: #101b2b; font: .62rem 'DM Mono', monospace; cursor: pointer; }
 .loadout-choice > span { line-height: 1.2; }
@@ -252,10 +255,12 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .skin-color-swatch.ship-dart { clip-path: polygon(50% 0, 95% 70%, 66% 62%, 50% 100%, 34% 62%, 5% 70%); }
 .skin-color-swatch.ship-ring { border-radius: 50%; background: transparent; box-shadow: 0 0 0 4px var(--skin-color), 0 0 14px var(--skin-color); }
 .skin-color-swatch.ship-blade { clip-path: polygon(50% 0, 86% 28%, 68% 49%, 96% 100%, 50% 75%, 4% 100%, 32% 49%, 14% 28%); }
-.loadout-trail-mark { display: block; width: 30px; height: 9px; border-radius: 50%; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); }
+.loadout-trail-mark { display: block; width: 30px; height: 9px; border-radius: 50%; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); animation: trail-comet .65s ease-in-out infinite alternate; }
+.loadout-trail-mark.trail-effect-ember { animation: trail-flicker .55s ease-in-out infinite alternate; }
 .loadout-trail-mark.trail-effect-spark { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 8px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); }
-.loadout-trail-mark.trail-effect-ribbon { width: 8px; height: 25px; border-radius: 50%; }
-.loadout-trail-mark.trail-effect-arc { width: 20px; height: 20px; border: 3px solid var(--trail-color); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; background: transparent; box-shadow: 0 0 10px var(--trail-color); }
+.loadout-trail-mark.trail-effect-spark { animation: trail-spark .7s ease-in-out infinite; }
+.loadout-trail-mark.trail-effect-ribbon { width: 8px; height: 25px; border-radius: 50%; animation: trail-ribbon .9s ease-in-out infinite alternate; }
+.loadout-trail-mark.trail-effect-arc { width: 20px; height: 20px; border: 3px solid var(--trail-color); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; background: transparent; box-shadow: 0 0 10px var(--trail-color); animation: trail-arc .8s linear infinite; }
 .loadout-choice:hover:not(:disabled), .loadout-choice.selected { border-color: #f6c46e; color: #f6c46e; box-shadow: inset 0 -3px #f6c46e; }
 .loadout-choice:disabled { opacity: .35; cursor: not-allowed; }
 .avatar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }

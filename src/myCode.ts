@@ -809,7 +809,7 @@ function showCustomization() {
     const selectedSkinStyle = skins[selectedSkin] ?? skins[0];
     const previewArt = selectedAvatarStyle.image ?? selectedSkinStyle.image;
     const selectedTrailStyle = trails[selectedTrail] ?? trails[0];
-    const preview = document.createElement("aside"); preview.className = "ship-preview"; preview.innerHTML = `<p class="setting-title">Current character</p><div class="preview-stage">${selectedAvatarStyle.cssArt ? createCssShipArtMarkup(selectedAvatarStyle.cssArt, selectedAvatarStyle.name, selectedSkinStyle.color) : previewArt ? createShipArtMarkup(previewArt, selectedAvatarStyle.name, selectedSkinStyle.color) : `<div class="preview-ship ship-${selectedSkinStyle.shape}" style="--ship-color:${selectedSkinStyle.color}"><span></span><i></i></div>`}</div><b>${selectedAvatarStyle.name}</b><small>${selectedSkinStyle.name} skin / ${selectedTrailStyle.name} trail</small><div class="trail-preview" style="--trail-color:${selectedTrailStyle.color}">${Array.from({ length: 5 }, (_, index) => `<i class="trail-preview-particle trail-effect-${selectedTrailStyle.effect}" style="--trail-delay:${index * 90}ms"></i>`).join("")}</div>`;
+    const preview = document.createElement("aside"); preview.className = "ship-preview"; preview.innerHTML = `<p class="setting-title">Current character</p><div class="preview-stage">${selectedAvatarStyle.cssArt ? createCssShipArtMarkup(selectedAvatarStyle.cssArt, selectedAvatarStyle.name, selectedAvatarStyle.color) : previewArt ? createShipArtMarkup(previewArt, selectedAvatarStyle.name) : `<div class="preview-ship ship-${selectedSkinStyle.shape}" style="--ship-color:${selectedSkinStyle.color}"><span></span><i></i></div>`}</div><b>${selectedAvatarStyle.name}</b><small>${selectedSkinStyle.name} skin / ${selectedTrailStyle.name} trail</small><div class="trail-preview" style="--trail-color:${selectedTrailStyle.color}">${Array.from({ length: 5 }, (_, index) => `<i class="trail-preview-particle trail-effect-${selectedTrailStyle.effect}" style="--trail-delay:${index * 90}ms"></i>`).join("")}</div>`;
     
     const rarityOrder: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
     
@@ -840,7 +840,7 @@ function showCustomization() {
     appendRarityGroups("Skins", skinsWithIndex, "customization-grid", (skin, _index, rarity) => {
         const button = document.createElement("button"); button.className = `loadout-choice ${selectedSkin === skin.originalIndex ? "selected" : ""}`; button.disabled = !isSkinUnlocked(skin, skin.originalIndex);
         const swatch = skin.image
-            ? createShipArtMarkup(skin.image, `${skin.name} skin`, skin.color)
+            ? createShipArtMarkup(skin.image, `${skin.name} skin`)
             : `<i class="skin-color-swatch ship-${skin.shape}" style="--skin-color:${skin.color}" aria-hidden="true"></i>`;
         button.innerHTML = `${swatch}<span>${skin.name}</span>${createRarityBadge(rarity)}`;
         button.addEventListener("click", () => { selectedSkin = skin.originalIndex; localStorage.setItem("orbit-skin", String(selectedSkin)); showCustomization(); }); return button;
@@ -853,7 +853,7 @@ function showCustomization() {
     appendRarityGroups("Avatars", avatarsWithIndex, "avatar-grid", (avatar, _index, rarity) => {
         const unlocked = isAvatarUnlocked(avatar);
         const button = document.createElement("button"); button.className = `avatar-option ${selectedAvatar === avatar.originalIndex ? "selected" : ""}`; button.disabled = !unlocked;
-        button.innerHTML = `${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, selectedSkinStyle.color) : avatar.image ? createShipArtMarkup(avatar.image, avatar.name, selectedSkinStyle.color) : `<i style="--avatar-color:${selectedSkinStyle.color}"></i>`}<span>${avatar.name}</span>${createRarityBadge(rarity)}<small>${unlocked ? "READY" : avatar.prestige ? `PRESTIGE ${avatar.prestige}` : avatar.golden ? "20 routes" : avatar.jackpot ? "JACKPOT" : "LOCKED"}</small>`;
+        button.innerHTML = `${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, avatar.color) : avatar.image ? createShipArtMarkup(avatar.image, avatar.name) : `<i style="--avatar-color:${avatar.color}"></i>`}<span>${avatar.name}</span>${createRarityBadge(rarity)}<small>${unlocked ? "READY" : avatar.prestige ? `PRESTIGE ${avatar.prestige}` : avatar.golden ? "20 routes" : avatar.jackpot ? "JACKPOT" : "LOCKED"}</small>`;
         button.addEventListener("click", () => {
             selectedAvatar = avatar.originalIndex;
             if (isSkinUnlocked(skins[avatar.defaultSkin], avatar.defaultSkin)) { selectedSkin = avatar.defaultSkin; localStorage.setItem("orbit-skin", String(selectedSkin)); }
@@ -1488,7 +1488,7 @@ function controlKeysFor(action: ControlAction) {
         : [controlBindings[action]];
 }
 
-function createShipArtMarkup(image: string, label: string, color: string) { return `<span class="ship-art-image" role="img" aria-label="${label}" style="--ship-image:url('${image}');--ship-color:${color}"></span>`; }
+function createShipArtMarkup(image: string, label: string) { return `<img class="ship-art-image" src="${image}" alt="${label}" />`; }
 function createCssShipArtMarkup(art: PrestigeShipArt, label: string, color: string) { return `<span class="ship-css-art ship-css-${art}" role="img" aria-label="${label}" style="--ship-color:${color}"></span>`; }
 
 function getInventory(): Record<PowerupKind, number> {
@@ -2889,7 +2889,7 @@ function createPlayer() {
     const avatar = avatars[selectedAvatar] ?? avatars[0];
     const shipArt = avatar.image ?? skin.image;
     const hasCustomArt = Boolean(avatar.cssArt || shipArt);
-    playerLabel.className = `player ${hasCustomArt ? "" : `ship-${skin.shape}`} avatar-${selectedAvatar}`; playerLabel.style.setProperty("--ship-color", skin.color); playerLabel.innerHTML = `${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, skin.color) : shipArt ? createShipArtMarkup(shipArt, avatar.name, skin.color) : "<span class=\"ship-window\"></span>"}<span class="ship-gun"></span><span class="ship-flame"></span>`; world.append(playerLabel); updatePlayerPosition();
+    playerLabel.className = `player ${hasCustomArt ? "" : `ship-${skin.shape}`} avatar-${selectedAvatar}`; playerLabel.style.setProperty("--ship-color", skin.color); playerLabel.innerHTML = `${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, avatar.color) : shipArt ? createShipArtMarkup(shipArt, avatar.name) : "<span class=\"ship-window\"></span>"}<span class="ship-gun"></span><span class="ship-flame"></span>`; world.append(playerLabel); updatePlayerPosition();
 }
 
 function createWorldObjects() {
