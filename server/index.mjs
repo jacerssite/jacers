@@ -20,7 +20,6 @@ import {
 
 const { Pool } = pg;
 const app = express();
-const port = Number(process.env.PORT ?? 3001);
 const ownerAccounts = [
   { username: "vslxped", password: process.env.OWNER_PASSWORD },
   { username: "riverwth", password: process.env.ADDITIONAL_OWNER_PASSWORD },
@@ -28,7 +27,10 @@ const ownerAccounts = [
 const cookieName = "jacer_session";
 const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
 const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : null;
+const pool = databaseUrl ? new Pool({
+  connectionString: databaseUrl,
+  max: process.env.VERCEL ? 1 : 10,
+}) : null;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const passwordHashOptions = {
   type: argon2.argon2id,
@@ -403,7 +405,7 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: "The server could not complete that request." });
 });
 
-async function initializeDatabase() {
+export async function initializeDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -461,10 +463,4 @@ async function initializeDatabase() {
   console.log(`Owner accounts ${ownerAccounts.map(({ username }) => `"${username}"`).join(" and ")} are ready.`);
 }
 
-initializeDatabase().then(() => {
-  app.listen(port, "0.0.0.0", () => console.log(`Jacer API listening on port ${port}.`));
-}).catch(async (error) => {
-  console.error("Could not initialize the Jacer API:", error);
-  await pool.end();
-  process.exitCode = 1;
-});
+export default app;

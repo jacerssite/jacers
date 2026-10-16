@@ -21,3 +21,11 @@ The owner-only tester panel saves shared world percentages, power-up spawn odds/
 Create a PostgreSQL database and a Node web service in Render. Set the service build command to `npm ci && npm run build` and the start command to `npm start`. Configure `DATABASE_URL`, `OWNER_PASSWORD`, `ADDITIONAL_OWNER_PASSWORD`, and `NODE_ENV=production` as private service environment variables. Use the owner passwords supplied directly in the private deployment dashboard; do not place them in frontend settings, source files, or committed environment files. The server applies its database schema on startup and serves the built client and API from the same origin.
 
 The owner can edit or remove leaderboard entries and change the golden-skin clear-time threshold in the online leaderboard, available from Launch Mission. The home-screen account control is separate. Player submissions keep each player's fastest time per route; the leaderboard displays the player's username, route, time, and abilities used.
+
+### Vercel deployment
+
+Import the repository into Vercel and use the project defaults. Vercel runs `npm run build`, publishes `dist`, serves the API through the serverless function in `api/[...path].mjs`, and rewrites non-file frontend routes to `index.html`. The function initializes the PostgreSQL schema and owner accounts when it first receives a request in a warm instance.
+
+Add `DATABASE_URL`, `OWNER_PASSWORD`, and `ADDITIONAL_OWNER_PASSWORD` as private Vercel environment variables for Production (and Preview if those deployments should have working accounts). Use a PostgreSQL provider that supports serverless connections; the API limits its Vercel connection pool to one connection per function instance. Vercel sets `NODE_ENV=production`, which enables secure session cookies. After setting or changing environment variables, redeploy the project.
+
+For local development, `npm run server` still starts the persistent Express API, and `npm run dev` runs Vite with its `/api` proxy.
