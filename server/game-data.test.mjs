@@ -8,6 +8,7 @@ import {
   normalizeUsername,
   parseGoldenTimeLimit,
   DEFAULT_GAME_CONFIG,
+  validatePlayerProgress,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -63,6 +64,7 @@ test("workshop levels validate tile bounds and discard unrecognized fields", () 
     length: 12,
     asteroids: [2, 8],
     walls: [4, 9],
+    blocks: [10],
     enemies: [6],
     spikes: [5],
     gravity: [7],
@@ -73,6 +75,17 @@ test("workshop levels validate tile bounds and discard unrecognized fields", () 
   const result = validateWorkshopLevel(draft);
   assert.equal(result.customId, undefined);
   assert.equal(result.unexpected, undefined);
+  assert.deepEqual(result.blocks, [10]);
   assert.equal(validateWorkshopLevel({ ...draft, enemies: [12] }), null);
+  assert.equal(validateWorkshopLevel({ ...draft, blocks: [12] }), null);
   assert.equal(validateWorkshopLevel({ ...draft, name: "<script>" }), null);
+});
+
+test("player progress accepts bounded game data and excludes shared caches", () => {
+  const progress = { "orbit-claims": "42", "orbit-level-complete-3": "1" };
+  assert.deepEqual(validatePlayerProgress(progress), progress);
+  assert.equal(validatePlayerProgress({ "orbit-global-level-cache": "[]" }), null);
+  assert.equal(validatePlayerProgress({ token: "not game data" }), null);
+  assert.equal(validatePlayerProgress({ "orbit-claims": 42 }), null);
+  assert.equal(validatePlayerProgress({ "orbit-claims": "x".repeat(20001) }), null);
 });

@@ -95,7 +95,7 @@ export function validateWorkshopLevel(value) {
     || !isBoundedInteger(value.length, 8, 60)) return null;
   const fields = ["asteroids", "walls", "enemies", "spikes", "gravity"];
   if (!fields.every((field) => parseTileList(value[field], value.length))) return null;
-  for (const field of ["portals", "specialAsteroids", "miniBosses", "flip"]) {
+  for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip"]) {
     if (value[field] !== undefined && !parseTileList(value[field], value.length)) return null;
   }
   if (value.powerups !== undefined && (!Array.isArray(value.powerups) || value.powerups.length > 60
@@ -122,10 +122,26 @@ export function validateWorkshopLevel(value) {
     spikes: [...value.spikes],
     gravity: [...value.gravity],
   };
-  for (const field of ["portals", "specialAsteroids", "miniBosses", "flip", "powerups", "flippedRoute", "bossIndex", "secret", "secretId", "prestige", "boss"]) {
+  for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip", "powerups", "flippedRoute", "bossIndex", "secret", "secretId", "prestige", "boss"]) {
     if (value[field] !== undefined) level[field] = structuredClone(value[field]);
   }
   return level;
+}
+
+export function validatePlayerProgress(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > 500) return null;
+  let totalBytes = 0;
+  const progress = {};
+  for (const [key, item] of entries) {
+    if (!/^orbit-[A-Za-z0-9_-]{1,120}$/.test(key) || key === "orbit-global-level-cache"
+      || typeof item !== "string" || Buffer.byteLength(item, "utf8") > 20000) return null;
+    totalBytes += Buffer.byteLength(key, "utf8") + Buffer.byteLength(item, "utf8");
+    if (totalBytes > 100000) return null;
+    progress[key] = item;
+  }
+  return progress;
 }
 
 export function normalizeUsername(value) {

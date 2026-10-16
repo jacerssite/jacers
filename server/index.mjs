@@ -16,6 +16,7 @@ import {
   normalizeUsername,
   parseGoldenTimeLimit,
   DEFAULT_GAME_CONFIG,
+  validatePlayerProgress,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -62,7 +63,7 @@ app.use(helmet({
   },
   crossOriginResourcePolicy: { policy: "same-site" },
 }));
-app.use(express.json({ limit: "16kb", strict: true }));
+app.use(express.json({ limit: "256kb", strict: true }));
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -89,6 +90,38 @@ async function getDatabase() {
     });
   }
   return (await mongoClientPromise).db();
+}
+
+async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const existing = await collection.findOne({ _id: userId });
+    const mergedProgress = replace ? { ...progress } : { ...(existing?.data ?? {}) };
+    if (!replace) {
+      const baseline = baseProgress ?? {};
+      const changedKeys = new Set([...Object.keys(progress), ...Object.keys(baseline)]);
+      for (const key of changedKeys) {
+        if (progress[key] === baseline[key]) continue;
+        if (Object.hasOwn(progress, key)) mergedProgress[key] = progress[key];
+        else delete mergedProgress[key];
+      }
+    }
+    const validatedProgress = validatePlayerProgress(mergedProgress);
+    if (!validatedProgress) return { progress: null, conflict: false };
+    const revisionFilter = existing
+      ? Number.isSafeInteger(existing.revision) ? { revision: existing.revision } : { revision: { $exists: false } }
+      : { revision: { $exists: false } };
+    try {
+      const result = await collection.updateOne(
+        { _id: userId, ...revisionFilter },
+        { $set: { data: validatedProgress, updatedAt: new Date() }, $inc: { revision: 1 } },
+        { upsert: !existing },
+      );
+      if (result.matchedCount || result.upsertedCount) return { progress: validatedProgress, conflict: false };
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+    }
+  }
+  return { progress: null, conflict: true };
 }
 
 function requireSameOrigin(req, res, next) {
@@ -139,9 +172,9 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1 } },
+    { projection: { username: 1, role: 1, banned: 1 } },
   );
-  return user ? { id: user._id, username: user.username, role: user.role } : null;
+  return user && !user.banned ? { id: user._id, username: user.username, role: user.role } : null;
 }
 
 async function requireUser(req, res, next) {
@@ -197,6 +230,7 @@ async function accountHandler(req, res, next, mode) {
           usernameNormalized: username.normalized,
           passwordHash,
           role: "player",
+          banned: false,
           createdAt: new Date(),
         });
         user = { _id: created.insertedId, username: username.display, role: "player" };
@@ -212,6 +246,7 @@ async function accountHandler(req, res, next, mode) {
     const user = await db.collection("users").findOne({ usernameNormalized: username.normalized });
     const valid = await argon2.verify(user?.passwordHash ?? dummyPasswordHash, credentials.password);
     if (!valid || !user) return res.status(401).json({ error: "Username or password is incorrect." });
+    if (user.banned) return res.status(403).json({ error: "This account has been banned. Contact the owner for help." });
     await createSession(user._id, res);
     return res.json({ user: { username: user.username, role: user.role } });
   } catch (error) {
@@ -242,6 +277,164 @@ app.post("/api/auth/logout", requireSameOrigin, async (req, res, next) => {
     }
     clearSessionCookie(res);
     res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/account/progress", requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const record = await db.collection("player_progress").findOne({ _id: req.user.id });
+    res.json({ progress: record?.data ?? null, updatedAt: record?.updatedAt?.toISOString() ?? null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/account/progress", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const progress = validatePlayerProgress(req.body?.progress);
+    const baseProgress = req.body?.baseProgress === null
+      ? null
+      : validatePlayerProgress(req.body?.baseProgress);
+    if (!progress || (req.body?.baseProgress !== undefined && req.body?.baseProgress !== null && !baseProgress)) {
+      return res.status(400).json({ error: "Player progress is invalid or exceeds the allowed size." });
+    }
+    const db = await getDatabase();
+    const result = await writePlayerProgress(db.collection("player_progress"), req.user.id, progress, baseProgress);
+    if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
+      error: result.conflict ? "Progress changed on another device. Retry the sync." : "Player progress exceeds the allowed size.",
+    });
+    res.json({ progress: result.progress });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/account/profile", requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const user = await db.collection("users").findOne(
+      { _id: req.user.id },
+      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1 } },
+    );
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    res.json({
+      username: user.username,
+      role: user.role,
+      createdAt: user.createdAt,
+      usernameChangedAt: user.usernameChangedAt ?? null,
+      nextUsernameChangeAt: user.usernameChangedAt
+        ? new Date(user.usernameChangedAt.getTime() + 7 * 24 * 60 * 60 * 1000)
+        : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    if (!username) return res.status(400).json({ error: "Use a 3-20 character username (letters, numbers, underscore)." });
+    const db = await getDatabase();
+    const users = db.collection("users");
+    const current = await users.findOne({ _id: req.user.id }, { projection: { username: 1, usernameChangedAt: 1, role: 1 } });
+    if (!current) return res.status(404).json({ error: "Account not found." });
+    if (current.username === username.display) return res.json({ user: { username: current.username }, usernameChangedAt: current.usernameChangedAt ?? null });
+    if (current.role === "owner") return res.status(403).json({ error: "Owner usernames are managed through the deployment account settings." });
+    const now = new Date();
+    const cooldownStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    if (current.usernameChangedAt && current.usernameChangedAt > cooldownStart) {
+      return res.status(429).json({ error: `You can change your username again on ${new Date(current.usernameChangedAt.getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("en-US", { timeZone: "UTC" })} UTC.` });
+    }
+    try {
+      const previousUsernameDate = current.usernameChangedAt === undefined
+        ? { usernameChangedAt: { $exists: false } }
+        : { usernameChangedAt: current.usernameChangedAt };
+      const result = await users.updateOne(
+        { _id: req.user.id, ...previousUsernameDate },
+        { $set: { username: username.display, usernameNormalized: username.normalized, usernameChangedAt: now } },
+      );
+      if (!result.matchedCount) return res.status(409).json({ error: "Account profile changed. Refresh and try again." });
+    } catch (error) {
+      if (error?.code === 11000) return res.status(409).json({ error: "That username is already taken." });
+      throw error;
+    }
+    res.json({ user: { username: username.display }, usernameChangedAt: now.toISOString() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const users = await db.collection("users")
+      .find({}, { projection: { username: 1, role: 1, banned: 1, createdAt: 1, usernameChangedAt: 1 } })
+      .sort({ usernameNormalized: 1 })
+      .limit(200)
+      .toArray();
+    const records = await db.collection("player_progress")
+      .find({ _id: { $in: users.map((user) => user._id) } })
+      .toArray();
+    const progressByUser = new Map(records.map((record) => [record._id.toHexString(), record.data]));
+    res.json({
+      users: users.map((user) => ({
+        id: user._id.toHexString(),
+        username: user.username,
+        role: user.role,
+        banned: Boolean(user.banned),
+        createdAt: user.createdAt,
+        usernameChangedAt: user.usernameChangedAt ?? null,
+        progress: progressByUser.get(user._id.toHexString()) ?? {},
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const db = await getDatabase();
+    const userId = new ObjectId(req.params.id);
+    const target = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1 } });
+    if (!target) return res.status(404).json({ error: "Account not found." });
+    if (target.role === "owner") return res.status(403).json({ error: "Owner accounts cannot be changed from player management." });
+    const updates = {};
+    if (req.body?.username !== undefined) {
+      const username = normalizeUsername(req.body.username);
+      if (!username) return res.status(400).json({ error: "Use a 3-20 character username (letters, numbers, underscore)." });
+      updates.username = username.display;
+      updates.usernameNormalized = username.normalized;
+      updates.usernameChangedAt = new Date();
+    }
+    if (req.body?.banned !== undefined) {
+      if (typeof req.body.banned !== "boolean") return res.status(400).json({ error: "Banned must be true or false." });
+      updates.banned = req.body.banned;
+    }
+    let progress;
+    if (req.body?.progress !== undefined) {
+      progress = validatePlayerProgress(req.body.progress);
+      if (!progress) return res.status(400).json({ error: "Player progress is invalid or exceeds the allowed size." });
+    }
+    if (Object.keys(updates).length) {
+      try {
+        await db.collection("users").updateOne({ _id: userId }, { $set: updates });
+      } catch (error) {
+        if (error?.code === 11000) return res.status(409).json({ error: "That username is already taken." });
+        throw error;
+      }
+    }
+    if (progress !== undefined) {
+      const result = await writePlayerProgress(db.collection("player_progress"), userId, progress, null, true);
+      if (!result.progress) return res.status(409).json({ error: "Player data changed concurrently. Retry saving the profile." });
+    }
+    if (updates.banned === true) await db.collection("user_sessions").deleteMany({ userId });
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -301,6 +494,23 @@ app.post("/api/levels", requireSameOrigin, requireOwner, async (req, res, next) 
     const db = await getDatabase();
     const result = await db.collection("workshop_levels").insertOne({ data: level, createdAt: new Date() });
     res.status(201).json({ level: { ...level, customId: result.insertedId.toHexString() } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/levels/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid workshop level." });
+    const level = validateWorkshopLevel(req.body?.level);
+    if (!level) return res.status(400).json({ error: "The workshop level is invalid. Check its name, length, and tile positions." });
+    const db = await getDatabase();
+    const result = await db.collection("workshop_levels").updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { data: level, updatedAt: new Date() } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Workshop level not found." });
+    res.json({ level: { ...level, customId: req.params.id } });
   } catch (error) {
     next(error);
   }
