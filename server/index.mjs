@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import pg from "pg";
+import { MongoClient, ObjectId } from "mongodb";
 import argon2 from "argon2";
+import { getMongoDatabaseConfigurationError } from "./database-config.mjs";
 import {
   ALLOWED_ABILITIES,
   isValidPassword,
@@ -18,7 +19,6 @@ import {
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
-const { Pool } = pg;
 const app = express();
 const ownerAccounts = [
   { username: "vslxped", password: process.env.OWNER_PASSWORD },
@@ -26,11 +26,12 @@ const ownerAccounts = [
 ];
 const cookieName = "jacer_session";
 const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
-const databaseUrl = process.env.DATABASE_URL;
-const pool = databaseUrl ? new Pool({
-  connectionString: databaseUrl,
-  max: process.env.VERCEL ? 1 : 10,
-}) : null;
+const databaseUrl = process.env.DATABASE_MONGODB_URI;
+const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: Boolean(process.env.VERCEL) });
+const mongoClient = databaseUrl && !databaseConfigurationError
+  ? new MongoClient(databaseUrl, { maxPoolSize: process.env.VERCEL ? 5 : 10 })
+  : null;
+let mongoClientPromise;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const passwordHashOptions = {
   type: argon2.argon2id,
@@ -39,7 +40,6 @@ const passwordHashOptions = {
   parallelism: 1,
 };
 
-if (!databaseUrl) throw new Error("DATABASE_URL must be configured before the API can start.");
 if (ownerAccounts.some(({ password }) => !password || !isValidPassword(password))) {
   throw new Error("Set valid OWNER_PASSWORD and ADDITIONAL_OWNER_PASSWORD deployment secrets (10-128 characters) before starting the API.");
 }
@@ -79,6 +79,17 @@ const runSubmissionLimiter = rateLimit({
   message: { error: "Too many run submissions. Wait a minute and try again." },
 });
 let dummyPasswordHash = "";
+
+async function getDatabase() {
+  if (!mongoClient) throw new Error(databaseConfigurationError ?? "MongoDB is not configured.");
+  if (!mongoClientPromise) {
+    mongoClientPromise = mongoClient.connect().catch((error) => {
+      mongoClientPromise = undefined;
+      throw error;
+    });
+  }
+  return (await mongoClientPromise).db();
+}
 
 function requireSameOrigin(req, res, next) {
   const origin = req.get("origin");
@@ -120,14 +131,17 @@ function hashSessionToken(token) {
 async function getAuthenticatedUser(req) {
   const token = getCookie(req, cookieName);
   if (!token || token.length > 100) return null;
-  const result = await pool.query(
-    `SELECT u.id, u.username, u.role
-     FROM user_sessions s
-     JOIN users u ON u.id = s.user_id
-     WHERE s.token_hash = $1 AND s.expires_at > NOW()`,
-    [hashSessionToken(token)],
+  const db = await getDatabase();
+  const session = await db.collection("user_sessions").findOne({
+    tokenHash: hashSessionToken(token),
+    expiresAt: { $gt: new Date() },
+  });
+  if (!session) return null;
+  const user = await db.collection("users").findOne(
+    { _id: session.userId },
+    { projection: { username: 1, role: 1 } },
   );
-  return result.rows[0] ?? null;
+  return user ? { id: user._id, username: user.username, role: user.role } : null;
 }
 
 async function requireUser(req, res, next) {
@@ -154,11 +168,14 @@ async function requireOwner(req, res, next) {
 async function createSession(userId, res) {
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + sessionLifetimeMs);
-  await pool.query("DELETE FROM user_sessions WHERE expires_at <= NOW()");
-  await pool.query(
-    "INSERT INTO user_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
-    [hashSessionToken(token), userId, expiresAt],
-  );
+  const db = await getDatabase();
+  await db.collection("user_sessions").deleteMany({ expiresAt: { $lte: new Date() } });
+  await db.collection("user_sessions").insertOne({
+    tokenHash: hashSessionToken(token),
+    userId,
+    expiresAt,
+    createdAt: new Date(),
+  });
   setSessionCookie(res, token);
 }
 
@@ -173,30 +190,29 @@ async function accountHandler(req, res, next, mode) {
     if (mode === "register") {
       const passwordHash = await argon2.hash(credentials.password, passwordHashOptions);
       let user;
+      const db = await getDatabase();
       try {
-        const created = await pool.query(
-          `INSERT INTO users (username, username_normalized, password_hash)
-           VALUES ($1, $2, $3)
-           RETURNING id, username, role`,
-          [username.display, username.normalized, passwordHash],
-        );
-        user = created.rows[0];
+        const created = await db.collection("users").insertOne({
+          username: username.display,
+          usernameNormalized: username.normalized,
+          passwordHash,
+          role: "player",
+          createdAt: new Date(),
+        });
+        user = { _id: created.insertedId, username: username.display, role: "player" };
       } catch (error) {
-        if (error?.code === "23505") return res.status(409).json({ error: "That username is already taken." });
+        if (error?.code === 11000) return res.status(409).json({ error: "That username is already taken." });
         throw error;
       }
-      await createSession(user.id, res);
+      await createSession(user._id, res);
       return res.status(201).json({ user: { username: user.username, role: user.role } });
     }
 
-    const result = await pool.query(
-      "SELECT id, username, username_normalized, password_hash, role FROM users WHERE username_normalized = $1",
-      [username.normalized],
-    );
-    const user = result.rows[0];
-    const valid = await argon2.verify(user?.password_hash ?? dummyPasswordHash, credentials.password);
+    const db = await getDatabase();
+    const user = await db.collection("users").findOne({ usernameNormalized: username.normalized });
+    const valid = await argon2.verify(user?.passwordHash ?? dummyPasswordHash, credentials.password);
     if (!valid || !user) return res.status(401).json({ error: "Username or password is incorrect." });
-    await createSession(user.id, res);
+    await createSession(user._id, res);
     return res.json({ user: { username: user.username, role: user.role } });
   } catch (error) {
     next(error);
@@ -220,7 +236,10 @@ app.get("/api/auth/session", async (req, res, next) => {
 app.post("/api/auth/logout", requireSameOrigin, async (req, res, next) => {
   try {
     const token = getCookie(req, cookieName);
-    if (token) await pool.query("DELETE FROM user_sessions WHERE token_hash = $1", [hashSessionToken(token)]);
+    if (token) {
+      const db = await getDatabase();
+      await db.collection("user_sessions").deleteOne({ tokenHash: hashSessionToken(token) });
+    }
     clearSessionCookie(res);
     res.status(204).end();
   } catch (error) {
@@ -230,8 +249,9 @@ app.post("/api/auth/logout", requireSameOrigin, async (req, res, next) => {
 
 app.get("/api/settings", async (_req, res, next) => {
   try {
-    const result = await pool.query("SELECT value FROM game_settings WHERE key = 'golden_time_limit_ms'");
-    res.json({ goldenTimeLimitMs: Number(result.rows[0]?.value ?? 60000) });
+    const db = await getDatabase();
+    const setting = await db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" });
+    res.json({ goldenTimeLimitMs: Number(setting?.value ?? 60000) });
   } catch (error) {
     next(error);
   }
@@ -239,8 +259,9 @@ app.get("/api/settings", async (_req, res, next) => {
 
 app.get("/api/game-config", async (_req, res, next) => {
   try {
-    const result = await pool.query("SELECT value FROM game_settings WHERE key = 'game_config'");
-    const config = result.rows[0] ? JSON.parse(result.rows[0].value) : DEFAULT_GAME_CONFIG;
+    const db = await getDatabase();
+    const setting = await db.collection("game_settings").findOne({ _id: "game_config" });
+    const config = setting?.value ?? DEFAULT_GAME_CONFIG;
     res.json({ config });
   } catch (error) {
     next(error);
@@ -251,11 +272,11 @@ app.put("/api/game-config", requireSameOrigin, requireOwner, async (req, res, ne
   try {
     const { config } = req.body ?? {};
     if (!isValidGameConfig(config)) return res.status(400).json({ error: "Game settings are invalid. Check percentage totals and power-up limits." });
-    const value = JSON.stringify(config);
-    await pool.query(
-      `INSERT INTO game_settings (key, value) VALUES ('game_config', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-      [value],
+    const db = await getDatabase();
+    await db.collection("game_settings").updateOne(
+      { _id: "game_config" },
+      { $set: { value: config, updatedAt: new Date() } },
+      { upsert: true },
     );
     res.json({ config });
   } catch (error) {
@@ -265,8 +286,9 @@ app.put("/api/game-config", requireSameOrigin, requireOwner, async (req, res, ne
 
 app.get("/api/levels", async (_req, res, next) => {
   try {
-    const result = await pool.query("SELECT id, data FROM workshop_levels ORDER BY id ASC");
-    res.json({ levels: result.rows.map((row) => ({ ...row.data, customId: String(row.id) })) });
+    const db = await getDatabase();
+    const documents = await db.collection("workshop_levels").find().sort({ _id: 1 }).toArray();
+    res.json({ levels: documents.map(({ _id, data }) => ({ ...data, customId: _id.toHexString() })) });
   } catch (error) {
     next(error);
   }
@@ -276,8 +298,9 @@ app.post("/api/levels", requireSameOrigin, requireOwner, async (req, res, next) 
   try {
     const level = validateWorkshopLevel(req.body?.level);
     if (!level) return res.status(400).json({ error: "The workshop level is invalid. Check its name, length, and tile positions." });
-    const result = await pool.query("INSERT INTO workshop_levels (data) VALUES ($1::jsonb) RETURNING id, data", [JSON.stringify(level)]);
-    res.status(201).json({ level: { ...result.rows[0].data, customId: String(result.rows[0].id) } });
+    const db = await getDatabase();
+    const result = await db.collection("workshop_levels").insertOne({ data: level, createdAt: new Date() });
+    res.status(201).json({ level: { ...level, customId: result.insertedId.toHexString() } });
   } catch (error) {
     next(error);
   }
@@ -285,10 +308,10 @@ app.post("/api/levels", requireSameOrigin, requireOwner, async (req, res, next) 
 
 app.delete("/api/levels/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Invalid workshop level." });
-    const result = await pool.query("DELETE FROM workshop_levels WHERE id = $1", [id]);
-    if (!result.rowCount) return res.status(404).json({ error: "Workshop level not found." });
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid workshop level." });
+    const db = await getDatabase();
+    const result = await db.collection("workshop_levels").deleteOne({ _id: new ObjectId(req.params.id) });
+    if (!result.deletedCount) return res.status(404).json({ error: "Workshop level not found." });
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -299,10 +322,11 @@ app.put("/api/settings/golden-time-limit", requireSameOrigin, requireOwner, asyn
   try {
     const { timeLimitMs } = req.body ?? {};
     if (!parseGoldenTimeLimit(timeLimitMs)) return res.status(400).json({ error: "Golden clear time must be between 1 second and 60 minutes." });
-    await pool.query(
-      `INSERT INTO game_settings (key, value) VALUES ('golden_time_limit_ms', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-      [String(timeLimitMs)],
+    const db = await getDatabase();
+    await db.collection("game_settings").updateOne(
+      { _id: "golden_time_limit_ms" },
+      { $set: { value: timeLimitMs, updatedAt: new Date() } },
+      { upsert: true },
     );
     res.json({ goldenTimeLimitMs: timeLimitMs });
   } catch (error) {
@@ -312,15 +336,27 @@ app.put("/api/settings/golden-time-limit", requireSameOrigin, requireOwner, asyn
 
 app.get("/api/leaderboard", async (_req, res, next) => {
   try {
-    const result = await pool.query(
-      `SELECT e.id, u.username, e.level_name AS "level", e.time_ms AS "timeMs",
-              e.abilities, e.achieved_at AS "achievedAt"
-       FROM leaderboard_entries e
-       JOIN users u ON u.id = e.user_id
-       ORDER BY e.time_ms ASC, e.achieved_at ASC
-       LIMIT 100`,
-    );
-    res.json({ entries: result.rows });
+    const db = await getDatabase();
+    const entries = await db.collection("leaderboard_entries")
+      .find()
+      .sort({ timeMs: 1, achievedAt: 1 })
+      .limit(100)
+      .toArray();
+    const userIds = [...new Set(entries.map((entry) => entry.userId.toHexString()))].map((id) => new ObjectId(id));
+    const users = await db.collection("users")
+      .find({ _id: { $in: userIds } }, { projection: { username: 1 } })
+      .toArray();
+    const usernames = new Map(users.map((user) => [user._id.toHexString(), user.username]));
+    res.json({
+      entries: entries.map((entry) => ({
+        id: entry._id.toHexString(),
+        username: usernames.get(entry.userId.toHexString()) ?? "Unknown pilot",
+        level: entry.levelName,
+        timeMs: entry.timeMs,
+        abilities: entry.abilities,
+        achievedAt: entry.achievedAt,
+      })),
+    });
   } catch (error) {
     next(error);
   }
@@ -331,22 +367,40 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
     const run = req.body;
     if (!isValidRun(run)) return res.status(400).json({ error: "The run details are invalid." });
     const levelName = run.level.trim();
-    const result = await pool.query(
-      `INSERT INTO leaderboard_entries (user_id, level_name, time_ms, abilities)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (user_id, level_name) DO UPDATE
-         SET time_ms = EXCLUDED.time_ms, abilities = EXCLUDED.abilities, achieved_at = NOW()
-         WHERE EXCLUDED.time_ms < leaderboard_entries.time_ms
-       RETURNING id, level_name AS "level", time_ms AS "timeMs", abilities, achieved_at AS "achievedAt"`,
-      [req.user.id, levelName, run.timeMs, run.abilities],
-    );
-    if (result.rows[0]) return res.status(201).json({ entry: result.rows[0], improved: true });
-    const current = await pool.query(
-      `SELECT id, level_name AS "level", time_ms AS "timeMs", abilities, achieved_at AS "achievedAt"
-       FROM leaderboard_entries WHERE user_id = $1 AND level_name = $2`,
-      [req.user.id, levelName],
-    );
-    res.json({ entry: current.rows[0], improved: false });
+    const db = await getDatabase();
+    const entries = db.collection("leaderboard_entries");
+    let improved = false;
+    try {
+      const result = await entries.updateOne(
+        {
+          userId: req.user.id,
+          levelName,
+          $or: [{ timeMs: { $gt: run.timeMs } }, { timeMs: { $exists: false } }],
+        },
+        {
+          $set: {
+            timeMs: run.timeMs,
+            abilities: run.abilities,
+            achievedAt: new Date(),
+          },
+          $setOnInsert: { userId: req.user.id, levelName },
+        },
+        { upsert: true },
+      );
+      improved = result.upsertedCount === 1 || result.matchedCount === 1;
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+    }
+    const entry = await entries.findOne({ userId: req.user.id, levelName });
+    if (!entry) throw new Error("Leaderboard entry was not available after saving the run.");
+    const responseEntry = {
+      id: entry._id.toHexString(),
+      level: entry.levelName,
+      timeMs: entry.timeMs,
+      abilities: entry.abilities,
+      achievedAt: entry.achievedAt,
+    };
+    res.status(improved ? 201 : 200).json({ entry: responseEntry, improved });
   } catch (error) {
     next(error);
   }
@@ -354,9 +408,8 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
 
 app.patch("/api/leaderboard/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
   try {
-    const id = Number(req.params.id);
     const { level, timeMs, abilities } = req.body ?? {};
-    if (!Number.isSafeInteger(id) || id < 1
+    if (!ObjectId.isValid(req.params.id)
       || typeof level !== "string" || level.trim().length < 1 || level.trim().length > 80
       || !Number.isSafeInteger(timeMs) || timeMs < 1000 || timeMs > 30 * 60 * 1000
       || !Array.isArray(abilities) || abilities.length > ALLOWED_ABILITIES.size
@@ -364,14 +417,23 @@ app.patch("/api/leaderboard/:id", requireSameOrigin, requireOwner, async (req, r
       || new Set(abilities).size !== abilities.length) {
       return res.status(400).json({ error: "The leaderboard update is invalid." });
     }
-    const result = await pool.query(
-      `UPDATE leaderboard_entries SET level_name = $2, time_ms = $3, abilities = $4, achieved_at = NOW()
-       WHERE id = $1
-       RETURNING id, level_name AS "level", time_ms AS "timeMs", abilities, achieved_at AS "achievedAt"`,
-      [id, level.trim(), timeMs, abilities],
+    const db = await getDatabase();
+    const entries = db.collection("leaderboard_entries");
+    const result = await entries.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { levelName: level.trim(), timeMs, abilities, achievedAt: new Date() } },
     );
-    if (!result.rows[0]) return res.status(404).json({ error: "Leaderboard entry not found." });
-    res.json({ entry: result.rows[0] });
+    if (!result.matchedCount) return res.status(404).json({ error: "Leaderboard entry not found." });
+    const entry = await entries.findOne({ _id: new ObjectId(req.params.id) });
+    res.json({
+      entry: {
+        id: entry._id.toHexString(),
+        level: entry.levelName,
+        timeMs: entry.timeMs,
+        abilities: entry.abilities,
+        achievedAt: entry.achievedAt,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -379,10 +441,10 @@ app.patch("/api/leaderboard/:id", requireSameOrigin, requireOwner, async (req, r
 
 app.delete("/api/leaderboard/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Invalid leaderboard entry." });
-    const result = await pool.query("DELETE FROM leaderboard_entries WHERE id = $1", [id]);
-    if (!result.rowCount) return res.status(404).json({ error: "Leaderboard entry not found." });
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid leaderboard entry." });
+    const db = await getDatabase();
+    const result = await db.collection("leaderboard_entries").deleteOne({ _id: new ObjectId(req.params.id) });
+    if (!result.deletedCount) return res.status(404).json({ error: "Leaderboard entry not found." });
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -405,62 +467,69 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: "The server could not complete that request." });
 });
 
-export async function initializeDatabase() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-      username VARCHAR(20) NOT NULL,
-      username_normalized VARCHAR(20) NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      role VARCHAR(10) NOT NULL DEFAULT 'player' CHECK (role IN ('player', 'owner')),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS user_sessions (
-      token_hash CHAR(64) PRIMARY KEY,
-      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS user_sessions_expiry_idx ON user_sessions (expires_at);
-    CREATE TABLE IF NOT EXISTS leaderboard_entries (
-      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      level_name VARCHAR(80) NOT NULL,
-      time_ms INTEGER NOT NULL CHECK (time_ms BETWEEN 1000 AND 1800000),
-      abilities TEXT[] NOT NULL DEFAULT '{}',
-      achieved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (user_id, level_name)
-    );
-    CREATE INDEX IF NOT EXISTS leaderboard_time_idx ON leaderboard_entries (time_ms, achieved_at);
-    CREATE TABLE IF NOT EXISTS game_settings (
-      key VARCHAR(80) PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS workshop_levels (
-      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-      data JSONB NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    INSERT INTO game_settings (key, value) VALUES ('golden_time_limit_ms', '60000')
-      ON CONFLICT (key) DO NOTHING;
-    INSERT INTO game_settings (key, value) VALUES ('game_config', '${JSON.stringify(DEFAULT_GAME_CONFIG)}')
-      ON CONFLICT (key) DO NOTHING;
-  `);
+async function initializeDatabaseOnce() {
+  if (databaseConfigurationError) {
+    const error = new Error(databaseConfigurationError);
+    error.code = "DATABASE_CONFIG";
+    throw error;
+  }
+  const db = await getDatabase();
+  const users = db.collection("users");
+  const sessions = db.collection("user_sessions");
+  const entries = db.collection("leaderboard_entries");
+  const settings = db.collection("game_settings");
+
+  await Promise.all([
+    users.createIndex({ usernameNormalized: 1 }, { unique: true }),
+    sessions.createIndex({ tokenHash: 1 }, { unique: true }),
+    sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    entries.createIndex({ userId: 1, levelName: 1 }, { unique: true }),
+    entries.createIndex({ timeMs: 1, achievedAt: 1 }),
+  ]);
+  await settings.updateOne(
+    { _id: "golden_time_limit_ms" },
+    { $setOnInsert: { value: 60000, createdAt: new Date() } },
+    { upsert: true },
+  );
+  await settings.updateOne(
+    { _id: "game_config" },
+    { $setOnInsert: { value: DEFAULT_GAME_CONFIG, createdAt: new Date() } },
+    { upsert: true },
+  );
 
   dummyPasswordHash = await argon2.hash("constant-time account lookup", passwordHashOptions);
   for (const account of ownerAccounts) {
     const username = normalizeUsername(account.username);
     const passwordHash = await argon2.hash(account.password, passwordHashOptions);
-    await pool.query(
-      `INSERT INTO users (username, username_normalized, password_hash, role)
-       VALUES ($1, $2, $3, 'owner')
-       ON CONFLICT (username_normalized) DO UPDATE
-         SET username = EXCLUDED.username, password_hash = EXCLUDED.password_hash, role = 'owner'`,
-      [username.display, username.normalized, passwordHash],
-    );
+    const ownerUpdate = {
+      $set: {
+        username: username.display,
+        usernameNormalized: username.normalized,
+        passwordHash,
+        role: "owner",
+        updatedAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    };
+    try {
+      await users.updateOne({ usernameNormalized: username.normalized }, ownerUpdate, { upsert: true });
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      await users.updateOne({ usernameNormalized: username.normalized }, { $set: ownerUpdate.$set });
+    }
   }
   console.log(`Owner accounts ${ownerAccounts.map(({ username }) => `"${username}"`).join(" and ")} are ready.`);
+}
+
+let databaseInitializationPromise;
+export function initializeDatabase() {
+  if (!databaseInitializationPromise) {
+    databaseInitializationPromise = initializeDatabaseOnce().catch((error) => {
+      databaseInitializationPromise = undefined;
+      throw error;
+    });
+  }
+  return databaseInitializationPromise;
 }
 
 export default app;

@@ -685,7 +685,7 @@ function showCustomization() {
 
 function showCredits() {
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
-    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>River</b></section>`;
+    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section>`;
     menu.append(createTextButton("Back", showMenu)); document.body.replaceChildren(menu);
 }
 

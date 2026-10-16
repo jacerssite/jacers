@@ -29,6 +29,14 @@ export default async function handler(req, res) {
     return app(req, res);
   } catch (error) {
     console.error("Could not initialize the Jacer API:", error);
+    if (error?.code === "DATABASE_CONFIG") {
+      return res.status(503).json({ error: error.message });
+    }
+    if (error?.code === "ECONNREFUSED" && ["127.0.0.1", "::1", "localhost"].includes(error.address)) {
+      return res.status(503).json({
+        error: "The database connection points to this server instead of a hosted database. Set DATABASE_MONGODB_URI to your MongoDB Atlas connection URL in Vercel.",
+      });
+    }
     return res.status(503).json({ error: "The online service is temporarily unavailable." });
   }
 }

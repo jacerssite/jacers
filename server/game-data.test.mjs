@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { getMongoDatabaseConfigurationError } from "./database-config.mjs";
 import {
   isValidPassword,
   isValidGameConfig,
@@ -20,6 +21,16 @@ test("password validation enforces length without changing the password", () => 
   assert.equal(isValidPassword("1234567890"), true);
   assert.equal(isValidPassword("short"), false);
   assert.equal(isValidPassword("x".repeat(129)), false);
+});
+
+test("MongoDB connection configuration accepts hosted URIs and rejects local Vercel URIs", () => {
+  const atlasUri = "mongodb+srv://cluster0.example.mongodb.net/jacer?retryWrites=true";
+  assert.equal(getMongoDatabaseConfigurationError(atlasUri), null);
+  assert.equal(getMongoDatabaseConfigurationError("mongodb://localhost:27017/jacer"), null);
+  assert.equal(getMongoDatabaseConfigurationError("mongodb://localhost:27017/jacer", { vercel: true })?.includes("MongoDB Atlas"), true);
+  assert.equal(getMongoDatabaseConfigurationError("postgresql://db.example.com/jacer")?.includes("mongodb://"), true);
+  assert.equal(getMongoDatabaseConfigurationError("not a uri")?.includes("valid MongoDB"), true);
+  assert.equal(getMongoDatabaseConfigurationError(undefined)?.includes("DATABASE_MONGODB_URI"), true);
 });
 
 test("run validation accepts bounded run details and known abilities only", () => {
