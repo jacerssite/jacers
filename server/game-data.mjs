@@ -228,6 +228,10 @@ export function validateRouletteTiers(value) {
   return tiers;
 }
 
+// Keep these limits in sync with src/admin-tools.ts. The total stays below the API's JSON request limit.
+export const MAX_UPDATE_LOG_BODY_LENGTH = 20_000;
+export const MAX_UPDATE_LOG_BYTES = 200_000;
+
 export function validateUpdateLog(value) {
   if (!Array.isArray(value) || value.length > 100) return null;
   const entries = [];
@@ -237,9 +241,10 @@ export function validateUpdateLog(value) {
       || typeof entry.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(entry.date)
       || !parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== entry.date
       || typeof entry.title !== "string" || !entry.title.trim() || entry.title.trim().length > 80
-      || typeof entry.body !== "string" || !entry.body.trim() || entry.body.trim().length > 600) return null;
-    entries.push({ date: entry.date, title: entry.title.trim(), body: entry.body.trim() });
+      || typeof entry.body !== "string" || !entry.body.trim() || entry.body.length > MAX_UPDATE_LOG_BODY_LENGTH) return null;
+    entries.push({ date: entry.date, title: entry.title.trim(), body: entry.body });
   }
+  if (Buffer.byteLength(JSON.stringify({ entries }), "utf8") > MAX_UPDATE_LOG_BYTES) return null;
   return entries;
 }
 

@@ -1,6 +1,11 @@
 import type { ManagedUser, UpdateLogEntry } from "./types";
 import { apiRequest } from "./api";
 import { createTextButton } from "./ui";
+import { adjustIndentation } from "./text-editor";
+
+// Keep these limits in sync with server/game-data.mjs.
+const MAX_UPDATE_LOG_BODY_LENGTH = 20_000;
+const MAX_UPDATE_LOG_BYTES = 200_000;
 
 export async function renderAdminCodeTools(container: HTMLElement) {
     container.replaceChildren();
@@ -210,7 +215,7 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
     const heading = document.createElement("h2");
     heading.textContent = "Credits update log";
     const description = document.createElement("p");
-    description.textContent = "Published entries appear in Credits for every player. Changes are recorded in settings history.";
+    description.textContent = "Paste plain text with paragraphs, spaces, and tabs. Published entries appear in Credits for every player.";
     const form = document.createElement("form");
     form.className = "account-profile-form update-log-editor";
     const entries = document.createElement("section");
@@ -239,16 +244,47 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
             title.setAttribute("aria-label", `Update ${index + 1} title`);
             const body = document.createElement("textarea");
             body.value = entry.body;
-            body.maxLength = 600;
+            body.rows = 10;
             body.required = true;
-            body.placeholder = "What changed?";
+            body.placeholder = "Paste or write your update here...";
             body.dataset.updateBody = String(index);
             body.setAttribute("aria-label", `Update ${index + 1} details`);
+            const count = document.createElement("small");
+            count.className = "update-log-character-count";
+            const updateCount = () => {
+                count.textContent = `${body.value.length.toLocaleString()} / ${MAX_UPDATE_LOG_BODY_LENGTH.toLocaleString()} characters${body.value.length > MAX_UPDATE_LOG_BODY_LENGTH ? " — entry is too long to publish" : ""}`;
+                count.classList.toggle("is-over-limit", body.value.length > MAX_UPDATE_LOG_BODY_LENGTH);
+            };
+            body.addEventListener("input", updateCount);
+            updateCount();
+            const editorActions = document.createElement("div");
+            editorActions.className = "update-log-editor-actions";
+            const indent = createTextButton("Indent", () => adjustIndentation(body));
+            indent.setAttribute("aria-label", `Indent update ${index + 1}`);
+            const outdent = createTextButton("Outdent", () => adjustIndentation(body, true));
+            outdent.setAttribute("aria-label", `Outdent update ${index + 1}`);
+            const tabOption = document.createElement("label");
+            tabOption.className = "update-log-tab-option";
+            const useTab = document.createElement("input");
+            useTab.type = "checkbox";
+            tabOption.append(useTab, document.createTextNode("Use Tab to indent"));
+            const tabHint = document.createElement("small");
+            tabHint.textContent = "Select lines to indent or outdent. If Tab indentation is on, press Esc to turn it off and move focus.";
+            body.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && useTab.checked) {
+                    useTab.checked = false;
+                    status.textContent = "Tab indentation is off; Tab now moves between controls.";
+                } else if (event.key === "Tab" && useTab.checked) {
+                    event.preventDefault();
+                    adjustIndentation(body, event.shiftKey);
+                }
+            });
+            editorActions.append(indent, outdent, tabOption);
             const remove = createTextButton("Remove", () => {
-                draft = draft.filter((_, entryIndex) => entryIndex !== index);
+                draft = readEntries().filter((_, entryIndex) => entryIndex !== index);
                 drawEntries();
             });
-            row.append(date, title, body, remove);
+            row.append(date, title, body, count, editorActions, tabHint, remove);
             entries.append(row);
         });
         if (!draft.length) {
@@ -257,8 +293,13 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
             entries.append(empty);
         }
     };
+    const readEntries = () => draft.map((entry, index) => ({
+        date: entries.querySelector<HTMLInputElement>(`input[data-update-date="${index}"]`)?.value ?? entry.date,
+        title: entries.querySelector<HTMLInputElement>(`input[data-update-title="${index}"]`)?.value ?? entry.title,
+        body: entries.querySelector<HTMLTextAreaElement>(`textarea[data-update-body="${index}"]`)?.value ?? entry.body,
+    }));
     const add = createTextButton("Add update", () => {
-        draft.unshift({ date: new Date().toISOString().slice(0, 10), title: "", body: "" });
+        draft = [{ date: new Date().toISOString().slice(0, 10), title: "", body: "" }, ...readEntries()];
         drawEntries();
     });
     const save = document.createElement("button");
@@ -268,17 +309,23 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
     form.append(entries, add, save, status);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        const nextEntries = readEntries().map((entry) => ({ ...entry, title: entry.title.trim() }));
+        const invalidEntry = nextEntries.findIndex((entry) => !entry.body.trim() || entry.body.length > MAX_UPDATE_LOG_BODY_LENGTH);
+        if (invalidEntry !== -1) {
+            status.textContent = `Update ${invalidEntry + 1} needs text and must be at most ${MAX_UPDATE_LOG_BODY_LENGTH.toLocaleString()} characters.`;
+            return;
+        }
+        const requestBody = JSON.stringify({ entries: nextEntries });
+        if (new TextEncoder().encode(requestBody).length > MAX_UPDATE_LOG_BYTES) {
+            status.textContent = "The update log is too large to publish (200 KB total). Shorten or remove some entries.";
+            return;
+        }
         save.disabled = true;
         status.textContent = "Saving update log...";
-        const nextEntries = draft.map((entry, index) => ({
-            date: entries.querySelector<HTMLInputElement>(`input[data-update-date="${index}"]`)?.value ?? entry.date,
-            title: entries.querySelector<HTMLInputElement>(`input[data-update-title="${index}"]`)?.value.trim() ?? entry.title,
-            body: entries.querySelector<HTMLTextAreaElement>(`textarea[data-update-body="${index}"]`)?.value.trim() ?? entry.body,
-        }));
         try {
             const result = await apiRequest<{ updateLog: UpdateLogEntry[] }>("/settings/update-log", {
                 method: "PUT",
-                body: JSON.stringify({ entries: nextEntries }),
+                body: requestBody,
             });
             onSaved(result.updateLog);
             draft = result.updateLog.map((entry) => ({ ...entry }));

@@ -17,6 +17,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
   let raceUpdates = 0;
   let invalidProgress = false;
   let appearOffline = true;
+  const settingsById = new Map();
   let run = { _id: entryId, userId, levelName: "Quiet Orbit", timeMs: 20000, abilities: [], achievedAt: new Date() };
   const generic = {
     async dropIndex() { throw Object.assign(new Error("missing collection"), { code: 26 }); },
@@ -65,6 +66,16 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     ...generic,
     async findOne() { return invalidProgress ? { data: { "orbit-password": "not valid" } } : null; },
   };
+  const settings = {
+    ...generic,
+    async findOne(filter) { return settingsById.get(filter._id) ?? null; },
+    async updateOne(filter, update) {
+      const current = settingsById.get(filter._id);
+      settingsById.set(filter._id, { _id: filter._id, ...(current ?? update.$setOnInsert), ...update.$set });
+      return { matchedCount: current ? 1 : 0 };
+    },
+  };
+  const settingHistory = { ...generic, async insertOne() {} };
   const originalConnect = MongoClient.prototype.connect;
   const originalDb = MongoClient.prototype.db;
   MongoClient.prototype.connect = async function () { return this; };
@@ -74,6 +85,8 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
       if (name === "user_sessions") return sessions;
       if (name === "leaderboard_entries") return entries;
       if (name === "player_progress") return progress;
+      if (name === "game_settings") return settings;
+      if (name === "setting_history") return settingHistory;
       return generic;
     } };
   };
@@ -103,12 +116,36 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     const visibleProfile = await fetch(`${origin}/api/router?_route=players/${userId.toHexString()}`);
     assert.equal((await visibleProfile.json()).player.isOnline, true);
 
+    const log = [{ date: "2026-10-19", title: "Update", body: `    Intro\n\n\t- Details\n${"x".repeat(1200)}  \n` }];
+    const updateLogResponse = await fetch(`${origin}/api/router?_route=settings/update-log`, {
+      method: "PUT",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ entries: log }),
+    });
+    assert.equal(updateLogResponse.status, 200);
+    assert.deepEqual((await updateLogResponse.json()).updateLog, log);
+    const publicSettings = await fetch(`${origin}/api/router?_route=settings`);
+    assert.deepEqual((await publicSettings.json()).updateLog, log);
+    const oversizedLogResponse = await fetch(`${origin}/api/router?_route=settings/update-log`, {
+      method: "PUT",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ entries: [{ ...log[0], body: "x".repeat(20_001) }] }),
+    });
+    assert.equal(oversizedLogResponse.status, 400);
+    assert.deepEqual(settingsById.get("update_log").value, log);
+
     invalidProgress = true;
     const invalidResponse = await fetch(`${origin}/api/router?_route=account/progress`, { headers: { cookie } });
     assert.equal(invalidResponse.status, 409);
     assert.match((await invalidResponse.json()).error, /saved player progress is invalid/i);
 
     role = "player";
+    const unauthorizedLogResponse = await fetch(`${origin}/api/router?_route=settings/update-log`, {
+      method: "PUT",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ entries: [] }),
+    });
+    assert.equal(unauthorizedLogResponse.status, 403);
     const runResponse = await fetch(`${origin}/api/router?_route=runs`, {
       method: "POST",
       headers: { cookie, origin, "content-type": "application/json" },

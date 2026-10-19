@@ -17,6 +17,8 @@ import {
   validatePlayerProgress,
   validateRouletteTiers,
   validateUpdateLog,
+  MAX_UPDATE_LOG_BODY_LENGTH,
+  MAX_UPDATE_LOG_BYTES,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -76,12 +78,17 @@ test("roulette tiers validate bounds, unique names, and exact probability totals
 });
 
 test("update log accepts bounded plain-text entries and rejects invalid dates or oversize history", () => {
-  const entries = [{ date: "2026-10-19", title: "New season", body: "A new route is available." }];
+  const entries = [{ date: "2026-10-19", title: "New season", body: "  First paragraph.\n\n\t- A new route is available.\n    More details.  \n" }];
   assert.deepEqual(validateUpdateLog(entries), entries);
+  assert.equal(validateUpdateLog([{ ...entries[0], body: "x".repeat(MAX_UPDATE_LOG_BODY_LENGTH) }])[0].body.length, MAX_UPDATE_LOG_BODY_LENGTH);
   assert.equal(validateUpdateLog([{ ...entries[0], date: "2026-02-31" }]), null);
   assert.equal(validateUpdateLog([{ ...entries[0], title: "" }]), null);
-  assert.equal(validateUpdateLog([{ ...entries[0], body: "x".repeat(601) }]), null);
+  assert.equal(validateUpdateLog([{ ...entries[0], body: " \n\t" }]), null);
+  assert.equal(validateUpdateLog([{ ...entries[0], body: "x".repeat(MAX_UPDATE_LOG_BODY_LENGTH + 1) }]), null);
   assert.equal(validateUpdateLog(Array.from({ length: 101 }, () => entries[0])), null);
+  const oversized = Array.from({ length: 6 }, () => ({ ...entries[0], body: "🚀".repeat(MAX_UPDATE_LOG_BODY_LENGTH / 2) }));
+  assert.ok(Buffer.byteLength(JSON.stringify({ entries: oversized }), "utf8") > MAX_UPDATE_LOG_BYTES);
+  assert.equal(validateUpdateLog(oversized), null);
 });
 
 test("MongoDB connection configuration accepts hosted URIs and rejects local Vercel URIs", () => {

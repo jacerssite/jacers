@@ -12,6 +12,8 @@ import { createCustomization } from "./customization";
 import { createLeaderboard } from "./leaderboard";
 import { createAccountRecovery } from "./account-recovery";
 import { renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
+import { createControlNavigation, type ControlSection } from "./owner-panel";
+import { createRouletteFields } from "./roulette-editor";
 
 const playerLabel = document.createElement("div");
 const world = document.createElement("main");
@@ -2052,11 +2054,14 @@ function createTesterRateField(title: string, input: HTMLInputElement) {
     return field;
 }
 
-function bindTesterSetting(input: HTMLInputElement, key: string, world?: "normal" | "prestige") {
-    const draftKey = world ? `${world}.${key}` : key;
-    const draftValue = testerSettingsDraft.get(draftKey);
+function bindTesterSetting(input: HTMLInputElement, key: string, world?: "normal" | "prestige" | (() => "normal" | "prestige")) {
+    const draftKey = () => {
+        const currentWorld = typeof world === "function" ? world() : world;
+        return currentWorld ? `${currentWorld}.${key}` : key;
+    };
+    const draftValue = testerSettingsDraft.get(draftKey());
     if (draftValue !== undefined) input.value = draftValue;
-    input.addEventListener("input", () => testerSettingsDraft.set(draftKey, input.value));
+    input.addEventListener("input", () => testerSettingsDraft.set(draftKey(), input.value));
 }
 
 function readTesterSetting(key: string, fallback: number, world?: "normal" | "prestige") {
@@ -2082,11 +2087,14 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const isOwner = user.role === "owner";
     const menu = document.createElement("main");
     menu.className = "menu-screen tester-screen";
-    menu.innerHTML = `<p class="eyebrow">${isOwner ? "OWNER TOOLS / SHARED SAVE" : "TESTER TOOLS / LOCAL OVERRIDE"}</p><h1>Adjust the <em>game</em></h1><p class="menu-copy">${isOwner ? "Manage shared game settings, workshop routes, and player profiles." : "Try allowed game-setting changes on this device only. Nothing here publishes changes for other players."}</p>`;
+    const pageHeader = document.createElement("div");
+    pageHeader.className = "tester-console-header";
+    pageHeader.innerHTML = `<div><p class="eyebrow">FLIGHT SYSTEMS / ${isOwner ? "OWNER" : "TESTER"}</p><h1>Control <em>center</em></h1><p class="menu-copy">${isOwner ? "Manage your game and pilots from one place." : "Test game settings and progression on this device."}</p></div><span class="tester-scope-badge">${isOwner ? "OWNER ACCESS" : "LOCAL TEST MODE"}</span>`;
     const worldTabs = document.createElement("nav");
     worldTabs.className = "tester-world-tabs";
-    const normalTab = createTextButton("Normal world", () => showTesterPanel("normal"));
-    const prestigeTab = createTextButton("Prestige world", () => showTesterPanel("prestige"));
+    worldTabs.setAttribute("aria-label", "World settings");
+    const normalTab = createTextButton("Normal world", () => selectWorld("normal"));
+    const prestigeTab = createTextButton("Prestige world", () => selectWorld("prestige"));
     normalTab.classList.toggle("selected", selectedWorld === "normal");
     prestigeTab.classList.toggle("selected", selectedWorld === "prestige");
     normalTab.setAttribute("aria-pressed", String(selectedWorld === "normal"));
@@ -2094,6 +2102,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     worldTabs.append(normalTab, prestigeTab);
     const form = document.createElement("form");
     form.className = "tester-panel";
+    form.noValidate = true;
     const accountManagement = document.createElement("section");
     accountManagement.className = "tester-player-management";
     accountManagement.hidden = true;
@@ -2106,71 +2115,6 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const updateLogManagement = document.createElement("section");
     updateLogManagement.className = "tester-player-management";
     updateLogManagement.hidden = true;
-    const testerTabs = document.createElement("nav");
-    testerTabs.className = "tester-panel-tabs";
-    const settingsTab = createTextButton("Game settings", () => {
-        worldTabs.hidden = false;
-        form.hidden = false;
-        accountManagement.hidden = true;
-        codeManagement.hidden = true;
-        messageManagement.hidden = true;
-        updateLogManagement.hidden = true;
-        settingsTab.classList.add("selected");
-        [usersTab, codesTab, messagesTab, updateLogTab].forEach((tab) => tab.classList.remove("selected"));
-    });
-    const usersTab = createTextButton("Player accounts", () => {
-        worldTabs.hidden = true;
-        form.hidden = true;
-        accountManagement.hidden = false;
-        codeManagement.hidden = true;
-        messageManagement.hidden = true;
-        updateLogManagement.hidden = true;
-        settingsTab.classList.remove("selected");
-        codesTab.classList.remove("selected");
-        messagesTab.classList.remove("selected");
-        updateLogTab.classList.remove("selected");
-        usersTab.classList.add("selected");
-        void loadManagedUsers(accountManagement);
-    });
-    usersTab.hidden = !isOwner;
-    const codesTab = createTextButton("Codes", () => {
-        worldTabs.hidden = true;
-        form.hidden = true;
-        accountManagement.hidden = true;
-        codeManagement.hidden = false;
-        messageManagement.hidden = true;
-        updateLogManagement.hidden = true;
-        [settingsTab, usersTab, messagesTab, updateLogTab].forEach((tab) => tab.classList.remove("selected"));
-        codesTab.classList.add("selected");
-        void renderAdminCodeTools(codeManagement);
-    });
-    codesTab.hidden = !isOwner;
-    const messagesTab = createTextButton("Messages", () => {
-        worldTabs.hidden = true;
-        form.hidden = true;
-        accountManagement.hidden = true;
-        codeManagement.hidden = true;
-        messageManagement.hidden = false;
-        updateLogManagement.hidden = true;
-        [settingsTab, usersTab, codesTab, updateLogTab].forEach((tab) => tab.classList.remove("selected"));
-        messagesTab.classList.add("selected");
-        void renderAdminMessageTools(messageManagement);
-    });
-    messagesTab.hidden = !isOwner;
-    const updateLogTab = createTextButton("Update log", () => {
-        worldTabs.hidden = true;
-        form.hidden = true;
-        accountManagement.hidden = true;
-        codeManagement.hidden = true;
-        messageManagement.hidden = true;
-        updateLogManagement.hidden = false;
-        [settingsTab, usersTab, codesTab, messagesTab].forEach((tab) => tab.classList.remove("selected"));
-        updateLogTab.classList.add("selected");
-        void renderAdminUpdateLog(updateLogManagement, updateLogEntries, (entries) => { updateLogEntries = entries; });
-    });
-    updateLogTab.hidden = !isOwner;
-    settingsTab.classList.add("selected");
-    testerTabs.append(settingsTab, usersTab, codesTab, messagesTab, updateLogTab);
     const selectedConfig = gameConfig[selectedWorld];
     const claimsLabel = document.createElement("label");
     claimsLabel.innerHTML = `<span>Asteroids</span>`;
@@ -2197,13 +2141,14 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     prestigeMaxInput.type = "number"; prestigeMaxInput.min = "1"; prestigeMaxInput.value = String(prestigeMax);
     prestigeMaxLabel.append(prestigeMaxInput);
     form.append(prestigeMaxLabel);
+    const pilotFields: HTMLElement[] = [claimsLabel, specialLabel, prestigeLabel, prestigeMaxLabel];
     const inventory = getInventory();
     (Object.keys(powerupPrices) as PowerupKind[]).forEach((kind) => {
         const label = document.createElement("label");
         label.innerHTML = `<span>${powerupLabels[kind]}</span>`;
         const input = document.createElement("input");
         input.type = "number"; input.min = "0"; input.value = String(inventory[kind]); input.dataset.powerup = kind;
-        label.append(input); form.append(label);
+        label.append(input); form.append(label); pilotFields.push(label);
     });
     const rewardSettings = document.createElement("section");
     rewardSettings.className = "tester-reward-settings";
@@ -2217,7 +2162,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     starChanceInput.step = "1";
     starChanceInput.value = String(selectedConfig.rainbowStarChance);
     starChanceInput.dataset.rainbowStarChance = "true";
-    bindTesterSetting(starChanceInput, "rainbowStarChance", selectedWorld);
+    bindTesterSetting(starChanceInput, "rainbowStarChance", () => selectedWorld);
     starChanceLabel.append(starChanceInput);
     rewardSettings.append(starChanceLabel);
     const odds = selectedConfig.rarityOdds;
@@ -2234,23 +2179,23 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         oddsInput.step = "1";
         oddsInput.setAttribute("aria-label", `${rarity} roll chance percent`);
         oddsInput.dataset.rollOdds = rarity;
-        bindTesterSetting(oddsInput, `rarityOdds.${rarity}`, selectedWorld);
+        bindTesterSetting(oddsInput, `rarityOdds.${rarity}`, () => selectedWorld);
         const minimumInput = document.createElement("input");
         minimumInput.type = "number"; minimumInput.min = "0"; minimumInput.value = String(rewards[rarity][0]);
         minimumInput.setAttribute("aria-label", `${rarity} minimum asteroid reward`);
         minimumInput.dataset.rewardMin = rarity;
-        bindTesterSetting(minimumInput, `rewardMin.${rarity}`, selectedWorld);
+        bindTesterSetting(minimumInput, `rewardMin.${rarity}`, () => selectedWorld);
         const maximumInput = document.createElement("input");
         maximumInput.type = "number"; maximumInput.min = "0"; maximumInput.value = String(rewards[rarity][1]);
         maximumInput.setAttribute("aria-label", `${rarity} maximum asteroid reward`);
         maximumInput.dataset.rewardMax = rarity;
-        bindTesterSetting(maximumInput, `rewardMax.${rarity}`, selectedWorld);
+        bindTesterSetting(maximumInput, `rewardMax.${rarity}`, () => selectedWorld);
         const skinChanceInput = document.createElement("input");
         skinChanceInput.type = "number"; skinChanceInput.min = "0"; skinChanceInput.max = "100"; skinChanceInput.value = String(skinChances[rarity]);
         skinChanceInput.step = "1";
         skinChanceInput.setAttribute("aria-label", `${rarity} skin chance percent`);
         skinChanceInput.dataset.skinChance = rarity;
-        bindTesterSetting(skinChanceInput, `skinChance.${rarity}`, selectedWorld);
+        bindTesterSetting(skinChanceInput, `skinChance.${rarity}`, () => selectedWorld);
         rarityInputs.append(
             createTesterRateField("Roll %", oddsInput),
             createTesterRateField("Min asteroids", minimumInput),
@@ -2274,15 +2219,38 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         input.step = "1";
         input.value = String(selectedConfig.powerupSpawnChances[kind]);
         input.dataset.powerupSpawn = kind;
-        bindTesterSetting(input, `powerupSpawn.${kind}`, selectedWorld);
+        bindTesterSetting(input, `powerupSpawn.${kind}`, () => selectedWorld);
         label.append(input);
         rewardSettings.append(label);
     });
     const rewardSettingsError = document.createElement("small");
-    rewardSettingsError.className = "tester-error";
+    rewardSettingsError.className = "tester-save-status";
     rewardSettingsError.setAttribute("role", "status");
+    const setSaveStatus = (message: string, error = false) => {
+        rewardSettingsError.textContent = message;
+        rewardSettingsError.classList.toggle("tester-error", error);
+    };
     rewardSettings.append(rewardSettingsError);
     form.append(rewardSettings);
+    function selectWorld(world: "normal" | "prestige") {
+        selectedWorld = world;
+        const config = gameConfig[world];
+        normalTab.classList.toggle("selected", world === "normal");
+        prestigeTab.classList.toggle("selected", world === "prestige");
+        normalTab.setAttribute("aria-pressed", String(world === "normal"));
+        prestigeTab.setAttribute("aria-pressed", String(world === "prestige"));
+        rewardSettings.querySelector(".setting-title")!.textContent = `${world === "prestige" ? "Prestige" : "Normal"} world percentages`;
+        starChanceInput.value = String(readTesterSetting("rainbowStarChance", config.rainbowStarChance, world));
+        RARITY_ORDER.forEach((rarity) => {
+            rewardSettings.querySelector<HTMLInputElement>(`input[data-roll-odds="${rarity}"]`)!.value = String(readTesterSetting(`rarityOdds.${rarity}`, config.rarityOdds[rarity], world));
+            rewardSettings.querySelector<HTMLInputElement>(`input[data-reward-min="${rarity}"]`)!.value = String(readTesterSetting(`rewardMin.${rarity}`, config.rewardRanges[rarity][0], world));
+            rewardSettings.querySelector<HTMLInputElement>(`input[data-reward-max="${rarity}"]`)!.value = String(readTesterSetting(`rewardMax.${rarity}`, config.rewardRanges[rarity][1], world));
+            rewardSettings.querySelector<HTMLInputElement>(`input[data-skin-chance="${rarity}"]`)!.value = String(readTesterSetting(`skinChance.${rarity}`, config.skinChances[rarity], world));
+        });
+        (["shield", "boost", "rapid", "cannon"] as const).forEach((kind) => {
+            rewardSettings.querySelector<HTMLInputElement>(`input[data-powerup-spawn="${kind}"]`)!.value = String(readTesterSetting(`powerupSpawn.${kind}`, config.powerupSpawnChances[kind], world));
+        });
+    }
     const rouletteSettings = document.createElement("section");
     rouletteSettings.className = "tester-reward-settings roulette-settings-editor";
     const rouletteHeading = document.createElement("p");
@@ -2290,20 +2258,19 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     rouletteHeading.textContent = "Roulette buy-in and prize chances";
     const rouletteDescription = document.createElement("p");
     rouletteDescription.className = "menu-copy";
-    rouletteDescription.textContent = "Edit the 5, 10, and 25 special-asteroid tiers as JSON. Percentages in each tier must total 100 and appear on the odds page; the wheel only shows numbered pockets.";
-    const rouletteEditor = document.createElement("textarea");
-    rouletteEditor.value = JSON.stringify(rouletteTiers, null, 2);
-    rouletteEditor.setAttribute("aria-label", "Roulette tier configuration");
+    rouletteDescription.textContent = "Adjust each tier's prize chances and asteroid rewards. Chances in each tier must add up to 100%.";
+    const rouletteEditor = createRouletteFields(rouletteTiers);
     const rouletteStatus = document.createElement("small");
     rouletteStatus.setAttribute("role", "status");
     const saveRoulette = createTextButton("Save roulette tiers", async () => {
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(rouletteEditor.value);
-        } catch {
-            rouletteStatus.textContent = "Enter valid JSON for all three roulette tiers.";
+        const invalid = Array.from(rouletteEditor.element.querySelectorAll<HTMLInputElement>("input")).find((input) => !input.checkValidity());
+        if (invalid) {
+            rouletteStatus.textContent = "Check the highlighted value before saving.";
+            invalid.focus();
+            invalid.reportValidity();
             return;
         }
+        const parsed = rouletteEditor.read();
         if (!isUsableRouletteTiers(parsed)) {
             rouletteStatus.textContent = "Each tier needs its fixed buy-in, valid reward chances totaling 100%, and bounded reward ranges.";
             return;
@@ -2320,7 +2287,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 rouletteTiers = structuredClone(parsed);
                 localStorage.setItem("orbit-tester-roulette-tiers", JSON.stringify(rouletteTiers));
             }
-            rouletteEditor.value = JSON.stringify(rouletteTiers, null, 2);
+            rouletteEditor.draw(rouletteTiers);
             rouletteStatus.textContent = isOwner ? "Roulette tiers saved for all players." : "Tester-only roulette tiers saved on this device.";
         } catch (error) {
             rouletteStatus.textContent = error instanceof Error ? error.message : "Could not save roulette tiers.";
@@ -2329,9 +2296,10 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         }
     });
     const resetRoulette = createTextButton("Reset roulette defaults", () => {
-        rouletteEditor.value = JSON.stringify(DEFAULT_ROULETTE_TIERS, null, 2);
+        rouletteEditor.draw(DEFAULT_ROULETTE_TIERS);
+        rouletteStatus.textContent = "Defaults loaded. Save roulette tiers to apply them.";
     });
-    rouletteSettings.append(rouletteHeading, rouletteDescription, rouletteEditor, saveRoulette, resetRoulette, rouletteStatus);
+    rouletteSettings.append(rouletteHeading, rouletteDescription, rouletteEditor.element, saveRoulette, resetRoulette, rouletteStatus);
     form.append(rouletteSettings);
     const effectSettings = document.createElement("section");
     effectSettings.className = "tester-reward-settings tester-powerup-effects";
@@ -2368,7 +2336,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const unlockEverySkin = createTextButton("Unlock every skin, including special skins", () => {
         localStorage.setItem("orbit-unlock-skins", "1");
         skins.forEach((_, index) => unlockSpinCosmetic("skin", index));
-        showTesterPanel(selectedWorld);
+        unlocks.querySelector<HTMLInputElement>('input[data-unlock="skins"]')!.checked = true;
     });
     form.append(unlockEverySkin);
     const levelTitle = document.createElement("p");
@@ -2383,10 +2351,16 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             if (level.secret && level.secretId) localStorage.setItem(`orbit-key-${level.secretId}`, "1");
             else localStorage.setItem(`orbit-level-${index}`, "1");
         });
+        form.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => {
+            const index = Number(input.dataset.level);
+            const level = levels[index];
+            if (matches(level)) input.checked = level.secret ? isSecretLevelUnlocked(level) : true;
+        });
+        if (localStorage.getItem("orbit-key-prestige-gate") === "1") prestigeGateInput.checked = true;
     };
-    const normalUnlock = createTextButton("Unlock normal levels", () => { unlockLevels((level) => !level.secret && !level.prestige); showTesterPanel(selectedWorld); });
-    const secretUnlock = createTextButton("Unlock secret levels", () => { unlockLevels((level) => Boolean(level.secret)); localStorage.setItem("orbit-secret-unlocked", "1"); showTesterPanel(selectedWorld); });
-    const prestigeUnlock = createTextButton("Unlock prestige levels", () => { unlockLevels((level) => Boolean(level.prestige)); prestigeLevel = Math.max(prestigeLevel, 2); localStorage.setItem("orbit-prestige", String(prestigeLevel)); showTesterPanel(selectedWorld); });
+    const normalUnlock = createTextButton("Unlock normal levels", () => unlockLevels((level) => !level.secret && !level.prestige));
+    const secretUnlock = createTextButton("Unlock secret levels", () => { localStorage.setItem("orbit-secret-unlocked", "1"); unlockLevels((level) => Boolean(level.secret)); });
+    const prestigeUnlock = createTextButton("Unlock prestige levels", () => { unlockLevels((level) => Boolean(level.prestige)); prestigeLevel = Math.max(prestigeLevel, 2); prestigeInput.value = String(prestigeLevel); localStorage.setItem("orbit-prestige", String(prestigeLevel)); });
     levelActions.append(normalUnlock, secretUnlock, prestigeUnlock);
     form.append(levelActions);
     const prestigeGateLabel = document.createElement("label");
@@ -2413,6 +2387,12 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const label = document.createElement("label");
             const input = document.createElement("input");
             input.type = "checkbox"; input.checked = level.secret ? isSecretLevelUnlocked(level) : index === 0 || Number(localStorage.getItem(`orbit-level-${index}`) ?? "0") === 1; input.dataset.level = String(index);
+            input.addEventListener("change", () => {
+                levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((other) => {
+                    if (other.dataset.level === input.dataset.level) other.checked = input.checked;
+                });
+                if (levels[Number(input.dataset.level)]?.secretId === "prestige-gate") prestigeGateInput.checked = input.checked;
+            });
             const name = document.createElement("span");
             name.textContent = level.name;
             const metadata = document.createElement("small");
@@ -2423,6 +2403,11 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         });
         levelChoices.append(groupPanel);
     });
+    prestigeGateInput.addEventListener("change", () => {
+        levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => {
+            if (levels[Number(input.dataset.level)]?.secretId === "prestige-gate") input.checked = prestigeGateInput.checked;
+        });
+    });
     form.append(levelChoices);
     const customTitle = document.createElement("p");
     customTitle.className = "setting-title";
@@ -2430,13 +2415,16 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     form.append(customTitle);
     const sharedLevels = document.createElement("div");
     sharedLevels.className = "tester-custom-levels";
+    const workshopStatus = document.createElement("small");
+    workshopStatus.className = "tester-error";
+    workshopStatus.setAttribute("role", "status");
     const serverCustomLevels = levels.map((level, index) => ({ level, index })).filter(({ level }) => Boolean(level.customId) && !level.localOnly);
     if (!serverCustomLevels.length) {
         const empty = document.createElement("small");
         empty.textContent = "No shared workshop levels yet. Create one in the level maker.";
         sharedLevels.append(empty);
     }
-    serverCustomLevels.forEach(({ level, index }) => {
+    serverCustomLevels.forEach(({ level }) => {
         const row = document.createElement("div");
         row.className = "tester-custom-level-row";
         const name = document.createElement("span");
@@ -2446,21 +2434,36 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             remove.disabled = true;
             try {
                 await apiRequest<void>(`/levels/${encodeURIComponent(level.customId)}`, { method: "DELETE" });
-                levels.splice(index, 1);
+                const deletedIndex = levels.findIndex((item) => item.customId === level.customId && !item.localOnly);
+                if (deletedIndex >= 0) {
+                    levels.splice(deletedIndex, 1);
+                    levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => {
+                        const index = Number(input.dataset.level);
+                        if (index === deletedIndex) input.closest("label")?.remove();
+                        else if (index > deletedIndex) input.dataset.level = String(index - 1);
+                    });
+                }
                 localStorage.setItem("orbit-global-level-cache", JSON.stringify(levels.filter((item) => item.customId && !item.localOnly)));
-                showTesterPanel(selectedWorld);
+                row.remove();
+                if (!sharedLevels.querySelector(".tester-custom-level-row")) {
+                    const empty = document.createElement("small");
+                    empty.textContent = "No shared workshop levels yet. Create one in the level maker.";
+                    sharedLevels.append(empty);
+                }
             } catch (error) {
-                rewardSettingsError.textContent = error instanceof Error ? error.message : "Could not delete the shared level.";
+                workshopStatus.textContent = error instanceof Error ? error.message : "Could not delete the shared level.";
                 remove.disabled = false;
             }
         });
         remove.classList.add("danger");
-        row.append(name, remove);
+        row.append(name);
+        if (isOwner) row.append(remove);
         sharedLevels.append(row);
     });
-    form.append(sharedLevels);
-    form.append(createTextButton("Try prestige planet", () => { if (activePlanet === "normal") switchPlanet(); else showLevelMenu(); }));
-    form.append(createTextButton("Open level maker", () => showLevelMaker()));
+    form.append(sharedLevels, workshopStatus);
+    const tryPrestige = createTextButton("Try prestige planet", () => { if (activePlanet === "normal") switchPlanet(); else showLevelMenu(); });
+    const openMaker = createTextButton("Open level maker", () => showLevelMaker());
+    form.append(tryPrestige, openMaker);
     const resetTitle = document.createElement("p");
     resetTitle.className = "setting-title tester-reset-title";
     resetTitle.textContent = "Reset tester data";
@@ -2472,16 +2475,31 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     resetButton.type = "button";
     resetButton.textContent = "Reset all game data";
     resetButton.addEventListener("click", () => {
+        if (!window.confirm("Clear this device's game data? Shared settings and workshop levels will not be deleted.")) return;
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter((key): key is string => Boolean(key?.startsWith("orbit-"))).forEach((key) => localStorage.removeItem(key));
         window.location.reload();
     });
     resetPanel.append(resetButton);
     form.append(resetTitle, resetPanel);
     const apply = document.createElement("button");
-    apply.className = "menu-button"; apply.type = "submit"; apply.textContent = isOwner ? "Save shared settings and apply" : "Save tester-only settings";
-    form.append(apply);
+    apply.className = "menu-button"; apply.type = "submit"; apply.textContent = "Save settings";
+    const saveFooter = document.createElement("div");
+    saveFooter.className = "tester-save-footer";
+    const saveExplanation = document.createElement("small");
+    saveExplanation.textContent = isOwner ? "Saves shared game rules and this device's test progress." : "Saves tester settings and progress on this device only.";
+    saveFooter.append(saveExplanation, apply, rewardSettingsError);
+    form.append(saveFooter);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        const invalidInput = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((input) => !input.closest(".roulette-settings-editor") && !input.checkValidity());
+        if (invalidInput) {
+            const sectionId = invalidInput.closest<HTMLElement>("[data-control-section]")?.dataset.controlSection;
+            if (sectionId) selectSection(sectionId);
+            setSaveStatus("Check the highlighted value before saving.", true);
+            invalidInput.focus();
+            invalidInput.reportValidity();
+            return;
+        }
         const nextConfig = structuredClone(gameConfig);
         let invalidWorld = "";
         (["normal", "prestige"] as const).forEach((world) => {
@@ -2500,15 +2518,19 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 worldConfig.powerupSpawnChances[kind] = readTesterSetting(`powerupSpawn.${kind}`, worldConfig.powerupSpawnChances[kind], world);
             });
             const oddsTotal = RARITY_ORDER.reduce((total, rarity) => total + worldConfig.rarityOdds[rarity], 0);
-            if (oddsTotal !== 100 || !Number.isInteger(worldConfig.rainbowStarChance)
-                || !Object.values(worldConfig.skinChances).every(Number.isInteger)
-                || !Object.values(worldConfig.powerupSpawnChances).every(Number.isInteger)) invalidWorld = world;
+            const isPercentage = (value: number) => Number.isInteger(value) && value >= 0 && value <= 100;
+            if (oddsTotal !== 100 || !isPercentage(worldConfig.rainbowStarChance)
+                || !Object.values(worldConfig.rarityOdds).every(isPercentage)
+                || !Object.values(worldConfig.skinChances).every(isPercentage)
+                || !Object.values(worldConfig.powerupSpawnChances).every(isPercentage)) invalidWorld = world;
         });
         if (invalidWorld) {
+            selectWorld(invalidWorld as "normal" | "prestige");
+            selectSection("rewards");
             const oddsTotal = RARITY_ORDER.reduce((total, rarity) => total + nextConfig[invalidWorld as "normal" | "prestige"].rarityOdds[rarity], 0);
-            rewardSettingsError.textContent = oddsTotal !== 100
+            setSaveStatus(oddsTotal !== 100
                 ? `${invalidWorld} world rarity chances total ${oddsTotal}%. Set them to exactly 100%.`
-                : `${invalidWorld} world reward ranges and percentages are invalid.`;
+                : `${invalidWorld} world reward ranges and percentages are invalid.`, true);
             return;
         }
         nextConfig.powerupEffects.shield.charges = readTesterSetting("effect.shield-charges", nextConfig.powerupEffects.shield.charges);
@@ -2517,7 +2539,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         nextConfig.powerupEffects.rapid.durationSeconds = readTesterSetting("effect.rapid-duration", nextConfig.powerupEffects.rapid.durationSeconds);
         nextConfig.powerupEffects.cannon.durationSeconds = readTesterSetting("effect.cannon-duration", nextConfig.powerupEffects.cannon.durationSeconds);
         nextConfig.powerupEffects.star.durationSeconds = readTesterSetting("effect.star-duration", nextConfig.powerupEffects.star.durationSeconds);
-        rewardSettingsError.textContent = "Saving shared settings...";
+        setSaveStatus(isOwner ? "Saving shared settings..." : "Saving tester settings...");
         apply.disabled = true;
         try {
             if (isOwner) {
@@ -2532,11 +2554,11 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             }
             testerSettingsDraft.clear();
         } catch (error) {
-            rewardSettingsError.textContent = error instanceof Error ? error.message : "Could not save shared game settings.";
+            setSaveStatus(error instanceof Error ? error.message : "Could not save shared game settings.", true);
             apply.disabled = false;
             return;
         }
-        rewardSettingsError.textContent = isOwner ? "Shared game settings saved for all players." : "Tester-only settings saved on this device.";
+        setSaveStatus(isOwner ? "Shared game settings saved for all players." : "Tester-only settings saved on this device.");
         asteroidsClaimed = Math.max(0, Number(claimsInput.value) || 0);
         specialAsteroids = Math.max(0, Number(specialInput.value) || 0);
         prestigeLevel = Math.max(0, Number(prestigeInput.value) || 0);
@@ -2552,56 +2574,83 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         form.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => { const level = levels[Number(input.dataset.level)]; if (level.secret && level.secretId) { if (input.checked) localStorage.setItem(`orbit-key-${level.secretId}`, "1"); else localStorage.removeItem(`orbit-key-${level.secretId}`); } else if (input.checked) localStorage.setItem(`orbit-level-${input.dataset.level}`, "1"); else localStorage.removeItem(`orbit-level-${input.dataset.level}`); });
         if (prestigeGateInput.checked) localStorage.setItem("orbit-key-prestige-gate", "1"); else localStorage.removeItem("orbit-key-prestige-gate");
     });
-    const settingsCategories = ["General", "Economy", "Abilities", "Cosmetics", "Levels", "Prestige", "Workshop"] as const;
-    const categoryNav = document.createElement("nav");
-    categoryNav.className = "tester-settings-tabs";
-    const categoryPanels = new Map<string, HTMLElement>();
-    const categoryButtons = new Map<string, HTMLButtonElement>();
-    settingsCategories.forEach((category) => {
+    const settingPanel = (id: string, elements: HTMLElement[]) => {
         const panel = document.createElement("section");
         panel.className = "tester-settings-category";
-        panel.setAttribute("aria-label", `${category} settings`);
+        panel.dataset.controlSection = id;
         panel.hidden = true;
-        categoryPanels.set(category, panel);
-        const button = createTextButton(category, () => {
-            categoryPanels.forEach((candidate, name) => { candidate.hidden = name !== category; });
-            categoryButtons.forEach((candidate, name) => {
-                candidate.classList.toggle("selected", name === category);
-                candidate.setAttribute("aria-pressed", String(name === category));
-            });
-            localStorage.setItem("orbit-owner-panel-tab", category);
-        });
-        categoryButtons.set(category, button);
-        categoryNav.append(button);
-    });
-    const categorizeSetting = (element: Element) => {
-        const text = (element.textContent ?? "").toLowerCase();
-        if (text.includes("workshop") || text.includes("level maker")) return "Workshop";
-        if (text.includes("prestige")) return "Prestige";
-        if (text.includes("level") || text.includes("portal") || text.includes("secret")) return "Levels";
-        if (text.includes("customization") || text.includes("skin") || text.includes("trail") || text.includes("avatar")) return "Cosmetics";
-        if (text.includes("power-up behavior") || text.includes("effect strength")) return "Abilities";
-        if (text.includes("chance") || text.includes("reward") || text.includes("asteroid") || text.includes("rarity")) return "Economy";
-        return "General";
+        panel.append(...elements);
+        return panel;
     };
-    const existingFormChildren = Array.from(form.children).filter((child) => child !== apply);
-    existingFormChildren.forEach((child) => {
-        categoryPanels.get(categorizeSetting(child))?.append(child);
-    });
-    const availableCategories = settingsCategories.filter((category) => (categoryPanels.get(category)?.childElementCount ?? 0) > 0);
-    categoryNav.replaceChildren(...availableCategories.map((category) => categoryButtons.get(category)!));
-    const preferredCategory = localStorage.getItem("orbit-owner-panel-tab");
-    const selectedCategory = availableCategories.includes(preferredCategory as typeof settingsCategories[number])
-        ? preferredCategory!
-        : availableCategories[0];
-    categoryPanels.forEach((panel, category) => { panel.hidden = category !== selectedCategory; });
-    categoryButtons.forEach((button, category) => {
-        button.classList.toggle("selected", category === selectedCategory);
-        button.setAttribute("aria-pressed", String(category === selectedCategory));
-    });
-    form.replaceChildren(categoryNav, ...availableCategories.map((category) => categoryPanels.get(category)!), apply);
-    menu.append(worldTabs, testerTabs, form, accountManagement, codeManagement, messageManagement, updateLogManagement, createTextButton("Exit tester tools", () => { testerSettingsDraft.clear(); showMenu(); }));
+    const sections: ControlSection[] = [
+        { id: "rewards", title: "World rewards", group: "Game settings", description: "Tune spawn chances and rewards separately for each world.", panel: settingPanel("rewards", [rewardSettings]) },
+        { id: "abilities", title: "Power-ups", group: "Game settings", description: "Set power-up strength and duration for both worlds.", panel: settingPanel("abilities", [effectSettings]) },
+        { id: "roulette", title: "Roulette", group: "Game settings", description: "Configure wheel buy-ins and prize chances; save this section separately.", panel: settingPanel("roulette", [rouletteSettings]) },
+        { id: "profile", title: "Resources", group: "Your test profile", description: "Adjust the progress and inventory on this device, not other players' accounts.", panel: settingPanel("profile", pilotFields) },
+        { id: "cosmetics", title: "Cosmetics", group: "Your test profile", description: "Manage cosmetic unlocks for this device.", panel: settingPanel("cosmetics", [customizationTitle, unlocks, unlockEverySkin]) },
+        { id: "levels", title: "Levels & prestige", group: "Your test profile", description: "Quick unlock buttons apply immediately. Save checkbox changes when you're ready.", panel: settingPanel("levels", [levelTitle, levelActions, prestigeGateLabel, levelChoices, tryPrestige]) },
+        { id: "workshop", title: "Level workshop", group: "Your test profile", description: isOwner ? "Build routes or manage shared workshop levels." : "Playtest routes. Publishing or deleting shared levels requires owner access.", panel: settingPanel("workshop", [customTitle, sharedLevels, workshopStatus, openMaker]) },
+        { id: "reset", title: "Device reset", group: "Your test profile", description: "Reset this device's game data without deleting shared settings.", panel: settingPanel("reset", [resetTitle, resetPanel]) },
+    ];
+    const settingsIds = new Set(sections.map((section) => section.id));
+    const saveIds = new Set(["rewards", "abilities", "profile", "cosmetics", "levels"]);
+    const initialized = new Set<string>();
+    const loadOnce = (id: string, panel: HTMLElement, load: () => Promise<void>) => {
+        if (initialized.has(id)) return;
+        initialized.add(id);
+        panel.textContent = "Loading...";
+        void load().catch((error: unknown) => {
+            initialized.delete(id);
+            const message = document.createElement("p");
+            message.className = "tester-error";
+            message.textContent = error instanceof Error ? error.message : "Could not load this section.";
+            const retry = createTextButton("Try again", () => loadOnce(id, panel, load));
+            panel.replaceChildren(message, retry);
+        });
+    };
+    if (isOwner) sections.push(
+        { id: "players", title: "Player accounts", group: "Owner management", description: "Review accounts, progress, roles, and access.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement)) },
+        { id: "codes", title: "Reward codes", group: "Owner management", description: "Create and manage redeemable asteroid rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement)) },
+        { id: "messages", title: "Messages", group: "Owner management", description: "Send announcements and review message history.", panel: messageManagement, onOpen: () => loadOnce("messages", messageManagement, () => renderAdminMessageTools(messageManagement)) },
+        { id: "updates", title: "Update log", group: "Owner management", description: "Publish the changes shown to players in Credits.", panel: updateLogManagement, onOpen: () => loadOnce("updates", updateLogManagement, () => renderAdminUpdateLog(updateLogManagement, updateLogEntries, (entries) => { updateLogEntries = entries; })) },
+    );
+    const content = document.createElement("div");
+    content.className = "tester-console-content";
+    const sectionHeader = document.createElement("div");
+    sectionHeader.className = "tester-section-header";
+    const sectionGroup = document.createElement("p");
+    sectionGroup.className = "eyebrow";
+    const sectionTitle = document.createElement("h2");
+    const sectionDescription = document.createElement("p");
+    sectionHeader.append(sectionGroup, sectionTitle, sectionDescription);
+    form.replaceChildren(...sections.filter((section) => settingsIds.has(section.id)).map((section) => section.panel), saveFooter);
+    content.append(sectionHeader, worldTabs, form, accountManagement, codeManagement, messageManagement, updateLogManagement);
+    const navigation = createControlNavigation(sections, (section) => selectSection(section.id));
+    function selectSection(id: string) {
+        const selected = sections.find((section) => section.id === id);
+        if (!selected) return;
+        sections.forEach((section) => { section.panel.hidden = section !== selected; });
+        form.hidden = !settingsIds.has(id);
+        worldTabs.hidden = id !== "rewards";
+        saveFooter.hidden = !saveIds.has(id);
+        sectionGroup.textContent = selected.group.toUpperCase();
+        sectionTitle.textContent = selected.title;
+        sectionDescription.textContent = selected.description;
+        navigation.select(id);
+        localStorage.setItem("orbit-owner-panel-tab", id);
+        selected.onOpen?.();
+    }
+    const consoleLayout = document.createElement("div");
+    consoleLayout.className = "tester-console";
+    consoleLayout.append(navigation.nav, content);
+    const exit = createTextButton("Back to game", () => { testerSettingsDraft.clear(); showMenu(); });
+    exit.classList.add("tester-console-exit");
+    menu.append(pageHeader, consoleLayout, exit);
     document.body.replaceChildren(menu);
+    const previousSection = localStorage.getItem("orbit-owner-panel-tab");
+    const legacySections: Record<string, string> = { General: "profile", Economy: "rewards", Abilities: "abilities", Cosmetics: "cosmetics", Levels: "levels", Prestige: "profile", Workshop: "workshop" };
+    const initialSection = previousSection ? legacySections[previousSection] ?? previousSection : "rewards";
+    selectSection(sections.some((section) => section.id === initialSection) ? initialSection : "rewards");
 }
 
 function moveActorOutOfObstacles<T extends { x: number; y: number }>(actor: T, width: number, height: number): T | null {

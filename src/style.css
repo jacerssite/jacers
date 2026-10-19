@@ -530,9 +530,15 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .credits-updates article { padding: 14px; border: 1px solid #385267; background: #143746cc; }
 .credits-updates time { color: #99b3a6; font: .58rem 'DM Mono', monospace; }
 .credits-updates h3 { margin: 5px 0; color: #f3f5e9; font-size: .95rem; }
-.credits-updates p { margin: 0; color: #c4d1bd; font: .7rem/1.5 'DM Mono', monospace; white-space: pre-wrap; }
+.credits-updates p { margin: 0; color: #c4d1bd; font: .7rem/1.5 'DM Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .update-log-editor-list { display: grid; gap: 10px; }
-.update-log-editor-entry { display: grid; gap: 8px; padding: 12px; border: 1px solid #385267; background: #101b2b; }
+.account-profile-form.update-log-editor { width: 100%; max-width: 760px; }
+.update-log-editor-entry { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid #385267; background: #101b2b; }
+.account-profile-form .update-log-editor-entry textarea { min-height: 200px; line-height: 1.6; tab-size: 4; }
+.update-log-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.account-profile-form .update-log-tab-option { display: inline-flex; align-items: center; gap: 7px; }
+.account-profile-form .update-log-tab-option input { width: 16px; height: 16px; padding: 0; accent-color: #f6c46e; }
+.account-profile-form .update-log-character-count.is-over-limit { color: #ff998c; }
 .planet-transition { position: fixed; z-index: 30; inset: 0; display: grid; place-items: center; color: #f3f5e9; background: #101b2b; pointer-events: none; animation: planet-shift 1.1s ease-in-out forwards; }
 .planet-transition.prestige { background: #35245d; }
 .planet-transition span { font: .75rem 'DM Mono', monospace; letter-spacing: 3px; animation: result-fade-in .4s ease-out; }
@@ -772,4 +778,66 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
   background: #142b3b;
   color: #fff2d5;
   cursor: pointer;
+}
+
+/* Owner and tester control center */
+.tester-screen { display: flex; flex-direction: column; align-items: center; padding: 48px 24px 64px; }
+.tester-screen [hidden] { display: none !important; }
+.tester-console-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; width: min(1120px, 100%); margin: 0 auto 24px; text-align: left; }
+.tester-console-header h1 { font-size: clamp(2.6rem, 6vw, 4.7rem); line-height: 1; }
+.tester-console-header .menu-copy { max-width: none; margin: 12px 0 0; font-size: .9rem; }
+.tester-scope-badge { flex: none; padding: 8px 11px; border: 1px solid #f6c46e77; border-radius: 3px; color: #f6c46e; background: #101b2ba8; font: .62rem 'DM Mono', monospace; letter-spacing: 1px; }
+.tester-console { display: grid; grid-template-columns: minmax(190px, 235px) minmax(0, 1fr); width: min(1120px, 100%); min-height: 540px; border: 1px solid #486375; background: #101b2bdb; box-shadow: 0 18px 55px #08121f66; text-align: left; }
+.tester-sidebar { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 20px 12px; border-right: 1px solid #385267; background: #0d1c2caa; }
+.tester-sidebar-heading { margin: 18px 9px 7px; color: #86a6a8; font: .6rem 'DM Mono', monospace; letter-spacing: 1.4px; text-transform: uppercase; }
+.tester-sidebar-heading:first-child { margin-top: 2px; }
+.tester-section-button { min-height: 38px; padding: 9px 11px; border: 1px solid transparent; border-radius: 3px; color: #c4d1bd; background: transparent; font: .72rem 'DM Mono', monospace; text-align: left; cursor: pointer; }
+.tester-section-button:hover, .tester-section-button:focus-visible { border-color: #557183; color: #f3f5e9; outline: none; }
+.tester-section-button.selected { border-color: #f6c46e77; color: #f6c46e; background: #f6c46e12; box-shadow: inset 3px 0 #f6c46e; }
+.tester-console-content { min-width: 0; padding: clamp(20px, 3vw, 34px); }
+.tester-section-header { padding-bottom: 20px; border-bottom: 1px solid #385267; }
+.tester-section-header .eyebrow { margin-bottom: 8px; color: #f6c46e; font-size: .6rem; }
+.tester-section-header h2 { margin: 0; color: #f3f5e9; font-size: clamp(1.45rem, 3vw, 2rem); letter-spacing: -.5px; }
+.tester-section-header > p:last-child { margin: 8px 0 0; color: #a9c1b9; font-size: .83rem; line-height: 1.55; }
+.tester-console-content .tester-world-tabs { justify-content: flex-start; width: 100%; margin: 20px 0 0; }
+.tester-console-content .tester-world-tabs .text-button { min-width: 0; padding: 10px 16px; }
+.tester-console-content .tester-panel { display: grid; gap: 20px; width: 100%; max-height: none; margin: 20px 0 0; padding: 0; border: 0; background: transparent; }
+.tester-console-content .tester-settings-category { display: grid; gap: 12px; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; text-align: left; }
+.tester-settings-category > label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, 140px); align-items: center; gap: 16px; color: #e4ede2; font: .75rem 'DM Mono', monospace; }
+.tester-settings-category > label input { text-align: right; }
+.tester-settings-category > label:has(input[type="checkbox"]) { grid-template-columns: 1fr 22px; }
+.tester-settings-category > label input[type="checkbox"] { width: 20px; height: 20px; accent-color: #f6c46e; }
+.tester-settings-category > .setting-title { margin: 4px 0; }
+.tester-settings-category > .text-button { justify-self: start; padding: 10px 14px; border: 1px solid #547185; background: #102838; text-align: left; }
+.tester-settings-category > .text-button:hover, .tester-settings-category > .text-button:focus-visible { border-color: #f6c46e; }
+.tester-console-content .tester-reward-settings, .tester-console-content .tester-unlocks, .tester-console-content .tester-levels, .tester-console-content .tester-custom-levels { padding: 16px; border-color: #385c6c; background: #10283899; }
+.tester-console-content .tester-reward-settings > .menu-copy { max-width: none; }
+.tester-console-content .tester-reward-settings input, .tester-console-content .tester-panel > .tester-settings-category > label input:not([type="checkbox"]) { border-radius: 3px; background: #101b2b; }
+.tester-console-content .tester-powerup-effects { margin-top: 0; }
+.roulette-tier-list { display: grid; gap: 14px; }
+.roulette-tier-card { min-width: 0; padding: 14px; border: 1px solid #486779; background: #101b2b99; }
+.roulette-tier-card legend { padding: 0 6px; color: #f6c46e; font: .7rem 'DM Mono', monospace; }
+.roulette-tier-heading { margin: 6px 0 9px; color: #a9c1b9; font: .62rem 'DM Mono', monospace; }
+.roulette-tier-heading:not(:first-of-type) { margin-top: 16px; }
+.roulette-tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 9px; }
+.roulette-tier-grid label { display: grid; gap: 5px; color: #c4d1bd; font: .6rem/1.4 'DM Mono', monospace; }
+.roulette-settings-editor > .text-button { justify-self: start; padding: 9px 12px; border: 1px solid #547185; background: #101b2b; }
+.roulette-settings-editor > [role="status"] { color: #c4d1bd; font: .65rem/1.5 'DM Mono', monospace; }
+.tester-console-content .tester-player-management { width: 100%; margin: 20px 0 0; padding: 18px; background: #10283899; }
+.tester-console-content .tester-player-management .tester-player-management { margin-bottom: 0; }
+.tester-save-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-top: 18px; border-top: 1px solid #385267; }
+.tester-save-footer > small:first-child { flex: 1 1 240px; color: #9fb8ae; font: .65rem/1.5 'DM Mono', monospace; }
+.tester-save-footer > [role="status"] { flex-basis: 100%; font: .68rem/1.5 'DM Mono', monospace; }
+.tester-console-exit { align-self: flex-start; width: min(1120px, 100%); margin: 20px auto 0; padding: 8px 0; text-align: left; }
+
+@media (max-width: 720px) {
+  .tester-screen { padding: 35px 16px 50px; }
+  .tester-console-header { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .tester-console { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .tester-sidebar { flex-direction: row; align-items: center; gap: 5px; overflow-x: auto; padding: 11px; border-right: 0; border-bottom: 1px solid #385267; }
+  .tester-sidebar-heading, .tester-sidebar-heading:first-child { flex: none; margin: 0 4px 0 8px; white-space: nowrap; }
+  .tester-section-button { flex: none; white-space: nowrap; }
+  .tester-console-content { padding: 20px 16px; }
+  .tester-console-content .tester-world-tabs .text-button { flex: 1; }
+  .tester-save-footer .menu-button { width: 100%; }
 }

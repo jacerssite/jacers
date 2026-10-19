@@ -1,15 +1,18 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { readFile } from "node:fs/promises";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { build } from "vite";
-import { DEFAULT_GAME_CONFIG } from "../server/game-data.mjs";
+import { DEFAULT_GAME_CONFIG, validateUpdateLog } from "../server/game-data.mjs";
 
 let clientScript;
+let siteStyles;
 before(async () => {
   const output = await build({ configFile: false, logLevel: "silent", build: { write: false, minify: false } });
   const bundle = Array.isArray(output) ? output[0] : output;
   clientScript = bundle.output.find((item) => item.type === "chunk" && item.isEntry).code;
+  siteStyles = await readFile(new URL("../src/style.css", import.meta.url), "utf8");
 });
 
 async function createPage(overrides = {}, initialStorage = {}) {
@@ -21,6 +24,7 @@ async function createPage(overrides = {}, initialStorage = {}) {
   });
   const { window } = dom;
   window.Headers = Headers;
+  window.TextEncoder = TextEncoder;
   window.structuredClone = structuredClone;
   window.localStorage.setItem("orbit-music-muted", "true");
   Object.entries(initialStorage).forEach(([key, value]) => window.localStorage.setItem(key, value));
@@ -408,6 +412,240 @@ test("owner indicator remains stable after page updates", async () => {
   }
 });
 
+test("control center keeps sections separate and preserves drafts while switching worlds and management tools", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  let savedConfig;
+  let savedRoulette;
+  let rouletteWrites = 0;
+  let codeLoads = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "PUT /api/game-config": ({ init }) => { savedConfig = JSON.parse(init.body).config; return { config: savedConfig }; },
+    "PUT /api/settings/roulette-tiers": ({ init }) => { rouletteWrites++; savedRoulette = JSON.parse(init.body).tiers; return { rouletteTiers: savedRoulette }; },
+    "/api/admin/codes": () => { codeLoads++; return { codes: [] }; },
+    "/api/admin/users": { users: [] },
+    "/api/admin/messages": { messages: [] },
+  });
+  try {
+    const style = document.createElement("style");
+    style.textContent = siteStyles;
+    document.head.append(style);
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    await waitFor(() => document.querySelector('.tester-sidebar [data-section="rewards"]'), "Control center did not load");
+    const rewards = document.querySelector('[data-control-section="rewards"]');
+    const profile = document.querySelector('[data-control-section="profile"]');
+    assert.equal(window.getComputedStyle(rewards).display, "grid");
+    assert.equal(window.getComputedStyle(profile).display, "none");
+    assert.equal(document.querySelector('[data-section="rewards"]').getAttribute("aria-current"), "page");
+    assert.ok(rewards.querySelector('[data-rainbow-star-chance]'));
+    assert.equal(rewards.querySelector(".roulette-settings-editor"), null);
+
+    clickButton(document, "Resources");
+    assert.equal(window.getComputedStyle(rewards).display, "none");
+    assert.equal(window.getComputedStyle(document.querySelector(".tester-world-tabs")).display, "none");
+    const claims = profile.querySelector('input[type="number"]');
+    claims.value = "17";
+    clickButton(document, "Levels & prestige");
+    const sanctuaryInputs = [...document.querySelectorAll('.tester-levels label')]
+      .filter((label) => label.textContent.includes("Stellar Sanctum"))
+      .map((label) => label.querySelector("input"));
+    assert.equal(sanctuaryInputs.length, 2);
+    sanctuaryInputs[0].click();
+    assert.equal(sanctuaryInputs[1].checked, sanctuaryInputs[0].checked);
+    clickButton(document, "Unlock normal levels");
+    assert.equal(claims.value, "17");
+    clickButton(document, "World rewards");
+    const star = rewards.querySelector('[data-rainbow-star-chance]');
+    star.value = "11";
+    star.dispatchEvent(new window.Event("input", { bubbles: true }));
+    clickButton(document, "Prestige world");
+    star.value = "27";
+    star.dispatchEvent(new window.Event("input", { bubbles: true }));
+    clickButton(document, "Normal world");
+    assert.equal(star.value, "11");
+    assert.equal(claims.value, "17");
+    clickButton(document, "Save settings");
+    await waitFor(() => window.localStorage.getItem("orbit-claims") === "17", "Settings did not finish saving");
+    assert.equal(savedConfig.normal.rainbowStarChance, 11);
+    assert.equal(savedConfig.prestige.rainbowStarChance, 27);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "17");
+
+    clickButton(document, "Roulette");
+    const tier = document.querySelector('.roulette-tier-card[data-buy-in="5"]');
+    const asteroidChance = tier.querySelector('[data-roulette-field="chance.claims"]');
+    const colorChance = tier.querySelector('[data-roulette-field="chance.color"]');
+    asteroidChance.value = "44";
+    clickButton(document, "Save roulette tiers");
+    assert.match(document.querySelector('.roulette-settings-editor [role="status"]').textContent, /totaling 100%/);
+    assert.equal(rouletteWrites, 0);
+    colorChance.value = "21";
+    clickButton(document, "Save roulette tiers");
+    await waitFor(() => savedRoulette, "Roulette tiers did not save");
+    assert.equal(savedRoulette[0].chances.claims, 44);
+    assert.equal(savedRoulette[0].chances.color, 21);
+
+    clickButton(document, "Reward codes");
+    await waitFor(() => document.querySelector('.tester-player-management:not([hidden]) input[type="text"]'), "Code tools did not load");
+    const codeInput = document.querySelector('.tester-player-management:not([hidden]) input[type="text"]');
+    codeInput.value = "DRAFT-CODE";
+    clickButton(document, "Messages");
+    await waitFor(() => document.querySelector('[aria-label="Message title"]'), "Message tools did not load");
+    clickButton(document, "Reward codes");
+    assert.equal(document.querySelector('.tester-player-management:not([hidden]) input[type="text"]').value, "DRAFT-CODE");
+    assert.equal(codeLoads, 1);
+    clickButton(document, "Update log");
+    await waitFor(() => document.querySelector(".update-log-editor"), "Update editor did not load");
+    clickButton(document, "Add update");
+    document.querySelector('[data-update-title="0"]').value = "Draft title";
+    clickButton(document, "Add update");
+    assert.equal(document.querySelector('[data-update-title="1"]').value, "Draft title");
+    clickButton(document, "Remove");
+    assert.equal(document.querySelector('[data-update-title="0"]').value, "Draft title");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("update log preserves pasted formatting, supports indentation, and publishes safe plain text", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  let saved;
+  let writes = 0;
+  const { dom, document, window, errors } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "PUT /api/settings/update-log": ({ init }) => {
+      writes++;
+      saved = validateUpdateLog(JSON.parse(init.body).entries);
+      assert.ok(saved, "Server rejected the editor's update log");
+      return { updateLog: saved };
+    },
+  });
+  try {
+    const style = document.createElement("style");
+    style.textContent = siteStyles;
+    document.head.append(style);
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    clickButton(document, "Update log");
+    await waitFor(() => document.querySelector(".update-log-editor"), "Update editor did not load");
+    clickButton(document, "Add update");
+    document.querySelector('[data-update-title="0"]').value = "Big update";
+    let body = document.querySelector('[data-update-body="0"]');
+    body.value = "alpha\nbeta\ngamma";
+    body.setSelectionRange(0, 11);
+    clickButton(document, "Indent");
+    assert.equal(body.value, "    alpha\n    beta\ngamma");
+    clickButton(document, "Outdent");
+    assert.equal(body.value, "alpha\nbeta\ngamma");
+
+    const useTab = document.querySelector(".update-log-tab-option input");
+    assert.equal(useTab.checked, false, "Tab should normally move focus");
+    useTab.click();
+    body.setSelectionRange(5, 5);
+    const tab = new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    body.dispatchEvent(tab);
+    assert.equal(tab.defaultPrevented, true);
+    assert.equal(body.value, "alpha    \nbeta\ngamma");
+    body.value = "\talpha\n  beta\ngamma";
+    body.setSelectionRange(0, "\talpha\n  beta\n".length);
+    const shiftTab = new window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+    body.dispatchEvent(shiftTab);
+    assert.equal(shiftTab.defaultPrevented, true);
+    assert.equal(body.value, "alpha\nbeta\ngamma");
+    body.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert.equal(useTab.checked, false);
+    const navigationTab = new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    body.dispatchEvent(navigationTab);
+    assert.equal(navigationTab.defaultPrevented, false);
+
+    body.value = "x".repeat(20_001);
+    body.dispatchEvent(new window.Event("input", { bubbles: true }));
+    document.querySelector(".update-log-editor").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    assert.equal(body.value.length, 20_001, "Long pastes should not be silently truncated");
+    assert.equal(writes, 0);
+    assert.match(document.querySelector('.update-log-editor [role="status"]').textContent, /20,000/);
+
+    body.value = "🚀".repeat(10_000);
+    for (let index = 0; index < 5; index++) {
+      clickButton(document, "Add update");
+      document.querySelector('[data-update-title="0"]').value = `Extra update ${index}`;
+      document.querySelector('[data-update-body="0"]').value = "🚀".repeat(10_000);
+    }
+    document.querySelector(".update-log-editor").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    assert.equal(writes, 0);
+    assert.match(document.querySelector('.update-log-editor [role="status"]').textContent, /200 KB/);
+    for (let index = 0; index < 5; index++) clickButton(document, "Remove");
+    body = document.querySelector('[data-update-body="0"]');
+
+    const pasted = `    First paragraph\n\n\t- Second paragraph\n      ${"x".repeat(900)}\n\n<img src=x onerror=alert(1)>  \n`;
+    body.value = pasted;
+    body.dispatchEvent(new window.Event("input", { bubbles: true }));
+    document.querySelector(".update-log-editor").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector('.update-log-editor [role="status"]')?.textContent.includes("published"), "Update did not publish");
+    assert.equal(saved[0].body, pasted);
+    body = document.querySelector('[data-update-body="0"]');
+    assert.equal(body.value, pasted);
+    clickButton(document, "Back to game");
+    clickButton(document, "Credits");
+    const rendered = document.querySelector(".credits-updates article p");
+    assert.equal(rendered.textContent, pasted);
+    assert.equal(rendered.querySelector("img"), null);
+    assert.equal(window.getComputedStyle(rendered).whiteSpace, "pre-wrap");
+    assert.equal(window.getComputedStyle(rendered).overflowWrap, "anywhere");
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("tester control center omits owner-only management sections", async () => {
+  const user = { username: "Tester_1", role: "tester", appearOffline: false };
+  const { dom, document } = await createPage({ "/api/auth/session": { user }, "/api/account/progress": { progress: {} } });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Tester_1"]'), "Tester session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    await waitFor(() => document.querySelector(".tester-sidebar"), "Control center did not load");
+    assert.equal(document.querySelector('[data-section="players"]'), null);
+    assert.equal(document.querySelector('[data-section="codes"]'), null);
+    assert.match(document.querySelector(".tester-scope-badge").textContent, /LOCAL TEST MODE/);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("saving from another section opens the world that has invalid reward odds", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  let writes = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "PUT /api/game-config": () => { writes++; return { config: DEFAULT_GAME_CONFIG }; },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    await waitFor(() => document.querySelector('[data-section="rewards"]'), "Control center did not load");
+    clickButton(document, "Prestige world");
+    const odds = document.querySelector('[data-roll-odds="Common"]');
+    odds.value = String(Number(odds.value) + 1);
+    odds.dispatchEvent(new window.Event("input", { bubbles: true }));
+    clickButton(document, "Resources");
+    clickButton(document, "Save settings");
+    assert.equal(document.querySelector('[data-section="rewards"]').getAttribute("aria-current"), "page");
+    assert.equal(document.querySelector(".tester-world-tabs .selected").textContent, "Prestige world");
+    assert.match(document.querySelector(".tester-save-status").textContent, /prestige world rarity chances total/i);
+    assert.equal(writes, 0);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("workshop switches between normal and flipped areas without silently dropping unsupported tiles", async () => {
   const user = { username: "Owner_1", role: "owner", appearOffline: false };
   const { dom, document } = await createPage({ "/api/auth/session": { user }, "/api/account/progress": { progress: {} } });
@@ -415,7 +653,8 @@ test("workshop switches between normal and flipped areas without silently droppi
     await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
     clickButton(document, "Flight settings");
     clickButton(document, "Open");
-    await waitFor(() => [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "Open level maker"), "Owner tools did not load");
+    await waitFor(() => document.querySelector('[data-section="workshop"]'), "Owner tools did not load");
+    clickButton(document, "Level workshop");
     clickButton(document, "Open level maker");
     const prestige = [...document.querySelectorAll("label")].find((label) => label.textContent.includes("Prestige route")).querySelector("input");
     prestige.click();

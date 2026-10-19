@@ -1245,7 +1245,7 @@ app.put("/api/settings/roulette-tiers", requireSameOrigin, requireOwner, async (
 app.put("/api/settings/update-log", requireSameOrigin, requireOwner, async (req, res, next) => {
   try {
     const entries = validateUpdateLog(req.body?.entries);
-    if (!entries) return res.status(400).json({ error: "Update log entries need a valid date, title, and body (up to 100 entries)." });
+    if (!entries) return res.status(400).json({ error: "Update log entries need a valid date, title, and body (up to 100 entries, 20,000 characters per body, and 200 KB total)." });
     const db = await getDatabase();
     await saveSetting(db, "update_log", entries, req.user.id);
     res.json({ updateLog: entries });
