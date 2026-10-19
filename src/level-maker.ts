@@ -98,7 +98,7 @@ export function createLevelMaker(context: LevelMakerContext) {
         const history: { tiles: string[]; flippedTiles: string[] }[] = [];
         const tileLabels: Record<string, string> = { empty: "Erase", wall: "Platform", block: "Block", miniBoss: "Dark Knight", titan: "Titan", special: "Special asteroid", exitKey: "Exit key" };
         tileLabels.powerupShield = "Shield power-up"; tileLabels.powerupBoost = "Boost power-up"; tileLabels.powerupRapid = "Rapid power-up"; tileLabels.powerupCannon = "Cannon power-up"; tileLabels.powerupStar = "Rainbow Star";
-        tiles.forEach((tile) => { const button = createTextButton(tileLabels[tile] ?? tile, () => { selectedTile = tile; deleteMode = false; buildMode.classList.add("selected"); eraseMode.classList.remove("selected"); palette.querySelectorAll("button").forEach((item) => item.classList.toggle("selected", item.dataset.tile === tile)); }); button.dataset.tile = tile; button.classList.toggle("selected", tile === selectedTile); palette.append(button); });
+        tiles.forEach((tile) => { const button = createTextButton(tileLabels[tile] ?? tile, () => { selectedTile = tile; deleteMode = false; modeLabel.textContent = "BUILD MODE"; buildMode.classList.add("selected"); eraseMode.classList.remove("selected"); palette.querySelectorAll("button").forEach((item) => item.classList.toggle("selected", item.dataset.tile === tile)); }); button.dataset.tile = tile; button.classList.toggle("selected", tile === selectedTile); palette.append(button); });
         const createCells = (target: HTMLElement, initial: string[] = [], prefix: string) => Array.from({ length: 144 }, (_, index) => {
             const cell = document.createElement("button");
             cell.type = "button";
@@ -119,6 +119,7 @@ export function createLevelMaker(context: LevelMakerContext) {
             return cell;
         });
         const grid = document.createElement("div"); grid.className = "maker-grid"; grid.setAttribute("aria-label", "Normal area grid");
+        const normalTab = document.createElement("button"); normalTab.className = "maker-tool-button"; normalTab.type = "button"; normalTab.textContent = "Normal area"; normalTab.hidden = true;
         const flippedTab = document.createElement("button"); flippedTab.className = "maker-tool-button"; flippedTab.type = "button"; flippedTab.textContent = "Flipped planet area"; flippedTab.hidden = true;
         const flippedGrid = document.createElement("div"); flippedGrid.className = "maker-grid"; flippedGrid.hidden = true; flippedGrid.setAttribute("aria-label", "Flipped planet area grid");
         let cells: HTMLButtonElement[] = [];
@@ -139,14 +140,26 @@ export function createLevelMaker(context: LevelMakerContext) {
             flippedTiles: flippedCells.map((cell) => cell.dataset.kind ?? "empty"),
             customId: draft?.customId,
         });
-        const showMainGrid = () => { grid.hidden = false; flippedGrid.hidden = true; buildMode.textContent = "Build"; };
-        flippedTab.addEventListener("click", () => { grid.hidden = true; flippedGrid.hidden = false; buildMode.textContent = "Flipped build"; });
+        const updatePaletteForArea = () => {
+            const inFlippedArea = !flippedGrid.hidden;
+            const flippedTiles = new Set(["empty", "wall", "spike", "gravity", "enemy", "exitKey", ...Object.keys(powerupTileKinds)]);
+            palette.querySelectorAll<HTMLButtonElement>("button[data-tile]").forEach((button) => {
+                const tile = button.dataset.tile ?? "";
+                button.disabled = inFlippedArea ? !flippedTiles.has(tile) : tile === "exitKey";
+                if (button.disabled && selectedTile === tile) selectedTile = "wall";
+            });
+            palette.querySelectorAll<HTMLButtonElement>("button[data-tile]").forEach((button) => button.classList.toggle("selected", button.dataset.tile === selectedTile));
+        };
+        const showMainGrid = () => { grid.hidden = false; flippedGrid.hidden = true; normalTab.hidden = true; buildMode.textContent = "Build"; updatePaletteForArea(); };
+        normalTab.addEventListener("click", showMainGrid);
+        flippedTab.addEventListener("click", () => { grid.hidden = true; flippedGrid.hidden = false; normalTab.hidden = false; buildMode.textContent = "Flipped build"; updatePaletteForArea(); });
         const updateFlippedTab = () => {
             const canBuildFlippedArea = prestigeRouteInput.checked && cells.some((cell) => cell.dataset.kind === "gravity");
             flippedTab.hidden = !canBuildFlippedArea;
             areaState.textContent = prestigeRouteInput.checked ? (canBuildFlippedArea ? "PRESTIGE / main route + flipped route" : "PRESTIGE / place a gravity field to enable the flipped route") : "NORMAL / main route only";
             if (flippedTab.hidden) showMainGrid();
         };
+        prestigeRouteInput.addEventListener("change", updateFlippedTab);
         const activeCells = () => flippedGrid.hidden ? cells : flippedCells;
         undo.addEventListener("click", () => {
             const snapshot = history.pop();
@@ -237,7 +250,7 @@ export function createLevelMaker(context: LevelMakerContext) {
 
         });
         updateFlippedTab();
-        toolbar.append(areaState, flippedTab);
+        toolbar.append(areaState, normalTab, flippedTab);
         menu.append(details, toolbar, grid, flippedGrid, palette, playtest, save, saveStatus, createTextButton("Back to tester", () => showTesterPanel()));
         document.body.replaceChildren(menu);
     }

@@ -749,3 +749,27 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @media (prefers-reduced-motion: reduce) {
 	*, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.account-sync-warning {
+  position: fixed;
+  z-index: 10000;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border: 1px solid #ffbf69;
+  background: #142b3b;
+  color: #fff2d5;
+  box-shadow: 0 0.5rem 2rem #0009;
+}
+
+.account-sync-warning p {
+  margin: 0 0 0.75rem;
+}
+
+.account-sync-warning button {
+  border: 1px solid #ffbf69;
+  padding: 0.4rem 0.8rem;
+  background: #142b3b;
+  color: #fff2d5;
+  cursor: pointer;
+}

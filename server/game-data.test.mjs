@@ -165,6 +165,21 @@ test("workshop levels validate tile bounds and discard unrecognized fields", () 
   assert.equal(validateWorkshopLevel({ ...draft, name: "<script>" }), null);
 });
 
+test("workshop flipped routes validate powerups and discard unrecognized route fields", () => {
+  const draft = {
+    name: "Flipped route", briefing: "Fly carefully.", length: 12,
+    asteroids: [], walls: [], enemies: [], spikes: [], gravity: [4],
+    flippedRoute: { walls: [], enemies: [], spikes: [], gravity: [], powerups: [{ index: 3, kind: "boost" }], key: 8, unexpected: "ignored" },
+  };
+  const valid = validateWorkshopLevel(draft);
+  assert.deepEqual(valid.flippedRoute.powerups, [{ index: 3, kind: "boost" }]);
+  assert.equal(valid.flippedRoute.unexpected, undefined);
+  assert.equal(validateWorkshopLevel({ ...draft, flippedRoute: { ...draft.flippedRoute, powerups: "bad" } }), null);
+  assert.equal(validateWorkshopLevel({ ...draft, flippedRoute: { ...draft.flippedRoute, powerups: [{ index: 11, kind: "boost" }] } }), null);
+  assert.equal(validateWorkshopLevel({ ...draft, flippedRoute: { ...draft.flippedRoute, powerups: [{ index: 3, kind: "bogus" }] } }), null);
+  assert.equal(validateWorkshopLevel({ ...draft, flippedRoute: { ...draft.flippedRoute, powerups: [{ index: 3, kind: "boost" }, { index: 3, kind: "shield" }] } }), null);
+});
+
 test("player progress accepts bounded game data and excludes shared caches", () => {
   const progress = { "orbit-claims": "42", "orbit-level-complete-3": "1" };
   assert.deepEqual(validatePlayerProgress(progress), progress);

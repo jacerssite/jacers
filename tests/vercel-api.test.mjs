@@ -14,6 +14,8 @@ test("Vercel native MongoDB configuration initializes a fresh database and serve
 
   let connections = 0;
   let indexDrops = 0;
+  let concurrentSettingWrites = 0;
+  let maxConcurrentSettingWrites = 0;
   let selectedDatabase;
   const fakeCollection = {
     async dropIndex(name) {
@@ -23,7 +25,15 @@ test("Vercel native MongoDB configuration initializes a fresh database and serve
     },
     async createIndex() {},
     async updateMany() {},
-    async updateOne() { return { matchedCount: 1 }; },
+    async updateOne(filter) {
+      if (["golden_time_limit_ms", "game_config", "roulette_tiers", "update_log", "app_version"].includes(filter._id)) {
+        concurrentSettingWrites++;
+        maxConcurrentSettingWrites = Math.max(maxConcurrentSettingWrites, concurrentSettingWrites);
+        await new Promise((resolve) => setImmediate(resolve));
+        concurrentSettingWrites--;
+      }
+      return { matchedCount: 1 };
+    },
     async findOne() { return null; },
     find() { return { sort() { return { async toArray() { return []; } }; } }; },
   };
@@ -59,6 +69,7 @@ test("Vercel native MongoDB configuration initializes a fresh database and serve
     assert.equal(selectedDatabase, "vercel-native");
     assert.equal(connections, 1);
     assert.equal(indexDrops, 1);
+    assert.equal(maxConcurrentSettingWrites, 5);
   } finally {
     if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     MongoClient.prototype.connect = originalConnect;

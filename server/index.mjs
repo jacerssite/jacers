@@ -10,6 +10,7 @@ import { attachDatabasePool } from "@vercel/functions";
 import argon2 from "argon2";
 import { getMongoDatabaseConfigurationError, getMongoDatabaseConnectionString } from "./database-config.mjs";
 import { dropLegacyRecoveryIndex } from "./database-setup.mjs";
+import { hasCurrencyConflict, initializePlayerProgress } from "./player-progress.mjs";
 import {
   ALLOWED_ABILITIES,
   isValidPassword,
@@ -197,6 +198,7 @@ async function getDatabase() {
 async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const existing = await collection.findOne({ _id: userId }, session ? { session } : undefined);
+    if (!replace && hasCurrencyConflict(existing?.data, progress, baseProgress)) return { progress: null, conflict: true };
     const mergedProgress = replace ? { ...progress } : { ...(existing?.data ?? {}) };
     if (!replace) {
       const baseline = baseProgress ?? {};
@@ -304,6 +306,11 @@ async function requireUser(req, res, next) {
   try {
     req.user = await getAuthenticatedUser(req);
     if (!req.user) return res.status(401).json({ error: "Log in to continue." });
+    if (req.user.mustChangePassword
+      && !(req.method === "POST" && req.path === "/api/account/password")
+      && !(req.method === "GET" && req.path === "/api/account/profile")) {
+      return res.status(403).json({ error: "Change your temporary password before continuing." });
+    }
     next();
   } catch (error) {
     next(error);
@@ -314,6 +321,7 @@ async function requireOwner(req, res, next) {
   try {
     req.user = await getAuthenticatedUser(req);
     if (!req.user) return res.status(401).json({ error: "Log in to continue." });
+    if (req.user.mustChangePassword) return res.status(403).json({ error: "Change your temporary password before continuing." });
     if (req.user.role !== "owner") return res.status(403).json({ error: "Owner access is required." });
     next();
   } catch (error) {
@@ -325,6 +333,7 @@ async function requireStaff(req, res, next) {
   try {
     req.user = await getAuthenticatedUser(req);
     if (!req.user) return res.status(401).json({ error: "Log in to continue." });
+    if (req.user.mustChangePassword) return res.status(403).json({ error: "Change your temporary password before continuing." });
     if (!["owner", "tester"].includes(req.user.role)) return res.status(403).json({ error: "Staff access is required." });
     next();
   } catch (error) {
@@ -623,8 +632,10 @@ app.get("/api/account/progress", requireUser, async (req, res, next) => {
   try {
     const db = await getDatabase();
     const record = await db.collection("player_progress").findOne({ _id: req.user.id });
+    const progress = record ? validatePlayerProgress(record.data) : null;
+    if (record && !progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
     res.json({
-      progress: record ? validatePlayerProgress(record.data) : null,
+      progress,
       updatedAt: record?.updatedAt?.toISOString() ?? null,
     });
   } catch (error) {
@@ -642,9 +653,16 @@ app.put("/api/account/progress", requireSameOrigin, requireUser, async (req, res
       return res.status(400).json({ error: "Player progress is invalid or exceeds the allowed size." });
     }
     const db = await getDatabase();
-    const result = await writePlayerProgress(db.collection("player_progress"), req.user.id, progress, baseProgress);
+    const collection = db.collection("player_progress");
+    if (req.body?.initializeOnly === true) {
+      if (req.body.baseProgress !== null) return res.status(400).json({ error: "Initial progress must have a null base." });
+      const initialized = await initializePlayerProgress(collection, req.user.id, progress);
+      if (!initialized) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
+      return res.json({ progress: initialized });
+    }
+    const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress);
     if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
-      error: result.conflict ? "Progress changed on another device. Retry the sync." : "Player progress exceeds the allowed size.",
+      error: result.conflict ? "Progress changed on another device. Cloud saving is paused; signing in again will replace unsaved local changes with cloud progress." : "Player progress exceeds the allowed size.",
     });
     res.json({ progress: result.progress });
   } catch (error) {
@@ -841,6 +859,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         usernameNormalized: 1,
         role: 1,
         banned: 1,
+        appearOffline: 1,
         createdAt: 1,
         usernameChangedAt: 1,
         lastLoginAt: 1,
@@ -875,7 +894,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         role: user.role,
         banned: Boolean(user.banned),
         status: user.banned ? "banned" : "active",
-        isOnline: !user.banned && onlineUserIds.has(user._id.toHexString()),
+        isOnline: !user.banned && !user.appearOffline && onlineUserIds.has(user._id.toHexString()),
         createdAt: user.createdAt,
         usernameChangedAt: user.usernameChangedAt ?? null,
         lastLoginAt: user.lastLoginAt ?? null,
@@ -1348,10 +1367,10 @@ app.get("/api/leaderboard", async (req, res, next) => {
     const db = await getDatabase();
     const entries = await db.collection("leaderboard_entries").aggregate([
       { $match: level ? { levelName: level } : {} },
+      { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
       { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "profile" } },
       { $unwind: "$profile" },
       { $match: { "profile.role": "player", "profile.banned": { $ne: true } } },
-      { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
       { $limit: 100 },
       { $project: { _id: 1, userId: 1, username: "$profile.username", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
     ]).toArray();
@@ -1380,12 +1399,12 @@ app.get("/api/staff/leaderboard", requireStaff, async (req, res, next) => {
     const db = await getDatabase();
     const entries = await db.collection("leaderboard_entries").aggregate([
       { $match: level ? { levelName: level } : {} },
+      { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
       { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "profile" } },
       { $unwind: "$profile" },
       { $match: { "profile.role": { $in: ["player", "tester"] }, "profile.banned": { $ne: true } } },
-      { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
       { $limit: 100 },
-      { $project: { _id: 1, username: "$profile.username", role: "$profile.role", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
+      { $project: { _id: 1, userId: 1, username: "$profile.username", role: "$profile.role", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
     ]).toArray();
     res.json({
       entries: entries.map((entry) => ({
@@ -1413,26 +1432,28 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
     const db = await getDatabase();
     const entries = db.collection("leaderboard_entries");
     let improved = false;
+    const betterRunFilter = {
+      userId: req.user.id,
+      levelName,
+      $or: [{ timeMs: { $gt: run.timeMs } }, { timeMs: { $exists: false } }],
+    };
+    const update = {
+      $set: {
+        timeMs: run.timeMs,
+        abilities: run.abilities,
+        achievedAt: new Date(),
+      },
+      $setOnInsert: { userId: req.user.id, levelName },
+    };
     try {
-      const result = await entries.updateOne(
-        {
-          userId: req.user.id,
-          levelName,
-          $or: [{ timeMs: { $gt: run.timeMs } }, { timeMs: { $exists: false } }],
-        },
-        {
-          $set: {
-            timeMs: run.timeMs,
-            abilities: run.abilities,
-            achievedAt: new Date(),
-          },
-          $setOnInsert: { userId: req.user.id, levelName },
-        },
-        { upsert: true },
-      );
+      const result = await entries.updateOne(betterRunFilter, update, { upsert: true });
       improved = result.upsertedCount === 1 || result.matchedCount === 1;
     } catch (error) {
       if (error?.code !== 11000) throw error;
+      // Another request may have inserted a slower first run. Retry without
+      // upserting so the faster time still wins the race.
+      const result = await entries.updateOne(betterRunFilter, update);
+      improved = result.matchedCount === 1;
     }
     const entry = await entries.findOne({ userId: req.user.id, levelName });
     if (!entry) throw new Error("Leaderboard entry was not available after saving the run.");
@@ -1908,6 +1929,7 @@ async function initializeDatabaseOnce() {
     sessions.createIndex({ lastSeenAt: 1 }),
     entries.createIndex({ userId: 1, levelName: 1 }, { unique: true }),
     entries.createIndex({ levelName: 1, timeMs: 1, achievedAt: 1, _id: 1 }),
+    entries.createIndex({ timeMs: 1, achievedAt: 1, _id: 1 }),
     recoveryAttempts.createIndex({ lockedUntil: 1 }),
     db.collection("profile_backups").createIndex({ userId: 1, createdAt: -1 }),
     db.collection("redemption_codes").createIndex({ codeHash: 1 }, { unique: true }),
@@ -1919,31 +1941,33 @@ async function initializeDatabaseOnce() {
     db.collection("setting_history").createIndex({ settingKey: 1, changedAt: -1 }),
   ]);
   await users.updateMany({ role: { $exists: false } }, { $set: { role: "player" } });
-  await settings.updateOne(
-    { _id: "golden_time_limit_ms" },
-    { $setOnInsert: { value: 60000, createdAt: new Date() } },
-    { upsert: true },
-  );
-  await settings.updateOne(
-    { _id: "game_config" },
-    { $setOnInsert: { value: DEFAULT_GAME_CONFIG, createdAt: new Date() } },
-    { upsert: true },
-  );
-  await settings.updateOne(
-    { _id: "roulette_tiers" },
-    { $setOnInsert: { value: defaultRouletteTiers, createdAt: new Date() } },
-    { upsert: true },
-  );
-  await settings.updateOne(
-    { _id: "update_log" },
-    { $setOnInsert: { value: [], createdAt: new Date() } },
-    { upsert: true },
-  );
-  await settings.updateOne(
-    { _id: "app_version" },
-    { $setOnInsert: { value: "1", createdAt: new Date() } },
-    { upsert: true },
-  );
+  await Promise.all([
+    settings.updateOne(
+      { _id: "golden_time_limit_ms" },
+      { $setOnInsert: { value: 60000, createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
+      { _id: "game_config" },
+      { $setOnInsert: { value: DEFAULT_GAME_CONFIG, createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
+      { _id: "roulette_tiers" },
+      { $setOnInsert: { value: defaultRouletteTiers, createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
+      { _id: "update_log" },
+      { $setOnInsert: { value: [], createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
+      { _id: "app_version" },
+      { $setOnInsert: { value: "1", createdAt: new Date() } },
+      { upsert: true },
+    ),
+  ]);
 
   dummyPasswordHash = await argon2.hash("constant-time account lookup", passwordHashOptions);
   dummyRecoveryHash = await argon2.hash("constant-time recovery lookup", passwordHashOptions);

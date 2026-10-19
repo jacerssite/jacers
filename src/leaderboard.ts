@@ -75,6 +75,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                 if (!response.users.length) onlinePlayers.textContent = "No one is online right now.";
             } catch (error) {
                 if (!onlinePresence.isConnected) return;
+                onlinePlayers.replaceChildren();
                 presenceStatus.textContent = `Online player status unavailable: ${error instanceof Error ? error.message : "unknown service error"}`;
                 console.error("Could not load online player status:", error);
             }
@@ -88,13 +89,16 @@ export function createLeaderboard(context: LeaderboardContext) {
             void refreshOnlinePlayers();
         }, 30_000);
 
+        let latestLoad = 0;
         const loadEntries = async () => {
+            const requestNumber = ++latestLoad;
             try {
                 const [session, settings, response] = await Promise.all([
                     apiRequest<{ user: OnlineUser | null }>("/auth/session"),
                     apiRequest<OnlineSettings>("/settings"),
                     apiRequest<{ entries: OnlineLeaderboardEntry[] }>(`/leaderboard${levelPicker.value ? `?level=${encodeURIComponent(levelPicker.value)}` : ""}`),
                 ]);
+                if (!menu.isConnected || requestNumber !== latestLoad) return;
                 setCurrentOnlineUser(session.user);
                 void sendPresenceHeartbeat();
                 setGoldenTimeLimit(settings.goldenTimeLimitMs);
@@ -102,11 +106,12 @@ export function createLeaderboard(context: LeaderboardContext) {
                     ? `Signed in as ${session.user.username}${getRoleBadge(session.user.role) ? ` / ${getRoleBadge(session.user.role)}` : ""}`
                     : "Sign in or create a username account to submit a time.";
                 accountButton.textContent = session.user ? "Account / Sign out" : "Sign in / Create account";
-                accountButton.onclick = () => showAccount();
                 renderLeaderboardEntries(list, response.entries, session.user);
                 serviceStatus.textContent = response.entries.length ? `${response.entries.length} online best runs` : "No online runs have been submitted yet.";
                 if (session.user?.role === "owner") renderOwnerControls(adminPanel, settings, () => showLeaderboard());
+                else adminPanel.replaceChildren();
             } catch (error) {
+                if (!menu.isConnected || requestNumber !== latestLoad) return;
                 serviceStatus.textContent = `Online leaderboard unavailable: ${error instanceof Error ? error.message : "unknown service error"}`;
                 list.textContent = "Leaderboard data could not be loaded.";
             }
@@ -215,7 +220,10 @@ export function createLeaderboard(context: LeaderboardContext) {
                     presence.textContent = isOnline ? "ONLINE NOW" : "OFFLINE";
                 }).catch((error: unknown) => {
                     console.error("Could not refresh player profile presence:", error);
-                    if (menu.isConnected) presence.textContent = "Online status could not be refreshed.";
+                    if (menu.isConnected) {
+                        presence.classList.remove("is-online");
+                        presence.textContent = "Online status could not be refreshed.";
+                    }
                 });
             }, 30_000);
         } catch (error) {

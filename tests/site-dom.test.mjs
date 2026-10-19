@@ -1,0 +1,441 @@
+import { before, test } from "node:test";
+import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
+import { JSDOM, VirtualConsole } from "jsdom";
+import { build } from "vite";
+import { DEFAULT_GAME_CONFIG } from "../server/game-data.mjs";
+
+let clientScript;
+before(async () => {
+  const output = await build({ configFile: false, logLevel: "silent", build: { write: false, minify: false } });
+  const bundle = Array.isArray(output) ? output[0] : output;
+  clientScript = bundle.output.find((item) => item.type === "chunk" && item.isEntry).code;
+});
+
+async function createPage(overrides = {}, initialStorage = {}) {
+  const errors = [];
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on("jsdomError", (error) => errors.push(error.message));
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://test.example/", runScripts: "outside-only", pretendToBeVisual: true, virtualConsole,
+  });
+  const { window } = dom;
+  window.Headers = Headers;
+  window.structuredClone = structuredClone;
+  window.localStorage.setItem("orbit-music-muted", "true");
+  Object.entries(initialStorage).forEach(([key, value]) => window.localStorage.setItem(key, value));
+  window.fetch = async (url, init = {}) => {
+    const path = new URL(url, window.location.href).pathname;
+    const method = init.method ?? "GET";
+    const override = overrides[`${method} ${path}`] ?? overrides[path];
+    const defaults = {
+      "/api/auth/session": { user: null },
+      "/api/settings": { goldenTimeLimitMs: 60000, rouletteTiers: [], updateLog: [] },
+      "/api/game-config": { config: DEFAULT_GAME_CONFIG },
+      "/api/levels": { levels: [] },
+      "/api/presence": { users: [], truncated: false },
+      "/api/leaderboard": { entries: [] },
+      "/api/messages": { messages: [] },
+      "/api/account/profile": { role: "player", nextUsernameChangeAt: null, hasRecoveryCode: true, recoveryCodeCreatedAt: null },
+      "/api/presence/heartbeat": null,
+    };
+    const result = override === undefined ? defaults[path] : typeof override === "function" ? await override({ url, init }) : override;
+    if (result === null) return new Response(null, { status: 204 });
+    if (result === undefined) return Response.json({ error: `Unexpected test request: ${path}` }, { status: 404 });
+    return Response.json(result.json ?? result, { status: result.status ?? 200 });
+  };
+  window.eval(clientScript);
+  return { dom, window, document: window.document, errors };
+}
+
+async function waitFor(condition, message, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await delay(10);
+  }
+  assert.fail(message);
+}
+
+function clickButton(document, name) {
+  const button = [...document.querySelectorAll("button")].find((item) => item.textContent.trim() === name);
+  assert.ok(button, `Could not find button: ${name}`);
+  assert.equal(button.disabled, false, `Button is disabled: ${name}`);
+  button.click();
+}
+
+test("main menus, customization, settings, and a mission respond to player actions", async () => {
+  const { dom, document, window, errors } = await createPage();
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    await delay(30);
+    clickButton(document, "Customization");
+    const color = document.querySelectorAll(".ship-color-choice:not([disabled])")[1];
+    assert.ok(color);
+    color.click();
+    assert.match(document.querySelector(".ship-preview small").textContent, /Color #[0-9a-f]{6}/i);
+    assert.ok(window.localStorage.getItem("orbit-ship-color"));
+    clickButton(document, "Back");
+    clickButton(document, "Flight settings");
+    const reduced = [...document.querySelectorAll("label")].find((label) => label.textContent.includes("Reduced effects")).querySelector("input");
+    reduced.click();
+    assert.equal(window.localStorage.getItem("orbit-reduced-effects"), "true");
+    clickButton(document, "Back");
+    clickButton(document, "Power-up shop");
+    clickButton(document, "Main menu");
+    clickButton(document, "Credits");
+    clickButton(document, "Back");
+    clickButton(document, "Launch mission");
+    document.querySelector(".level-button:not([disabled])").click();
+    assert.ok(document.querySelector(".game-frame"));
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { code: "ArrowRight", key: "ArrowRight" }));
+    clickButton(document, "Exit");
+    assert.ok(document.querySelector(".level-menu"));
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("malformed local saves do not stop the game from opening", async () => {
+  const { dom, document, errors } = await createPage({}, {
+    "orbit-custom-levels": "{}",
+    "orbit-global-level-cache": "null",
+    "orbit-claims": "not a number",
+    "orbit-skin": "not a number",
+  });
+  try {
+    assert.ok(document.querySelector(".home-screen"));
+    assert.match(document.querySelector(".home-stats").textContent, /0 normal/);
+    clickButton(document, "Customization");
+    assert.ok(document.querySelector(".ship-preview"));
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("slow startup does not replace an account form a player is filling in", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { dom, document } = await createPage({
+    "/api/settings": async () => { await gate; return { goldenTimeLimitMs: 60000, rouletteTiers: [], updateLog: [] }; },
+  });
+  try {
+    clickButton(document, "Account");
+    document.querySelector('input[name="username"]').value = "Pilot_7";
+    release();
+    await delay(100);
+    assert.equal(document.querySelector('input[name="username"]')?.value, "Pilot_7");
+  } finally {
+    release();
+    dom.window.close();
+  }
+});
+
+test("a partial settings outage does not hide a working account session", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "/api/settings": { status: 503, json: { error: "Settings unavailable" } },
+    "/api/account/progress": { progress: { "orbit-claims": "24" } },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Signed-in account was not restored");
+    assert.equal(window.localStorage.getItem("orbit-claims"), "24");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("first sync uses server progress if another device initialized the account first", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let initialization;
+  const { dom, document, window } = await createPage({
+    "POST /api/auth/login": { user },
+    "GET /api/account/progress": { progress: null },
+    "PUT /api/account/progress": ({ init }) => {
+      initialization = JSON.parse(init.body);
+      return { progress: { "orbit-claims": "90", "orbit-skin": "2" } };
+    },
+  });
+  try {
+    await delay(30);
+    window.localStorage.setItem("orbit-claims", "3");
+    clickButton(document, "Account");
+    document.querySelector('input[name="username"]').value = "Pilot_7";
+    document.querySelector('input[name="password"]').value = "a-valid-password";
+    document.querySelector(".account-form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector(".account-dashboard"), "Account did not load");
+    assert.equal(initialization.initializeOnly, true);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "90");
+    assert.equal(window.localStorage.getItem("orbit-skin"), "2");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("leaderboard profiles show the player's presence and character", async () => {
+  const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Quiet Orbit", timeMs: 12000, abilities: [] };
+  const player = { username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1, title: "Cadet" };
+  const { dom, document, errors } = await createPage({ "/api/leaderboard": { entries: [entry] }, "/api/players/player1": { player } });
+  try {
+    await delay(30);
+    clickButton(document, "Launch mission");
+    clickButton(document, "Online leaderboard");
+    await waitFor(() => document.querySelector(".leaderboard-player-button"), "Leaderboard did not load");
+    clickButton(document, "Pilot_7");
+    await waitFor(() => document.querySelector(".profile-character-card"), "Player profile did not load");
+    assert.equal(document.querySelector(".profile-presence").textContent, "ONLINE NOW");
+    assert.match(document.querySelector(".profile-character-card small").textContent, /#abcdef/i);
+    clickButton(document, "Back to leaderboard");
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("leaderboard keeps the latest level selection when responses arrive out of order", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const entry = (username, level) => ({ id: username, userId: username, username, level, timeMs: 12000, abilities: [] });
+  const { dom, document, window } = await createPage({
+    "/api/leaderboard": async ({ url }) => {
+      const level = new URL(url, "https://test.example").searchParams.get("level");
+      if (level === "Quiet Orbit") { await gate; return { entries: [entry("SlowReply", level)] }; }
+      if (level === "Redline Pass") return { entries: [entry("LatestReply", level)] };
+      return { entries: [] };
+    },
+  });
+  try {
+    await delay(30);
+    clickButton(document, "Launch mission");
+    clickButton(document, "Online leaderboard");
+    const picker = document.querySelector(".leaderboard-level-picker");
+    picker.value = "Quiet Orbit";
+    picker.dispatchEvent(new window.Event("change"));
+    picker.value = "Redline Pass";
+    picker.dispatchEvent(new window.Event("change"));
+    await waitFor(() => document.querySelector(".leaderboard-player-button")?.textContent === "LatestReply", "Latest leaderboard did not load");
+    release();
+    await delay(60);
+    assert.equal(document.querySelector(".leaderboard-player-button").textContent, "LatestReply");
+  } finally {
+    release();
+    dom.window.close();
+  }
+});
+
+test("account visibility setting saves the requested offline status", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let choice;
+  const { dom, document } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "PUT /api/account/presence": ({ init }) => { choice = JSON.parse(init.body).appearOffline; return { appearOffline: choice }; },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    clickButton(document, "Pilot_7");
+    const privacy = document.querySelector('[aria-label="Appear offline"]');
+    privacy.click();
+    await waitFor(() => !privacy.disabled, "Visibility did not finish saving");
+    assert.equal(choice, true);
+    assert.equal(privacy.checked, true);
+    assert.match(document.querySelector(".presence-setting-status").textContent, /appear offline/i);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("redeeming a code refreshes the server balance instead of overwriting it with a stale balance", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  const requests = [];
+  let progressReads = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": () => {
+      progressReads++;
+      if (progressReads === 1) return { progress: { "orbit-claims": "100" } };
+      requests.push("refresh");
+      return { progress: { "orbit-claims": "160" } };
+    },
+    "PUT /api/account/progress": ({ init }) => {
+      requests.push("save");
+      return { progress: JSON.parse(init.body).progress };
+    },
+    "POST /api/codes/redeem": () => {
+      requests.push("redeem");
+      return { reward: { type: "claims", amount: 10 } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    clickButton(document, "Flight settings");
+    const form = document.querySelector(".settings-code-section form");
+    form.querySelector("input").value = "REWARD";
+    form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => form.querySelector('[role="status"]').textContent.startsWith("Success:"), "Reward did not finish refreshing");
+    assert.deepEqual(requests, ["save", "redeem", "refresh"]);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "160");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("currency collected while a code is being redeemed is retained with the reward", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let release;
+  let redemptionStarted = false;
+  let progressReads = 0;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": () => ({ progress: { "orbit-claims": ++progressReads === 1 ? "100" : "160" } }),
+    "PUT /api/account/progress": ({ init }) => ({ progress: JSON.parse(init.body).progress }),
+    "POST /api/codes/redeem": async () => {
+      redemptionStarted = true;
+      await gate;
+      return { reward: { type: "claims", amount: 10 } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    clickButton(document, "Flight settings");
+    const form = document.querySelector(".settings-code-section form");
+    form.querySelector("input").value = "REWARD";
+    form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => redemptionStarted, "Redemption did not start");
+    window.localStorage.setItem("orbit-claims", "105");
+    release();
+    await waitFor(() => form.querySelector('[role="status"]').textContent.startsWith("Success:"), "Reward did not finish refreshing");
+    assert.equal(window.localStorage.getItem("orbit-claims"), "165");
+  } finally {
+    release();
+    dom.window.close();
+  }
+});
+
+test("an uncertain code redemption pauses cloud saving until the account is reloaded", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let progressWrites = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": { progress: { "orbit-claims": "100" } },
+    "PUT /api/account/progress": ({ init }) => {
+      progressWrites++;
+      return { progress: JSON.parse(init.body).progress };
+    },
+    "POST /api/codes/redeem": () => { throw new Error("Connection lost"); },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    clickButton(document, "Flight settings");
+    const form = document.querySelector(".settings-code-section form");
+    form.querySelector("input").value = "REWARD";
+    form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => form.querySelector('[role="status"]').textContent.includes("Could not confirm"), "Uncertain redemption was not reported");
+    window.localStorage.setItem("orbit-claims", "105");
+    await delay(2600);
+    assert.equal(progressWrites, 1);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("a concurrent currency conflict keeps local progress and warns that cloud saving paused", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let progressWrites = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": { progress: { "orbit-claims": "100" } },
+    "PUT /api/account/progress": () => {
+      progressWrites++;
+      return { status: 409, json: { error: "Progress changed on another device. Cloud saving is paused; signing in again will replace unsaved local changes with cloud progress." } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    clickButton(document, "Flight settings");
+    window.localStorage.setItem("orbit-claims", "105");
+    const form = document.querySelector(".settings-code-section form");
+    form.querySelector("input").value = "REWARD";
+    form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector(".account-sync-warning"), "Conflict warning was not shown");
+    assert.match(document.querySelector(".account-sync-warning").textContent, /unsaved local changes/);
+    await delay(2600);
+    assert.equal(progressWrites, 1);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "105");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("registration shows the one-time recovery code and does not save before progress loads", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let progressWrites = 0;
+  const { dom, document, window } = await createPage({
+    "POST /api/auth/register": { user, recoveryCode: "ABCD-2345-EFGH-6789" },
+    "GET /api/account/progress": { status: 503, json: { error: "Progress temporarily unavailable" } },
+    "PUT /api/account/progress": () => { progressWrites++; return { progress: {} }; },
+  });
+  try {
+    await delay(30);
+    clickButton(document, "Account");
+    clickButton(document, "Create a new account");
+    document.querySelector('input[name="username"]').value = "Pilot_7";
+    document.querySelector('input[name="password"]').value = "a-valid-password";
+    document.querySelector(".account-form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector(".recovery-code-display"), "One-time recovery code was not shown");
+    assert.equal(document.querySelector(".recovery-code-display").textContent, "ABCD-2345-EFGH-6789");
+    await delay(2600);
+    assert.equal(progressWrites, 0);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("owner indicator remains stable after page updates", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  const { dom, document } = await createPage({ "/api/auth/session": { user }, "/api/account/progress": { progress: {} } });
+  try {
+    await waitFor(() => document.querySelector(".owner-account-indicator"), "Owner indicator was not displayed");
+    const indicator = document.querySelector(".owner-account-indicator");
+    await delay(50);
+    assert.equal(document.querySelector(".owner-account-indicator"), indicator);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("workshop switches between normal and flipped areas without silently dropping unsupported tiles", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  const { dom, document } = await createPage({ "/api/auth/session": { user }, "/api/account/progress": { progress: {} } });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    await waitFor(() => [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "Open level maker"), "Owner tools did not load");
+    clickButton(document, "Open level maker");
+    const prestige = [...document.querySelectorAll("label")].find((label) => label.textContent.includes("Prestige route")).querySelector("input");
+    prestige.click();
+    clickButton(document, "gravity");
+    document.querySelector('[aria-label="Normal tile 1"]').click();
+    const flipped = [...document.querySelectorAll("button")].find((button) => button.textContent === "Flipped planet area");
+    assert.equal(flipped.hidden, false);
+    flipped.click();
+    assert.equal(document.querySelector('[aria-label="Flipped planet area grid"]').hidden, false);
+    assert.equal(document.querySelector('button[data-tile="block"]').disabled, true);
+    assert.equal(document.querySelector('button[data-tile="exitKey"]').disabled, false);
+    clickButton(document, "Normal area");
+    assert.equal(document.querySelector('[aria-label="Normal area grid"]').hidden, false);
+    assert.equal(document.querySelector('button[data-tile="exitKey"]').disabled, true);
+    clickButton(document, "Delete");
+    clickButton(document, "Platform");
+    assert.equal(document.querySelector(".maker-mode-label").textContent, "BUILD MODE");
+    prestige.click();
+    assert.equal(flipped.hidden, true);
+  } finally {
+    dom.window.close();
+  }
+});

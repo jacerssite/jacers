@@ -94,6 +94,12 @@ function parseTileList(value, length) {
     && new Set(value).size === value.length;
 }
 
+function validPowerups(value, length) {
+  return Array.isArray(value) && value.length <= 60
+    && value.every((item) => item && isBoundedInteger(item.index, 1, length - 2) && POWERUP_KINDS.includes(item.kind))
+    && new Set(value.map((item) => item.index)).size === value.length;
+}
+
 export function validateWorkshopLevel(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || typeof value.name !== "string" || value.name.trim().length < 1 || value.name.trim().length > 40
@@ -106,15 +112,14 @@ export function validateWorkshopLevel(value) {
   for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip"]) {
     if (value[field] !== undefined && !parseTileList(value[field], value.length)) return null;
   }
-  if (value.powerups !== undefined && (!Array.isArray(value.powerups) || value.powerups.length > 60
-    || !value.powerups.every((item) => item && isBoundedInteger(item.index, 1, value.length - 2) && POWERUP_KINDS.includes(item.kind))
-    || new Set(value.powerups.map((item) => item.index)).size !== value.powerups.length)) return null;
+  if (value.powerups !== undefined && !validPowerups(value.powerups, value.length)) return null;
   if (value.bossIndex !== undefined && !isBoundedInteger(value.bossIndex, 1, value.length - 2)) return null;
   if (value.secretId !== undefined && (typeof value.secretId !== "string" || !/^[a-z0-9-]{1,50}$/.test(value.secretId))) return null;
   if (value.flippedRoute !== undefined) {
     const route = value.flippedRoute;
-    if (!route || typeof route !== "object"
+    if (!route || typeof route !== "object" || Array.isArray(route)
       || !["walls", "enemies", "spikes", "gravity"].every((field) => parseTileList(route[field], value.length))
+      || (route.powerups !== undefined && !validPowerups(route.powerups, value.length))
       || (route.key !== undefined && !isBoundedInteger(route.key, 1, value.length - 2))) return null;
   }
   if (value.secret !== undefined && typeof value.secret !== "boolean"
@@ -130,8 +135,14 @@ export function validateWorkshopLevel(value) {
     spikes: [...value.spikes],
     gravity: [...value.gravity],
   };
-  for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip", "powerups", "flippedRoute", "bossIndex", "secret", "secretId", "prestige", "boss"]) {
+  for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip", "powerups", "bossIndex", "secret", "secretId", "prestige", "boss"]) {
     if (value[field] !== undefined) level[field] = structuredClone(value[field]);
+  }
+  if (value.flippedRoute !== undefined) {
+    const route = value.flippedRoute;
+    level.flippedRoute = Object.fromEntries(["walls", "enemies", "spikes", "gravity", "powerups", "key"]
+      .filter((field) => route[field] !== undefined)
+      .map((field) => [field, structuredClone(route[field])]));
   }
   return level;
 }

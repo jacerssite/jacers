@@ -2,7 +2,7 @@ import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, P
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity, createRarityBadge } from "./cosmetics";
 import { levels } from "./levels";
-import { apiRequest } from "./api";
+import { ApiError, apiRequest } from "./api";
 import { createMenuButton, createTextButton } from "./ui";
 import { createShipArtMarkup, createCssShipArtMarkup } from "./ship-art";
 import { drawTrailParticles } from "./trail";
@@ -141,7 +141,28 @@ let mouseAim = { x: 148, y: 29 };
 let hasMouseAim = false;
 let accountProgressTimer = 0;
 let accountProgressSyncing = false;
+let accountRedemptionInFlight = false;
 let lastSyncedAccountProgress = "";
+let loadedAccountProgressFor: string | null = null;
+let onlineSessionVersion = 0;
+
+function accountIdentity(user: OnlineUser | null) {
+    return user?.username.toLowerCase() ?? null;
+}
+
+function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
+    const previousIdentity = accountIdentity(currentOnlineUser);
+    const nextIdentity = accountIdentity(user);
+    if (previousIdentity !== nextIdentity) {
+        onlineSessionVersion++;
+        if (sameAccount && loadedAccountProgressFor === previousIdentity) loadedAccountProgressFor = nextIdentity;
+        else {
+            loadedAccountProgressFor = null;
+            lastSyncedAccountProgress = "";
+        }
+    }
+    currentOnlineUser = user;
+}
 const gravity = 0.7;
 const jumpPower = -16;
 const playerWidth = 48;
@@ -189,7 +210,7 @@ const { showLeaderboard, getRoleBadge, formatAbilityName } = createLeaderboard({
     showLevelMenu,
     showMenu,
     sendPresenceHeartbeat,
-    setCurrentOnlineUser: (user) => { currentOnlineUser = user; },
+    setCurrentOnlineUser: setOnlineUser,
     setGoldenTimeLimit: (limit) => { goldenTimeLimitMs = limit; },
     createShipPreview,
     formatTime,
@@ -197,11 +218,35 @@ const { showLeaderboard, getRoleBadge, formatAbilityName } = createLeaderboard({
 
 const { showRecoveryCodeOnce, showForgotPassword } = createAccountRecovery(showAccount);
 
-function loadCustomLevels() {
-    let legacyLevels: Level[] = [];
+function readStoredLevels(key: string): Level[] {
     try {
-        legacyLevels = JSON.parse(localStorage.getItem("orbit-custom-levels") ?? "[]") as Level[];
-    } catch { }
+        const stored: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
+        if (!Array.isArray(stored)) return [];
+        return stored.filter((value): value is Level => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+            const level = value as Partial<Level>;
+            if (typeof level.name !== "string" || !level.name.trim() || /[<>]/.test(level.name)
+                || typeof level.briefing !== "string" || /[<>]/.test(level.briefing)
+                || !Number.isSafeInteger(level.length) || level.length! < 8 || level.length! > 100) return false;
+            const validTiles = (tiles: unknown) => Array.isArray(tiles) && tiles.every((index) => Number.isSafeInteger(index) && index >= 1 && index < level.length!);
+            if (![level.asteroids, level.walls, level.enemies, level.spikes, level.gravity].every(validTiles)) return false;
+            if (![level.blocks, level.portals, level.specialAsteroids, level.miniBosses, level.flip].every((tiles) => tiles === undefined || validTiles(tiles))) return false;
+            const validPowerups = (powerups: unknown) => Array.isArray(powerups) && powerups.every((item) => item && typeof item === "object"
+                && Number.isSafeInteger(item.index) && item.index >= 1 && item.index < level.length!
+                && Object.hasOwn(powerupLabels, item.kind));
+            if (level.powerups !== undefined && !validPowerups(level.powerups)) return false;
+            const route = level.flippedRoute;
+            if (route && (![route.walls, route.enemies, route.spikes, route.gravity].every(validTiles)
+                || route.powerups !== undefined && !validPowerups(route.powerups))) return false;
+            return true;
+        });
+    } catch {
+        return [];
+    }
+}
+
+function loadCustomLevels() {
+    const legacyLevels = readStoredLevels("orbit-custom-levels");
     const normalCount = levels.filter((level) => !level.secret && !level.prestige).length;
     for (let index = normalCount; index < 20; index++) {
         levels.splice(Math.min(index, levels.length), 0, { name: `Frontier ${index + 1}`, briefing: "A longer route on the blue planet. Reach the beacon and claim the whole lane.", length: 28 + index, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21, 25], enemies: [8, 16, 24], spikes: [6, 14, 22], gravity: [10, 20], portals: [12, 26], boss: index === 19 });
@@ -209,8 +254,7 @@ function loadCustomLevels() {
     for (let index = 0; index < 20; index++) {
         levels.push({ name: prestigeRouteNames[index], briefing: "A longer route around the ringed planet. Planetary flip fields reveal the upper lane.", length: 38 + index, asteroids: [3, 8, 13, 18, 23, 28, 33], walls: [5, 10, 15, 20, 25, 30], enemies: [7, 17, 27, 35], spikes: [6, 14, 24, 32], gravity: [11, 21, 31], flip: [11, 31], boss: index === 19, prestige: true });
     }
-    let cachedLevels: Level[] = [];
-    try { cachedLevels = JSON.parse(localStorage.getItem("orbit-global-level-cache") ?? "[]") as Level[]; } catch { }
+    const cachedLevels = readStoredLevels("orbit-global-level-cache");
     [...legacyLevels, ...cachedLevels].forEach((level, index) => levels.push({
         ...level,
         customId: level.customId,
@@ -310,16 +354,15 @@ function refreshProgressStateFromStorage() {
     const savedShipColor = localStorage.getItem("orbit-ship-color");
     selectedShipColor = savedShipColor && /^#[0-9a-f]{6}$/i.test(savedShipColor) ? savedShipColor : skins[selectedSkin]?.color ?? skins[0].color;
     reducedEffects = localStorage.getItem("orbit-reduced-effects") === "true";
+    const savedMusicVolume = Number(localStorage.getItem("orbit-music-volume") ?? "0.3");
+    musicVolume = Number.isFinite(savedMusicVolume) && savedMusicVolume >= 0 && savedMusicVolume <= 1 ? savedMusicVolume : 0.3;
+    musicMuted = localStorage.getItem("orbit-music-muted") === "true";
+    if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : musicVolume * 0.24);
     controlBindings = readControlBindings();
 }
 
 function reloadLocalCustomLevels() {
-    let savedLevels: Level[] = [];
-    try {
-        savedLevels = JSON.parse(localStorage.getItem("orbit-custom-levels") ?? "[]") as Level[];
-    } catch (error) {
-        console.error("Could not load account workshop levels:", error);
-    }
+    const savedLevels = readStoredLevels("orbit-custom-levels");
     levels.splice(0, levels.length, ...levels.filter((level) => !level.localOnly));
     savedLevels.forEach((level, index) => levels.push({
         ...level,
@@ -329,24 +372,80 @@ function reloadLocalCustomLevels() {
     configurePortalDistribution();
 }
 
+function applySyncedProgress(sentProgress: Record<string, string>, serverProgress: Record<string, string>) {
+    const previousCustomLevels = localStorage.getItem("orbit-custom-levels");
+    const progressKeys = new Set([...Object.keys(sentProgress), ...Object.keys(serverProgress)]);
+    progressKeys.forEach((key) => {
+        const sentValue = Object.hasOwn(sentProgress, key) ? sentProgress[key] : null;
+        const currentValue = localStorage.getItem(key);
+        if (currentValue !== sentValue) {
+            // Preserve currency earned or spent while this request was in flight,
+            // on top of the latest balance returned by the server.
+            const prestigeUnchanged = (sentProgress["orbit-prestige"] ?? "0") === (serverProgress["orbit-prestige"] ?? "0")
+                && (sentProgress["orbit-prestige"] ?? "0") === (localStorage.getItem("orbit-prestige") ?? "0");
+            if ((key === "orbit-claims" || key === "orbit-special-claims") && prestigeUnchanged) {
+                const amounts = [sentValue ?? "0", currentValue ?? "0", serverProgress[key] ?? "0"];
+                if (amounts.every((value) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) <= 100000000)) {
+                    const [sent, current, server] = amounts.map(Number);
+                    localStorage.setItem(key, String(Math.max(0, Math.min(100000000, server + current - sent))));
+                }
+            }
+            return;
+        }
+        const serverValue = serverProgress[key];
+        if (serverValue === undefined) localStorage.removeItem(key);
+        else if (serverValue !== sentValue) localStorage.setItem(key, serverValue);
+    });
+    refreshProgressStateFromStorage();
+    if (previousCustomLevels !== localStorage.getItem("orbit-custom-levels")) reloadLocalCustomLevels();
+}
+
+function showAccountSyncConflict(message: string) {
+    if (document.querySelector(".account-sync-warning")) return;
+    const notice = document.createElement("aside");
+    notice.className = "account-sync-warning";
+    notice.setAttribute("role", "alert");
+    const details = document.createElement("p");
+    details.textContent = message;
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.textContent = "Dismiss";
+    dismiss.addEventListener("click", () => notice.remove());
+    notice.append(details, dismiss);
+    document.body.append(notice);
+}
+
 async function syncAccountProgress(direction: "load" | "save", force = false) {
     if (!currentOnlineUser) return;
-    if (accountProgressSyncing) {
-        if (!force) return;
-        while (accountProgressSyncing) await new Promise<void>((resolve) => window.setTimeout(resolve, 20));
+    while (accountRedemptionInFlight || accountProgressSyncing) {
+        if (direction === "save" && !force) return;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 20));
         if (!currentOnlineUser) return;
     }
+    const identity = accountIdentity(currentOnlineUser);
+    if (direction === "save" && loadedAccountProgressFor !== identity) {
+        throw new Error("Account progress has not loaded yet, so cloud saving is paused. Sign in again to retry.");
+    }
+    const ensureSameAccount = () => {
+        if (accountIdentity(currentOnlineUser) !== identity) throw new Error("The signed-in account changed during progress synchronization.");
+    };
     accountProgressSyncing = true;
     try {
         if (direction === "load") {
+            loadedAccountProgressFor = null;
+            lastSyncedAccountProgress = "";
             const { progress } = await apiRequest<{ progress: Record<string, string> | null }>("/account/progress");
+            ensureSameAccount();
             if (progress === null) {
                 const localProgress = getLocalAccountProgress();
                 const result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
                     method: "PUT",
-                    body: JSON.stringify({ progress: localProgress, baseProgress: null }),
+                    body: JSON.stringify({ progress: localProgress, baseProgress: null, initializeOnly: true }),
                 });
+                ensureSameAccount();
+                applySyncedProgress(localProgress, result.progress);
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                loadedAccountProgressFor = identity;
                 return;
             }
             Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -355,7 +454,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             Object.entries(progress).forEach(([key, value]) => localStorage.setItem(key, value));
             refreshProgressStateFromStorage();
             reloadLocalCustomLevels();
-            lastSyncedAccountProgress = JSON.stringify(getLocalAccountProgress());
+            lastSyncedAccountProgress = serializeAccountProgress(getLocalAccountProgress());
+            loadedAccountProgressFor = identity;
             return;
         }
         const localProgress = getLocalAccountProgress();
@@ -366,41 +466,60 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             method: "PUT",
             body: JSON.stringify({ progress: localProgress, baseProgress }),
         });
-        const previousCustomLevels = localStorage.getItem("orbit-custom-levels");
-        const progressKeys = new Set([...Object.keys(localProgress), ...Object.keys(result.progress)]);
-        progressKeys.forEach((key) => {
-            const sentValue = Object.hasOwn(localProgress, key) ? localProgress[key] : null;
-            if (localStorage.getItem(key) !== sentValue) return;
-            const serverValue = result.progress[key];
-            if (serverValue === undefined) localStorage.removeItem(key);
-            else if (serverValue !== sentValue) localStorage.setItem(key, serverValue);
-        });
-        refreshProgressStateFromStorage();
-        if (previousCustomLevels !== localStorage.getItem("orbit-custom-levels")) reloadLocalCustomLevels();
+        ensureSameAccount();
+        applySyncedProgress(localProgress, result.progress);
         lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+    } catch (error) {
+        if (direction === "save" && error instanceof ApiError && error.status === 409 && accountIdentity(currentOnlineUser) === identity) {
+            loadedAccountProgressFor = null;
+            showAccountSyncConflict(error.message);
+        }
+        throw error;
     } finally {
         accountProgressSyncing = false;
     }
 }
 
 async function refreshOnlineState() {
-    const [session, settings, sharedConfig, sharedLevels] = await Promise.all([
-        apiRequest<{ user: OnlineUser | null }>("/auth/session"),
-        apiRequest<OnlineSettings>("/settings"),
-        apiRequest<{ config: GameConfig }>("/game-config"),
-        apiRequest<{ levels: Level[] }>("/levels"),
-    ]);
-    currentOnlineUser = session.user;
-    void sendPresenceHeartbeat();
-    updateOwnerAccountIndicator();
-    if (session.user) await syncAccountProgress("load");
-    goldenTimeLimitMs = settings.goldenTimeLimitMs;
-    rouletteTiers = isUsableRouletteTiers(settings.rouletteTiers)
-        ? structuredClone(settings.rouletteTiers)
-        : structuredClone(DEFAULT_ROULETTE_TIERS);
-    updateLogEntries = Array.isArray(settings.updateLog) ? settings.updateLog : [];
-    gameConfig = sharedConfig.config;
-    if (session.user?.role === "tester") {
+    const originalSessionVersion = onlineSessionVersion;
+    const tasks = [
+        (async () => {
+            const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
+            // A login or logout while startup is pending must not be overwritten.
+            if (onlineSessionVersion !== originalSessionVersion) return;
+            setOnlineUser(session.user);
+            void sendPresenceHeartbeat();
+            updateOwnerAccountIndicator();
+            try {
+                if (session.user) await syncAccountProgress("load");
+            } finally {
+                if (document.querySelector(".home-screen")) showMenu();
+            }
+        })(),
+        (async () => {
+            const settings = await apiRequest<OnlineSettings>("/settings");
+            goldenTimeLimitMs = settings.goldenTimeLimitMs;
+            rouletteTiers = isUsableRouletteTiers(settings.rouletteTiers)
+                ? structuredClone(settings.rouletteTiers)
+                : structuredClone(DEFAULT_ROULETTE_TIERS);
+            updateLogEntries = Array.isArray(settings.updateLog) ? settings.updateLog : [];
+        })(),
+        (async () => {
+            const sharedConfig = await apiRequest<{ config: GameConfig }>("/game-config");
+            gameConfig = sharedConfig.config;
+        })(),
+        (async () => {
+            const sharedLevels = await apiRequest<{ levels: Level[] }>("/levels");
+            levels.splice(0, levels.length, ...levels.filter((level) => !level.customId || level.localOnly), ...sharedLevels.levels.map((level) => ({ ...level, localOnly: false })));
+            localStorage.setItem("orbit-global-level-cache", JSON.stringify(sharedLevels.levels));
+            configurePortalDistribution();
+        })(),
+    ];
+    const results = await Promise.allSettled(tasks);
+    results.forEach((result) => {
+        if (result.status === "rejected") console.error("Could not load part of the online service:", result.reason);
+    });
+    if (currentOnlineUser?.role === "tester") {
         const storedOverride = localStorage.getItem("orbit-tester-game-config");
         if (storedOverride) {
             try {
@@ -424,9 +543,6 @@ async function refreshOnlineState() {
             }
         }
     }
-    levels.splice(0, levels.length, ...levels.filter((level) => !level.customId || level.localOnly), ...sharedLevels.levels.map((level) => ({ ...level, localOnly: false })));
-    localStorage.setItem("orbit-global-level-cache", JSON.stringify(sharedLevels.levels));
-    configurePortalDistribution();
 }
 
 function configurePortalDistribution() {
@@ -470,13 +586,14 @@ function configurePortalDistribution() {
 }
 
 export function startApp() {
+    refreshProgressStateFromStorage();
     loadCustomLevels();
     configurePortalDistribution();
     document.body.innerHTML = "";
     ownerBadgeObserver ??= new MutationObserver(updateOwnerAccountIndicator);
     ownerBadgeObserver.observe(document.body, { childList: true });
     void refreshOnlineState().then(() => {
-        if (!gameActive) showMenu();
+        if (document.querySelector(".home-screen")) showMenu();
     }).catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
     if (!presenceHeartbeatTimer) presenceHeartbeatTimer = window.setInterval(() => void sendPresenceHeartbeat(), 30_000);
     window.addEventListener("keydown", handleKeyDown);
@@ -490,7 +607,7 @@ export function startApp() {
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
     });
     if (!accountProgressTimer) accountProgressTimer = window.setInterval(() => {
-        if (currentOnlineUser) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
+        if (currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
     }, 2500);
     if (!accountNoticeTimer) accountNoticeTimer = window.setInterval(() => void refreshAccountNotices(), 7000);
     showMenu();
@@ -498,9 +615,11 @@ export function startApp() {
 
 async function refreshAccountNotices() {
     try {
+        const originalSessionVersion = onlineSessionVersion;
         const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
+        if (onlineSessionVersion !== originalSessionVersion) return;
         const previousRole = currentOnlineUser?.role;
-        currentOnlineUser = session.user;
+        setOnlineUser(session.user);
         updateOwnerAccountIndicator();
         if (previousRole && currentOnlineUser && previousRole !== currentOnlineUser.role
             && document.querySelector(".tester-screen")
@@ -617,16 +736,15 @@ function setMusicScene(scene: "menu" | "normal" | "prestige" | "secret" | "boss"
 }
 
 function updateOwnerAccountIndicator() {
-    const existing = document.querySelector(".owner-account-indicator");
+    const existing = document.querySelector<HTMLElement>(".owner-account-indicator");
     if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
-        const indicator = document.createElement("span");
+        const indicator = existing ?? document.createElement("span");
         indicator.className = "owner-account-indicator";
         indicator.textContent = getRoleBadge(currentOnlineUser.role);
         indicator.setAttribute("role", "img");
         indicator.setAttribute("aria-label", `${currentOnlineUser.role} account active: ${currentOnlineUser.username}`);
         indicator.title = `${currentOnlineUser.role === "owner" ? "Owner" : "Tester"} account active: ${currentOnlineUser.username}`;
-        if (existing) existing.replaceWith(indicator);
-        else document.body.prepend(indicator);
+        if (!existing) document.body.prepend(indicator);
     } else existing?.remove();
 }
 
@@ -808,24 +926,48 @@ function showSettings() {
             return;
         }
         redeem.disabled = true;
-        codeStatus.textContent = "Checking code...";
+        codeStatus.textContent = "Saving progress before checking the code...";
+        let redemptionIdentity: string | null = null;
+        let redemptionStarted = false;
         try {
+            await syncAccountProgress("save", true);
+            if (!currentOnlineUser) throw new Error("Sign in to redeem a code.");
+            redemptionIdentity = accountIdentity(currentOnlineUser);
+            const sentProgress = getLocalAccountProgress();
+            accountRedemptionInFlight = true;
+            redemptionStarted = true;
+            codeStatus.textContent = "Checking code...";
             const result = await apiRequest<{ reward: { type: "claims" | "specialClaims"; amount: number } }>("/codes/redeem", {
                 method: "POST",
                 body: JSON.stringify({ code: codeInput.value.trim().toUpperCase() }),
             });
-            applyCodeReward(result.reward);
             codeInput.value = "";
             try {
-                await syncAccountProgress("save", true);
+                const { progress } = await apiRequest<{ progress: Record<string, string> | null }>("/account/progress");
+                if (!progress || accountIdentity(currentOnlineUser) !== redemptionIdentity) throw new Error("The updated account progress could not be loaded.");
+                applySyncedProgress(sentProgress, progress);
+                lastSyncedAccountProgress = serializeAccountProgress(progress);
+                loadedAccountProgressFor = redemptionIdentity;
                 codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} added to your account.`;
             } catch (error) {
+                if (accountIdentity(currentOnlineUser) === redemptionIdentity) {
+                    loadedAccountProgressFor = null;
+                    lastSyncedAccountProgress = "";
+                }
                 console.error("Could not refresh the redeemed code reward:", error);
-                codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} saved online. This device will refresh it when the service reconnects.`;
+                codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} saved online. Cloud saving is paused; sign in again to refresh this device.`;
             }
         } catch (error) {
-            codeStatus.textContent = error instanceof Error ? error.message : "Could not redeem this code.";
+            const definiteRejection = error instanceof ApiError && error.status >= 400 && error.status < 500;
+            if (redemptionStarted && !definiteRejection && accountIdentity(currentOnlineUser) === redemptionIdentity) {
+                loadedAccountProgressFor = null;
+                lastSyncedAccountProgress = "";
+                codeStatus.textContent = "Could not confirm whether the code was redeemed. Cloud saving is paused; sign in again to refresh your account before retrying.";
+            } else {
+                codeStatus.textContent = error instanceof Error ? error.message : "Could not redeem this code.";
+            }
         } finally {
+            accountRedemptionInFlight = false;
             redeem.disabled = !currentOnlineUser;
         }
     });
@@ -932,16 +1074,6 @@ function showSettings() {
     
     menu.append(panel, createTextButton("Back", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
-}
-
-function applyCodeReward(reward: { type: "claims" | "specialClaims"; amount: number }) {
-    if (reward.type === "claims") {
-        asteroidsClaimed = Math.min(100000000, asteroidsClaimed + reward.amount);
-        localStorage.setItem("orbit-claims", String(asteroidsClaimed));
-    } else {
-        specialAsteroids = Math.min(100000000, specialAsteroids + reward.amount);
-        localStorage.setItem("orbit-special-claims", String(specialAsteroids));
-    }
 }
 
 function createProgressArea() {
@@ -1107,7 +1239,7 @@ function showAccount(initialMessage = "") {
                         method: "PUT",
                         body: JSON.stringify({ appearOffline: privacyInput.checked }),
                     });
-                    if (currentOnlineUser) currentOnlineUser = { ...currentOnlineUser, appearOffline: result.appearOffline };
+                    if (currentOnlineUser) setOnlineUser({ ...currentOnlineUser, appearOffline: result.appearOffline });
                     privacyStatus.textContent = result.appearOffline ? "You will appear offline to other players." : "Your online status is visible to other players.";
                 } catch (error) {
                     privacyInput.checked = previousValue;
@@ -1141,7 +1273,7 @@ function showAccount(initialMessage = "") {
             titleSelect.addEventListener("change", () => {
                 localStorage.setItem("orbit-title", titleSelect.value);
                 titleStatus.textContent = "Saving pilot title...";
-                void syncAccountProgress("save").then(() => {
+                void syncAccountProgress("save", true).then(() => {
                     titleStatus.textContent = "Pilot title saved to your account.";
                 }).catch((error: unknown) => {
                     titleStatus.textContent = `Title saved on this device, but account sync failed: ${error instanceof Error ? error.message : "online service error"}`;
@@ -1163,7 +1295,7 @@ function showAccount(initialMessage = "") {
                         method: "PATCH",
                         body: JSON.stringify({ username: usernameInput.value }),
                     });
-                    currentOnlineUser = { ...currentOnlineUser!, username: updated.user.username };
+                    setOnlineUser({ ...currentOnlineUser!, username: updated.user.username }, true);
                     updateOwnerAccountIndicator();
                     render("Profile updated.");
                 } catch (error) {
@@ -1225,8 +1357,7 @@ function showAccount(initialMessage = "") {
                         method: "POST",
                         body: JSON.stringify({ currentPassword: passwordInputs[0].value, newPassword: passwordInputs[1].value }),
                     });
-                    currentOnlineUser = null;
-                    lastSyncedAccountProgress = "";
+                    setOnlineUser(null);
                     render("Password changed. Sign in again with your new password.");
                 } catch (error) {
                     passwordStatus.textContent = error instanceof Error ? error.message : "Could not change password.";
@@ -1315,8 +1446,7 @@ function showAccount(initialMessage = "") {
                         console.error("Could not save account progress before sign-out:", error);
                     }
                     await apiRequest<void>("/auth/logout", { method: "POST" });
-                    currentOnlineUser = null;
-                    lastSyncedAccountProgress = "";
+                    setOnlineUser(null);
                     render(`You have signed out.${syncWarning}`);
                 } catch (error) {
                     render(error instanceof Error ? error.message : "Could not sign out.");
@@ -1367,17 +1497,21 @@ function showAccount(initialMessage = "") {
                         method: "POST",
                         body: JSON.stringify({ username: username.value, password: password.value }),
                     });
-                    currentOnlineUser = response.user;
+                    setOnlineUser(response.user);
                     void sendPresenceHeartbeat();
                     updateOwnerAccountIndicator();
+                    let progressWarning = "";
                     try {
                         await syncAccountProgress("load");
                     } catch (error) {
-                        render(`Signed in, but account progress could not sync: ${error instanceof Error ? error.message : "online service error"}`);
-                        return;
+                        progressWarning = `Signed in, but account progress could not load. Cloud saving is paused: ${error instanceof Error ? error.message : "online service error"}`;
                     }
                     if (wasRegistration && response.recoveryCode) {
-                        showRecoveryCodeOnce(response.recoveryCode, () => showAccount("Account created. Save your recovery code somewhere private."));
+                        showRecoveryCodeOnce(response.recoveryCode, () => showAccount(progressWarning || "Account created. Save your recovery code somewhere private."));
+                        return;
+                    }
+                    if (progressWarning) {
+                        render(progressWarning);
                         return;
                     }
                     showAccount();
@@ -1892,7 +2026,7 @@ function showTesterLogin() {
                 method: "POST",
                 body: JSON.stringify({ username: username.value, password: password.value }),
             });
-            currentOnlineUser = response.user;
+            setOnlineUser(response.user);
             void sendPresenceHeartbeat();
             updateOwnerAccountIndicator();
             if (response.user.role !== "owner") {
@@ -1943,7 +2077,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         showTesterLogin();
         return;
     }
-    currentOnlineUser = user;
+    setOnlineUser(user);
     updateOwnerAccountIndicator();
     const isOwner = user.role === "owner";
     const menu = document.createElement("main");
@@ -3019,15 +3153,20 @@ function showWinScreen() {
 async function submitLeaderboardRun(status: HTMLElement, levelName: string, timeMs: number, abilities: string[]) {
     try {
         const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
-        currentOnlineUser = session.user;
+        setOnlineUser(session.user);
         if (!session.user) {
             status.textContent = "Sign in or create an account to submit this run to the online leaderboard.";
             return;
         }
-        const result = await apiRequest<{ entry: OnlineLeaderboardEntry; improved: boolean }>("/runs", {
+        const result = await apiRequest<{ entry: OnlineLeaderboardEntry | null; improved: boolean; ignored?: boolean }>("/runs", {
             method: "POST",
             body: JSON.stringify({ level: levelName, timeMs, abilities }),
         });
+        if (result.ignored) {
+            status.textContent = "Owner and tester runs are not included on the public leaderboard.";
+            return;
+        }
+        if (!result.entry) throw new Error("The leaderboard did not return a saved run.");
         status.textContent = result.improved
             ? `Online leaderboard saved for ${session.user.username}. Abilities used: ${abilities.length ? abilities.map(formatAbilityName).join(", ") : "None"}.`
             : `Your fastest online ${levelName} record is ${formatTime(result.entry.timeMs)}.`;
