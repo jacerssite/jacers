@@ -41,7 +41,10 @@ const defaultRouletteTiers = [
   { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
   { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
 ];
-const databaseUrl = process.env.DATABASE_MONGODB_URI;
+// DATABASE_URL is commonly supplied by deployment integrations. Keep the explicit
+// MongoDB name as the documented primary setting, while accepting the standard
+// fallback so an otherwise valid online service can start.
+const databaseUrl = process.env.DATABASE_MONGODB_URI?.trim() || process.env.DATABASE_URL?.trim();
 const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: Boolean(process.env.VERCEL) });
 const mongoClient = databaseUrl && !databaseConfigurationError
   ? new MongoClient(databaseUrl, { maxPoolSize: process.env.VERCEL ? 5 : 10 })

@@ -114,16 +114,19 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 #game-world.prestige-area .world-planet::after { border-color: #ffe7ad99; border-right-color: transparent; }
 #game-world.prestige-area .system-sun { background: radial-gradient(circle at 36% 32%, #fff5fc 0 10%, #f4a6df 33%, #b24bff 70%, #4e1d79 100%); box-shadow: 0 0 28px #f58bff, 0 0 72px #b991ff77; }
 #game-world.flipped-route .space-backdrop { transform: rotate(180deg); transform-origin: center; filter: hue-rotate(35deg) saturate(1.25); }
-.player { position: absolute; z-index: 5; width: 48px; height: 58px; border: 3px solid #f4f3cf; border-radius: 52% 52% 45% 45%; background: #ed7657; box-shadow: 0 0 0 5px #ed765733, 0 8px 18px #101b2b88; transition: transform .12s ease-out; }
+.player { position: absolute; z-index: 5; width: 48px; height: 58px; border: 3px solid #f4f3cf; border-radius: 52% 52% 45% 45%; background: #ed7657; box-shadow: 0 0 0 5px #ed765733, 0 8px 18px #101b2b88; }
 .ship-gun { position: absolute; z-index: 9; top: 24px; left: 32px; width: 27px; height: 8px; border: 2px solid #fff3bd; border-radius: 8px; background: #f6c46e; box-shadow: 0 0 10px #f6c46e; transform-origin: 0 50%; pointer-events: none; }
 .player.ship-dart { border-radius: 65% 25% 65% 25%; transform-origin: center; }
 .player.ship-ring { border-radius: 50%; box-shadow: 0 0 0 7px var(--ship-color, #ed7657), 0 0 22px var(--ship-color, #ed7657); }
 .player.ship-blade { border-radius: 8% 70% 8% 70%; transform: skewX(-12deg); }
-.player:has(.ship-art-image), .player:has(.ship-css-art) { border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; }
-.player .ship-art, .player .ship-art-image, .player .ship-css-art { position: absolute; inset: -7px; width: 56px; height: 70px; object-fit: contain; pointer-events: none; }
+.player:has(.ship-art-image), .player:has(.ship-art-inline), .player:has(.ship-css-art) { border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; }
+.player .ship-art, .player .ship-art-image, .player .ship-art-inline, .player .ship-css-art { position: absolute; inset: -7px; width: 56px; height: 70px; object-fit: contain; pointer-events: none; }
 .ship-art-image { position: relative; display: block; flex: 0 0 auto; object-fit: contain; }
 .ship-art-inline { position: relative; display: block; width: 100%; height: 100%; }
 .ship-art-inline svg { display: block; width: 100%; height: 100%; }
+.ship-art-tinted { isolation: isolate; }
+.ship-art-tinted.ship-art-image > img { display: block; width: 100%; height: 100%; margin: 0; object-fit: contain; }
+.ship-art-tinted::after { content: ""; position: absolute; inset: 0; background: var(--ship-color); -webkit-mask: var(--ship-art-source) center / contain no-repeat; mask: var(--ship-art-source) center / contain no-repeat; mix-blend-mode: multiply; pointer-events: none; }
 .ship-css-art { position: relative; display: block; flex: 0 0 auto; overflow: hidden; contain: layout paint size; isolation: isolate; background: var(--ship-color); box-shadow: 0 0 12px color-mix(in srgb, var(--ship-color) 82%, transparent); }
 .ship-css-stellar-guard { clip-path: polygon(50% 0, 87% 22%, 76% 90%, 50% 100%, 24% 90%, 13% 22%); background: radial-gradient(ellipse at 50% 36%, #bff7ff 0 13%, #21465f 14% 20%, transparent 21%), linear-gradient(90deg, #f8ae24, var(--ship-color) 40% 62%, #fff2a8); }
 .ship-css-quantum-dancer { clip-path: polygon(50% 0, 86% 50%, 50% 100%, 14% 50%); background: radial-gradient(circle at 50% 50%, #c6f9ff 0 16%, #263f75 17% 29%, transparent 30%), linear-gradient(135deg, #f0b6ff, var(--ship-color) 42% 58%, #6c248f); }
@@ -191,7 +194,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .player.ground-pound, .portal-room-player.ground-pound { animation: ground-pound .18s ease-out; }
 .trail-particle { position: absolute; z-index: 2; width: 14px; height: 25px; border-radius: 50% 50% 45% 45%; background: var(--trail-color, #ed7657); box-shadow: 0 0 12px var(--trail-color, #ed7657), 0 0 24px var(--trail-color, #ed7657); clip-path: polygon(50% 100%, 0 0, 100% 0); pointer-events: none; opacity: 0; transform: translateY(0); transform-origin: top center; animation: none; animation-delay: var(--trail-delay, 0ms); }
 .trail-active.trail-effect-ember { animation: trail-flicker .55s ease-in-out infinite alternate; }
-.trail-head { animation: none !important; transform: none !important; }
+.trail-head { animation: none !important; transform: translate(-50%, -50%) !important; transform-origin: center; }
 .trail-effect-comet { width: 22px; height: 12px; border-radius: 50%; transform: rotate(-18deg); }
 .trail-active.trail-effect-comet { animation: trail-comet .65s ease-in-out infinite alternate; }
 .trail-effect-spark { width: 11px; height: 11px; border-radius: 50%; clip-path: none; }
@@ -236,6 +239,12 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .customization-layout { display: grid; grid-template-columns: minmax(0, 560px) minmax(190px, 250px); align-items: start; gap: 14px; width: min(824px, 92vw); margin: 0 auto 24px; }
 .customization-layout .settings-panel { width: auto; margin: 0; }
 .customization-layout .ship-preview { position: sticky; top: 18px; min-height: 190px; padding: 12px; }
+.appearance-loadout-section { margin: 18px 0 24px; padding: 14px; border: 1px solid #f6c46e88; background: linear-gradient(135deg, #143746cc, #101b2bcc); }
+.appearance-loadout-section > h2 { margin: 0; color: #f6c46e; font: 700 .92rem 'DM Mono', monospace; letter-spacing: 1.4px; text-transform: uppercase; }
+.appearance-loadout-section > p { margin: 7px 0 13px; color: #99b3a6; font: .62rem/1.55 'DM Mono', monospace; }
+.appearance-loadout-section .setting-title { margin-top: 17px; }
+.appearance-loadout-section .setting-title:first-of-type { margin-top: 0; }
+.appearance-loadout-section .rarity-group:last-child { margin-bottom: 0; }
 .ship-preview .setting-title { margin: 0 0 4px; }
 .ship-preview { display: grid; justify-items: center; gap: 6px; }
 .preview-stage { display: grid; place-items: center; width: 100%; min-height: 92px; margin: 4px 0; border: 1px solid #f6c46e44; background: radial-gradient(circle, #31596a, #101b2b 72%); }
@@ -250,7 +259,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .preview-stage .ship-art-image { position: static; filter: none; }
 .trail-preview-scene { position: relative; width: 240px; height: 72px; overflow: hidden; }
 .trail-preview-scene .trail-preview-ship { position: absolute; z-index: 3; top: 0; left: 0; width: 48px; height: 36px; pointer-events: none; }
-.trail-preview-scene .ship-art-image, .trail-preview-scene .ship-css-art { position: absolute; inset: 0; width: 48px; height: 36px; object-fit: contain; }
+.trail-preview-scene .ship-art-image, .trail-preview-scene .ship-art-inline, .trail-preview-scene .ship-css-art { position: absolute; inset: 0; width: 48px; height: 36px; object-fit: contain; }
 .trail-preview-scene .preview-ship { position: absolute; top: 0; left: 0; width: 42px; height: 34px; border-width: 3px; }
 .trail-preview-scene .preview-ship span { top: 5px; left: 8px; width: 18px; height: 13px; border-width: 2px; }
 .trail-preview-scene .preview-ship i { bottom: -11px; left: 12px; width: 12px; height: 14px; }
@@ -261,7 +270,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .loadout-choice { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 92px; padding: 8px 5px; border: 1px solid #385267; color: #c4d1bd; background: #101b2b; font: .62rem 'DM Mono', monospace; cursor: pointer; }
 .loadout-choice > span { line-height: 1.2; }
 .loadout-choice .rarity-badge { margin-left: 0; }
-.loadout-choice .ship-art-image { width: 34px; height: 34px; }
+.loadout-choice .ship-art-image, .loadout-choice .ship-art-inline { width: 34px; height: 34px; }
 .skin-color-swatch { display: block; width: 30px; height: 30px; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--skin-color); }
 .loadout-trail-mark { display: block; width: 30px; height: 9px; border-radius: 50%; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); animation: trail-comet .65s ease-in-out infinite alternate; }
 .loadout-trail-mark.trail-effect-ember { animation: trail-flicker .55s ease-in-out infinite alternate; }
@@ -273,8 +282,9 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .loadout-choice:disabled { opacity: .35; cursor: not-allowed; }
 .avatar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .avatar-option { min-height: 92px; padding: 9px 5px; border: 1px solid #385267; border-radius: 3px; color: #f3f5e9; background: #101b2b; cursor: pointer; }
-.avatar-option i, .avatar-option img, .avatar-option .ship-art-image, .avatar-option .ship-css-art { display: block; width: 42px; height: 42px; margin: 0 auto 6px; object-fit: contain; }
-.avatar-option .ship-art-image, .avatar-option .ship-css-art { position: static; }
+.avatar-option i, .avatar-option img, .avatar-option .ship-art-image, .avatar-option .ship-art-inline, .avatar-option .ship-css-art { display: block; width: 42px; height: 42px; margin: 0 auto 6px; object-fit: contain; }
+.avatar-option .ship-art-image, .avatar-option .ship-art-inline, .avatar-option .ship-css-art { position: static; }
+.avatar-option .ship-art-tinted { position: relative; }
 .avatar-option i { border: 3px solid #f3f5e9; border-radius: 50% 50% 45% 45%; background: var(--avatar-color); box-shadow: 0 0 14px var(--avatar-color); }
 .avatar-option span, .avatar-option small { display: block; }
 .avatar-option span { font-size: .66rem; }
