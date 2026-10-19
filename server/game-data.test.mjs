@@ -11,8 +11,11 @@ import {
   formatRecoveryCode,
   normalizeRecoveryCode,
   validateCodeReward,
+  getEarnedProfileTitle,
+  PROFILE_TITLE_MILESTONES,
   validatePlayerProgress,
   validateRouletteTiers,
+  validateUpdateLog,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -26,6 +29,16 @@ test("password validation enforces length without changing the password", () => 
   assert.equal(isValidPassword("1234567890"), true);
   assert.equal(isValidPassword("short"), false);
   assert.equal(isValidPassword("x".repeat(129)), false);
+});
+
+test("profile titles unlock at route milestones and require an earned selected title", () => {
+  assert.equal(getEarnedProfileTitle(0, "cadet"), "");
+  assert.equal(getEarnedProfileTitle(1, "cadet"), "Cadet");
+  assert.equal(getEarnedProfileTitle(4, "pathfinder"), "");
+  assert.equal(getEarnedProfileTitle(5, "pathfinder"), "Pathfinder");
+  assert.equal(getEarnedProfileTitle(10, "not-a-title"), "");
+  const lastTitle = PROFILE_TITLE_MILESTONES.at(-1);
+  assert.equal(getEarnedProfileTitle(lastTitle.routes, lastTitle.id), lastTitle.name);
 });
 
 test("recovery codes use the unambiguous alphabet and display in four groups", () => {
@@ -45,13 +58,29 @@ test("code rewards use the bounded claims reward object contract", () => {
 
 test("roulette tiers validate bounds, unique names, and exact probability totals", () => {
   const tiers = [
-    { name: "Common", chance: 75, minReward: 1, maxReward: 10 },
-    { name: "Rare", chance: 25, minReward: 11, maxReward: 50 },
+    { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
+    { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
+    { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
   ];
   assert.deepEqual(validateRouletteTiers(tiers), tiers);
-  assert.equal(validateRouletteTiers([{ ...tiers[0], chance: 74 }, tiers[1]]), null);
-  assert.equal(validateRouletteTiers([tiers[0], { ...tiers[1], name: "common" }]), null);
-  assert.equal(validateRouletteTiers([{ ...tiers[0], maxReward: 0 }, tiers[1]]), null);
+  const invalidChance = structuredClone(tiers);
+  invalidChance[0].chances.claims = 44;
+  assert.equal(validateRouletteTiers(invalidChance), null);
+  const invalidBuyIn = structuredClone(tiers);
+  invalidBuyIn[1].buyIn = 15;
+  assert.equal(validateRouletteTiers(invalidBuyIn), null);
+  const invalidRange = structuredClone(tiers);
+  invalidRange[2].rewards.specialClaims = [5, 4];
+  assert.equal(validateRouletteTiers(invalidRange), null);
+});
+
+test("update log accepts bounded plain-text entries and rejects invalid dates or oversize history", () => {
+  const entries = [{ date: "2026-10-19", title: "New season", body: "A new route is available." }];
+  assert.deepEqual(validateUpdateLog(entries), entries);
+  assert.equal(validateUpdateLog([{ ...entries[0], date: "2026-02-31" }]), null);
+  assert.equal(validateUpdateLog([{ ...entries[0], title: "" }]), null);
+  assert.equal(validateUpdateLog([{ ...entries[0], body: "x".repeat(601) }]), null);
+  assert.equal(validateUpdateLog(Array.from({ length: 101 }, () => entries[0])), null);
 });
 
 test("MongoDB connection configuration accepts hosted URIs and rejects local Vercel URIs", () => {

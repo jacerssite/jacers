@@ -51,13 +51,14 @@ type UnflippedRouteSnapshot = {
 type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
 type ControlAction = "left" | "right" | "jump" | "down" | "shoot";
 type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
-type CosmeticGroup = "skin" | "trail" | "avatar";
-type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean };
+type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
+type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean; appearOffline?: boolean };
 type ManagedUser = {
     id: string;
     username: string;
     role: "player" | "tester" | "owner";
     banned: boolean;
+    isOnline: boolean;
     createdAt: string;
     usernameChangedAt: string | null;
     passwordChangedAt: string | null;
@@ -70,7 +71,32 @@ type ManagedUser = {
     progress: Record<string, string>;
 };
 type OnlineLeaderboardEntry = { id: string; userId: string; username: string; level: string; timeMs: number; abilities: string[]; achievedAt: string };
-type OnlineSettings = { goldenTimeLimitMs: number };
+type OnlinePlayerPresence = { username: string };
+type ProfileTitle = { id: string; name: string; routes: number };
+type PublicPlayerProfile = {
+    id: string;
+    username: string;
+    role: OnlineUser["role"];
+    asteroids: number;
+    specialAsteroids: number;
+    prestige: number;
+    routesCleared: number;
+    shipColor: string;
+    avatar: number;
+    skin: number;
+    trail: number;
+    title: string;
+    isOnline: boolean;
+};
+type RouletteTier = {
+    buyIn: 5 | 10 | 25;
+    chances: Record<"claims" | "specialClaims" | "color" | "trail" | "avatar", number>;
+    rewards: Record<"claims" | "specialClaims", readonly [number, number]>;
+};
+type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
+type UpdateLogEntry = { date: string; title: string; body: string };
+type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
+type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[] };
 type WorldGameConfig = {
     rainbowStarChance: number;
     rarityOdds: Record<Rarity, number>;
@@ -120,7 +146,25 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
         star: { durationSeconds: 15 },
     },
 };
+const DEFAULT_ROULETTE_TIERS: RouletteTier[] = [
+    { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
+    { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
+    { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
+];
+const PROFILE_TITLES: ProfileTitle[] = [
+    { id: "cadet", name: "Cadet", routes: 1 },
+    { id: "pathfinder", name: "Pathfinder", routes: 5 },
+    { id: "sector-ace", name: "Sector Ace", routes: 10 },
+    { id: "stellar-navigator", name: "Stellar Navigator", routes: 20 },
+    { id: "cosmic-legend", name: "Cosmic Legend", routes: 40 },
+];
+const STARTER_SHIP_COLORS = ["#62d6b2", "#f6c46e", "#ed7657", "#b991ff", "#6ecbff", "#f26d9b", "#f3f5e9", "#8bd46e"];
+const ROULETTE_SHIP_COLORS = ["#ff5ea8", "#c5f35a", "#ff914d", "#8d73ff", "#5bf0e8"];
 let gameConfig: GameConfig = structuredClone(DEFAULT_GAME_CONFIG);
+let rouletteTiers: RouletteTier[] = structuredClone(DEFAULT_ROULETTE_TIERS);
+let updateLogEntries: UpdateLogEntry[] = [];
+let selectedRouletteBuyIn: RouletteTier["buyIn"] = 5;
+let rouletteWheelPockets: RouletteWheelPocket[] = [];
 const testerSettingsDraft = new Map<string, string>();
 let levelMakerPreviewReturn: (() => void) | null = null;
 let isLevelMakerPreview = false;
@@ -283,7 +327,6 @@ let secretKeyRevealed = false;
 let endGoalLocked = false;
 let portalTravelInProgress = false;
 let portalTransitTimer = 0;
-let bossProjectileTimer = 0;
 let lastDownPressAt = 0;
 let spinInProgress = false;
 let activePlanet: "normal" | "prestige" = "normal";
@@ -296,6 +339,9 @@ let portalReturnState: { x: number; y: number; verticalSpeed: number; jumpCount:
 let currentOnlineUser: OnlineUser | null = null;
 let ownerBadgeObserver: MutationObserver | null = null;
 let accountNoticeTimer = 0;
+let presenceHeartbeatTimer = 0;
+let presenceHeartbeatInFlight = false;
+let managedPresenceTimer = 0;
 let accountNoticeOpen = false;
 let goldenTimeLimitMs = 60000;
 let musicContext: AudioContext | null = null;
@@ -439,6 +485,18 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     return payload;
 }
 
+async function sendPresenceHeartbeat() {
+    if (!currentOnlineUser || presenceHeartbeatInFlight) return;
+    presenceHeartbeatInFlight = true;
+    try {
+        await apiRequest<void>("/presence/heartbeat", { method: "POST", body: "{}" });
+    } catch (error) {
+        if (currentOnlineUser) console.error("Could not update online status:", error);
+    } finally {
+        presenceHeartbeatInFlight = false;
+    }
+}
+
 function getLocalAccountProgress() {
     return Object.fromEntries(
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -549,9 +607,14 @@ async function refreshOnlineState() {
         apiRequest<{ levels: Level[] }>("/levels"),
     ]);
     currentOnlineUser = session.user;
+    void sendPresenceHeartbeat();
     updateOwnerAccountIndicator();
     if (session.user) await syncAccountProgress("load");
     goldenTimeLimitMs = settings.goldenTimeLimitMs;
+    rouletteTiers = isUsableRouletteTiers(settings.rouletteTiers)
+        ? structuredClone(settings.rouletteTiers)
+        : structuredClone(DEFAULT_ROULETTE_TIERS);
+    updateLogEntries = Array.isArray(settings.updateLog) ? settings.updateLog : [];
     gameConfig = sharedConfig.config;
     if (session.user?.role === "tester") {
         const storedOverride = localStorage.getItem("orbit-tester-game-config");
@@ -563,6 +626,17 @@ async function refreshOnlineState() {
             } catch (error) {
                 localStorage.removeItem("orbit-tester-game-config");
                 console.error("Discarded invalid tester-only settings:", error);
+            }
+        }
+        const storedRouletteOverride = localStorage.getItem("orbit-tester-roulette-tiers");
+        if (storedRouletteOverride) {
+            try {
+                const parsed: unknown = JSON.parse(storedRouletteOverride);
+                if (isUsableRouletteTiers(parsed)) rouletteTiers = parsed;
+                else throw new Error("Stored tester roulette settings are malformed.");
+            } catch (error) {
+                localStorage.removeItem("orbit-tester-roulette-tiers");
+                console.error("Discarded invalid tester-only roulette settings:", error);
             }
         }
     }
@@ -620,6 +694,7 @@ export function startApp() {
     void refreshOnlineState().then(() => {
         if (!gameActive) showMenu();
     }).catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
+    if (!presenceHeartbeatTimer) presenceHeartbeatTimer = window.setInterval(() => void sendPresenceHeartbeat(), 30_000);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", () => pressedKeys.clear());
@@ -787,7 +862,7 @@ function showMenu() {
     menuActions.append(createMenuButton("Launch mission", showLevelMenu), createMenuButton("Customization", showCustomization), createMenuButton("Power-up shop", showShop), createMenuButton("Flight settings", showSettings));
     const accountRail = document.createElement("aside");
     accountRail.className = "account-rail";
-    const accountButton = createTextButton(currentOnlineUser ? currentOnlineUser.username : "Account", showAccount);
+    const accountButton = createTextButton(currentOnlineUser ? currentOnlineUser.username : "Account", () => showAccount());
     accountButton.classList.add("account-rail-button");
     accountButton.setAttribute("aria-label", currentOnlineUser ? `Account: ${currentOnlineUser.username}` : "Open account");
     accountRail.append(accountButton);
@@ -1136,13 +1211,15 @@ function showCustomization() {
             group.append(grid); panel.append(group);
         });
     };
-    const colorOptions = ["#62d6b2", "#f6c46e", "#ed7657", "#b991ff", "#6ecbff", "#f26d9b", "#f3f5e9", "#8bd46e"];
-    appendRarityGroups("Ship color", colorOptions.map((color, index) => ({ name: color, color, required: 0, index })), "color-grid", (option) => {
+    const colorOptions = [...STARTER_SHIP_COLORS, ...ROULETTE_SHIP_COLORS];
+    appendRarityGroups("Ship color", colorOptions.map((color, index) => ({ name: color, color, required: index < STARTER_SHIP_COLORS.length ? 0 : 30, index })), "color-grid", (option) => {
         const button = document.createElement("button");
+        const unlocked = option.index < STARTER_SHIP_COLORS.length || isSpinCosmeticUnlocked("color", option.index);
         button.className = `ship-color-choice ${selectedShipColor.toLowerCase() === option.color ? "selected" : ""}`;
         button.type = "button";
-        button.title = option.color;
-        button.setAttribute("aria-label", `Ship color ${option.color}`);
+        button.disabled = !unlocked;
+        button.title = unlocked ? option.color : "Unlock this color from the roulette wheel";
+        button.setAttribute("aria-label", `Ship color ${option.color}${unlocked ? "" : ", locked"}`);
         button.setAttribute("aria-pressed", String(selectedShipColor.toLowerCase() === option.color));
         button.style.setProperty("--ship-color-choice", option.color);
         button.addEventListener("click", () => {
@@ -1187,7 +1264,55 @@ function createShipPreview(loadout = { shipColor: selectedShipColor, avatar: sel
     const art = avatar.image ?? skin.image;
     const preview = document.createElement("aside");
     preview.className = "ship-preview";
-    preview.innerHTML = `<p class="setting-title">Current character</p><div class="preview-stage">${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, shipColor) : art ? createShipArtMarkup(art, avatar.name, shipColor) : `<div class="preview-ship ship-${skin.shape}" style="--ship-color:${shipColor}"><span></span><i></i></div>`}</div><b>${avatar.name}</b><small>Color ${shipColor} / ${skin.name} skin / ${trail.name} trail</small><div class="trail-preview" style="--trail-color:${trail.color}">${Array.from({ length: 5 }, (_, index) => `<i class="trail-preview-particle trail-effect-${trail.effect}" style="--trail-delay:${index * 90}ms"></i>`).join("")}</div>`;
+    const heading = document.createElement("p");
+    heading.className = "setting-title";
+    heading.textContent = "Current character";
+    const stage = document.createElement("div");
+    stage.className = "preview-stage";
+    const scene = document.createElement("div");
+    scene.className = "trail-preview-scene";
+    scene.style.setProperty("--trail-color", trail.color);
+    const particleElements = Array.from({ length: 5 }, (_, index) => {
+        const particle = document.createElement("i");
+        particle.className = `trail-particle trail-effect-${trail.effect} ${index === 0 ? "trail-head" : ""}`;
+        particle.style.setProperty("--trail-delay", `${index * 60}ms`);
+        scene.append(particle);
+        return particle;
+    });
+    const ship = document.createElement("div");
+    ship.className = "trail-preview-ship";
+    ship.innerHTML = avatar.cssArt
+        ? createCssShipArtMarkup(avatar.cssArt, avatar.name, shipColor)
+        : art
+            ? createShipArtMarkup(art, avatar.name, shipColor)
+            : `<div class="preview-ship ship-${skin.shape}" style="--ship-color:${shipColor}"><span></span><i></i></div>`;
+    scene.append(ship);
+    stage.append(scene);
+    const name = document.createElement("b");
+    name.textContent = avatar.name;
+    const details = document.createElement("small");
+    details.textContent = `Color ${shipColor} / ${skin.name} skin / ${trail.name} trail`;
+    preview.append(heading, stage, name, details);
+    let animationStart = 0;
+    let lastSampleAt = 0;
+    let previewPositions: { x: number; y: number }[] = [];
+    const animate = (timestamp: number) => {
+        if (!scene.isConnected) return;
+        if (!animationStart) animationStart = timestamp;
+        const elapsed = timestamp - animationStart;
+        const angle = (elapsed / 2600) * Math.PI * 2;
+        const anchor = { x: 116 + Math.cos(angle) * 48, y: 32 + Math.sin(angle) * 13 };
+        if (!lastSampleAt || timestamp - lastSampleAt >= 1000 / 30) {
+            previewPositions.unshift(anchor);
+            previewPositions = previewPositions.slice(0, 24);
+            lastSampleAt = timestamp;
+        }
+        const direction = previewPositions.length > 1 && anchor.x < previewPositions[1].x ? -1 : 1;
+        drawTrailParticles(particleElements, previewPositions, anchor, direction, false);
+        ship.style.transform = `translate(${anchor.x - 24}px, ${anchor.y - 18}px)`;
+        requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
     return preview;
 }
 
@@ -1243,6 +1368,30 @@ function createProgressArea() {
 function showCredits() {
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
     menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Procedural Space Ambience / generated in-browser by Jacer / no external track or license.</p>`;
+    const updates = document.createElement("section");
+    updates.className = "credits-updates";
+    const heading = document.createElement("h2");
+    heading.textContent = "Update log";
+    updates.append(heading);
+    if (!updateLogEntries.length) {
+        const empty = document.createElement("p");
+        empty.textContent = "No updates have been posted yet.";
+        updates.append(empty);
+    } else {
+        [...updateLogEntries].sort((first, second) => second.date.localeCompare(first.date)).forEach((entry) => {
+            const item = document.createElement("article");
+            const date = document.createElement("time");
+            date.dateTime = entry.date;
+            date.textContent = entry.date;
+            const title = document.createElement("h3");
+            title.textContent = entry.title;
+            const body = document.createElement("p");
+            body.textContent = entry.body;
+            item.append(date, title, body);
+            updates.append(item);
+        });
+    }
+    menu.append(updates);
     menu.append(createTextButton("Back", showMenu)); document.body.replaceChildren(menu);
 }
 
@@ -1253,7 +1402,7 @@ function showLeaderboard() {
     const accountSummary = document.createElement("p");
     accountSummary.className = "online-account-summary";
     accountSummary.setAttribute("role", "status");
-    const accountButton = createTextButton("Sign in / Create account", showAccount);
+    const accountButton = createTextButton("Sign in / Create account", () => showAccount());
     const levelPicker = document.createElement("select");
     levelPicker.className = "leaderboard-level-picker";
     const allLevels = document.createElement("option");
@@ -1273,8 +1422,49 @@ function showLeaderboard() {
     const serviceStatus = document.createElement("p");
     serviceStatus.className = "online-service-status";
     serviceStatus.setAttribute("role", "status");
-    menu.append(accountSummary, accountButton, levelPicker, serviceStatus, list, adminPanel, createTextButton("Mission select", showLevelMenu), createTextButton("Back", showMenu));
+    const onlinePresence = document.createElement("section");
+    onlinePresence.className = "online-presence";
+    const presenceHeading = document.createElement("h2");
+    presenceHeading.textContent = "Players online now";
+    const presenceStatus = document.createElement("p");
+    presenceStatus.className = "online-presence-status";
+    presenceStatus.setAttribute("role", "status");
+    presenceStatus.textContent = "Checking online players...";
+    const onlinePlayers = document.createElement("div");
+    onlinePlayers.className = "online-player-list";
+    onlinePresence.append(presenceHeading, presenceStatus, onlinePlayers);
+    menu.append(accountSummary, accountButton, levelPicker, serviceStatus, onlinePresence, list, adminPanel, createTextButton("Mission select", showLevelMenu), createTextButton("Back", showMenu));
     document.body.replaceChildren(menu);
+
+    const refreshOnlinePlayers = async () => {
+        try {
+            const response = await apiRequest<{ users: OnlinePlayerPresence[]; truncated: boolean }>("/presence");
+            if (!onlinePresence.isConnected) return;
+            onlinePlayers.replaceChildren();
+            response.users.forEach((player) => {
+                const name = document.createElement("span");
+                name.className = "online-player-name";
+                name.textContent = player.username;
+                onlinePlayers.append(name);
+            });
+            presenceStatus.textContent = response.truncated
+                ? "200+ players online now."
+                : `${response.users.length} player${response.users.length === 1 ? "" : "s"} online now.`;
+            if (!response.users.length) onlinePlayers.textContent = "No one is online right now.";
+        } catch (error) {
+            if (!onlinePresence.isConnected) return;
+            presenceStatus.textContent = `Online player status unavailable: ${error instanceof Error ? error.message : "unknown service error"}`;
+            console.error("Could not load online player status:", error);
+        }
+    };
+    void refreshOnlinePlayers();
+    const onlinePlayerRefreshTimer = window.setInterval(() => {
+        if (!onlinePresence.isConnected) {
+            window.clearInterval(onlinePlayerRefreshTimer);
+            return;
+        }
+        void refreshOnlinePlayers();
+    }, 30_000);
 
     const loadEntries = async () => {
         try {
@@ -1284,6 +1474,7 @@ function showLeaderboard() {
                 apiRequest<{ entries: OnlineLeaderboardEntry[] }>(`/leaderboard${levelPicker.value ? `?level=${encodeURIComponent(levelPicker.value)}` : ""}`),
             ]);
             currentOnlineUser = session.user;
+            void sendPresenceHeartbeat();
             goldenTimeLimitMs = settings.goldenTimeLimitMs;
             accountSummary.textContent = session.user
                 ? `Signed in as ${session.user.username}${getRoleBadge(session.user.role) ? ` / ${getRoleBadge(session.user.role)}` : ""}`
@@ -1346,27 +1537,26 @@ async function showLeaderboardPlayerProfile(playerId: string, returnTo: () => vo
     status.className = "online-service-status";
     status.setAttribute("role", "status");
     status.textContent = "Loading pilot profile...";
-    menu.append(status, createTextButton("Back to leaderboard", returnTo));
+    const back = createTextButton("Back to leaderboard", returnTo);
+    menu.append(status, back);
     document.body.replaceChildren(menu);
     try {
-        const response = await apiRequest<{ player: {
-            id: string;
-            username: string;
-            role: OnlineUser["role"];
-            asteroids: number;
-            specialAsteroids: number;
-            prestige: number;
-            routesCleared: number;
-            shipColor: string;
-            avatar: number;
-            skin: number;
-            trail: number;
-        } }>(`/players/${encodeURIComponent(playerId)}`);
+        const response = await apiRequest<{ player: PublicPlayerProfile }>(`/players/${encodeURIComponent(playerId)}`);
         if (!menu.isConnected) return;
         const { player } = response;
         const badge = getRoleBadge(player.role);
         const title = document.createElement("h2");
         title.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
+        if (player.title) {
+            const titleBadge = document.createElement("span");
+            titleBadge.className = "pilot-title-badge";
+            titleBadge.textContent = player.title;
+            title.append(titleBadge);
+        }
+        const presence = document.createElement("p");
+        presence.className = `profile-presence${player.isOnline ? " is-online" : ""}`;
+        presence.setAttribute("role", "status");
+        presence.textContent = player.isOnline ? "ONLINE NOW" : "OFFLINE";
         const dashboard = document.createElement("section");
         dashboard.className = "account-dashboard";
         const stats = document.createElement("div");
@@ -1383,14 +1573,29 @@ async function showLeaderboardPlayerProfile(playerId: string, returnTo: () => vo
             item.querySelector("b")!.textContent = value;
             stats.append(item);
         });
-        dashboard.append(title, stats, createShipPreview({
+        const character = createShipPreview({
             shipColor: player.shipColor,
             avatar: player.avatar,
             skin: player.skin,
             trail: player.trail,
-        }));
-        const back = createTextButton("Back to leaderboard", returnTo);
+        });
+        character.classList.add("profile-character-card");
+        dashboard.append(title, presence, stats, character);
         menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);
+        const presenceTimer = window.setInterval(() => {
+            if (!menu.isConnected) {
+                window.clearInterval(presenceTimer);
+                return;
+            }
+            void apiRequest<{ player: PublicPlayerProfile }>(`/players/${encodeURIComponent(playerId)}`).then((updated) => {
+                const isOnline = updated.player.isOnline;
+                presence.classList.toggle("is-online", isOnline);
+                presence.textContent = isOnline ? "ONLINE NOW" : "OFFLINE";
+            }).catch((error: unknown) => {
+                console.error("Could not refresh player profile presence:", error);
+                if (menu.isConnected) presence.textContent = "Online status could not be refreshed.";
+            });
+        }, 30_000);
     } catch (error) {
         status.textContent = error instanceof Error && error.message.includes("404")
             ? "That player profile could not be found."
@@ -1700,6 +1905,95 @@ async function renderAdminMessageTools(container: HTMLElement) {
     }
 }
 
+async function renderAdminUpdateLog(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Credits update log";
+    const description = document.createElement("p");
+    description.textContent = "Published entries appear in Credits for every player. Changes are recorded in settings history.";
+    const form = document.createElement("form");
+    form.className = "account-profile-form update-log-editor";
+    const entries = document.createElement("section");
+    entries.className = "update-log-editor-list";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    let draft = updateLogEntries.map((entry) => ({ ...entry }));
+    const drawEntries = () => {
+        entries.replaceChildren();
+        draft.forEach((entry, index) => {
+            const row = document.createElement("article");
+            row.className = "update-log-editor-entry";
+            const date = document.createElement("input");
+            date.type = "date";
+            date.value = entry.date;
+            date.required = true;
+            date.dataset.updateDate = String(index);
+            date.setAttribute("aria-label", `Update ${index + 1} date`);
+            const title = document.createElement("input");
+            title.type = "text";
+            title.value = entry.title;
+            title.maxLength = 80;
+            title.required = true;
+            title.placeholder = "Update title";
+            title.dataset.updateTitle = String(index);
+            title.setAttribute("aria-label", `Update ${index + 1} title`);
+            const body = document.createElement("textarea");
+            body.value = entry.body;
+            body.maxLength = 600;
+            body.required = true;
+            body.placeholder = "What changed?";
+            body.dataset.updateBody = String(index);
+            body.setAttribute("aria-label", `Update ${index + 1} details`);
+            const remove = createTextButton("Remove", () => {
+                draft = draft.filter((_, entryIndex) => entryIndex !== index);
+                drawEntries();
+            });
+            row.append(date, title, body, remove);
+            entries.append(row);
+        });
+        if (!draft.length) {
+            const empty = document.createElement("p");
+            empty.textContent = "The public update log is currently empty.";
+            entries.append(empty);
+        }
+    };
+    const add = createTextButton("Add update", () => {
+        draft.unshift({ date: new Date().toISOString().slice(0, 10), title: "", body: "" });
+        drawEntries();
+    });
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "menu-button";
+    save.textContent = "Publish update log";
+    form.append(entries, add, save, status);
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        status.textContent = "Saving update log...";
+        const nextEntries = draft.map((entry, index) => ({
+            date: entries.querySelector<HTMLInputElement>(`input[data-update-date="${index}"]`)?.value ?? entry.date,
+            title: entries.querySelector<HTMLInputElement>(`input[data-update-title="${index}"]`)?.value.trim() ?? entry.title,
+            body: entries.querySelector<HTMLTextAreaElement>(`textarea[data-update-body="${index}"]`)?.value.trim() ?? entry.body,
+        }));
+        try {
+            const result = await apiRequest<{ updateLog: UpdateLogEntry[] }>("/settings/update-log", {
+                method: "PUT",
+                body: JSON.stringify({ entries: nextEntries }),
+            });
+            updateLogEntries = result.updateLog;
+            draft = result.updateLog.map((entry) => ({ ...entry }));
+            drawEntries();
+            status.textContent = "Credits update log published.";
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not publish the update log.";
+        } finally {
+            save.disabled = false;
+        }
+    });
+    drawEntries();
+    container.append(heading, description, form);
+}
+
 function showAccount(initialMessage = "") {
     let registrationMode = false;
     const render = (messageText = initialMessage) => {
@@ -1765,11 +2059,72 @@ function showAccount(initialMessage = "") {
             usernameLabel.append(usernameInput);
             const profileHint = document.createElement("small");
             profileHint.setAttribute("role", "status");
+            const privacyRow = document.createElement("label");
+            privacyRow.className = "account-presence-setting";
+            privacyRow.innerHTML = `<span><b>Appear offline</b><small>Hide your online status from the leaderboard, player profiles, and owner player list.</small></span>`;
+            const privacyInput = document.createElement("input");
+            privacyInput.type = "checkbox";
+            privacyInput.checked = Boolean(currentOnlineUser.appearOffline);
+            privacyInput.setAttribute("aria-label", "Appear offline");
+            const privacyStatus = document.createElement("small");
+            privacyStatus.className = "presence-setting-status";
+            privacyStatus.setAttribute("role", "status");
+            privacyInput.addEventListener("change", async () => {
+                const previousValue = Boolean(currentOnlineUser?.appearOffline);
+                privacyInput.disabled = true;
+                privacyStatus.textContent = "Saving online visibility...";
+                try {
+                    const result = await apiRequest<{ appearOffline: boolean }>("/account/presence", {
+                        method: "PUT",
+                        body: JSON.stringify({ appearOffline: privacyInput.checked }),
+                    });
+                    if (currentOnlineUser) currentOnlineUser = { ...currentOnlineUser, appearOffline: result.appearOffline };
+                    privacyStatus.textContent = result.appearOffline ? "You will appear offline to other players." : "Your online status is visible to other players.";
+                } catch (error) {
+                    privacyInput.checked = previousValue;
+                    privacyStatus.textContent = error instanceof Error ? error.message : "Could not save online visibility.";
+                } finally {
+                    privacyInput.disabled = !currentOnlineUser;
+                }
+            });
+            privacyRow.append(privacyInput);
+            const earnedTitles = PROFILE_TITLES.filter((title) => getCompletedLevelCount() >= title.routes);
+            const titleRow = document.createElement("label");
+            titleRow.className = "account-title-setting";
+            titleRow.innerHTML = `<span><b>Pilot title</b><small>Earn titles by completing routes. Your chosen title appears on your public profile.</small></span>`;
+            const titleSelect = document.createElement("select");
+            titleSelect.setAttribute("aria-label", "Pilot title");
+            const noTitle = document.createElement("option");
+            noTitle.value = "";
+            noTitle.textContent = "No title";
+            titleSelect.append(noTitle);
+            earnedTitles.forEach((title) => {
+                const option = document.createElement("option");
+                option.value = title.id;
+                option.textContent = title.name;
+                titleSelect.append(option);
+            });
+            const savedTitle = localStorage.getItem("orbit-title") ?? "";
+            titleSelect.value = earnedTitles.some((title) => title.id === savedTitle) ? savedTitle : "";
+            const titleStatus = document.createElement("small");
+            titleStatus.className = "presence-setting-status";
+            titleStatus.setAttribute("role", "status");
+            titleSelect.addEventListener("change", () => {
+                localStorage.setItem("orbit-title", titleSelect.value);
+                titleStatus.textContent = "Saving pilot title...";
+                void syncAccountProgress("save").then(() => {
+                    titleStatus.textContent = "Pilot title saved to your account.";
+                }).catch((error: unknown) => {
+                    titleStatus.textContent = `Title saved on this device, but account sync failed: ${error instanceof Error ? error.message : "online service error"}`;
+                    console.error("Could not sync selected pilot title:", error);
+                });
+            });
+            titleRow.append(titleSelect);
             const saveProfile = document.createElement("button");
             saveProfile.className = "menu-button";
             saveProfile.type = "submit";
             saveProfile.textContent = "Save profile";
-            profileForm.append(usernameLabel, saveProfile, profileHint);
+            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, titleRow, titleStatus);
             profileForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 saveProfile.disabled = true;
@@ -1984,6 +2339,7 @@ function showAccount(initialMessage = "") {
                         body: JSON.stringify({ username: username.value, password: password.value }),
                     });
                     currentOnlineUser = response.user;
+                    void sendPresenceHeartbeat();
                     updateOwnerAccountIndicator();
                     try {
                         await syncAccountProgress("load");
@@ -2426,7 +2782,7 @@ function showShop() {
     cancelAnimationFrame(animationFrame);
     const menu = document.createElement("main");
     menu.className = "menu-screen shop-screen";
-    menu.innerHTML = `<p class="eyebrow">FLIGHT SUPPLY / SHOP</p><h1>Stock your <em>ship</em></h1><p class="menu-copy">Buy single-use power-ups with claimed asteroids. Use them from the power-up bar at the top of a mission.</p>`;
+    menu.innerHTML = `<p class="eyebrow">FLIGHT SUPPLY / SHOP</p><h1>Stock your <em>ship</em></h1><p class="menu-copy">Buy single-use power-ups with claimed asteroids, or spend special asteroids on a collection wheel.</p>`;
     const inventory = getInventory();
     const currency = document.createElement("p");
     currency.className = "shop-currency";
@@ -2448,45 +2804,182 @@ function showShop() {
     });
     const wheel = document.createElement("article");
     wheel.className = "asteroid-wheel";
-    wheel.innerHTML = `<div class="wheel-ring"><span>✦</span></div><b>ASTEROID ROLL</b><small>1 special asteroid / one reward only / reward odds and amounts can be tuned in tester tools</small>`;
+    const wheelPointer = document.createElement("i");
+    wheelPointer.className = "wheel-pointer";
+    wheelPointer.setAttribute("aria-hidden", "true");
+    const wheelRing = document.createElement("div");
+    wheelRing.className = "wheel-ring";
+    wheelRing.setAttribute("role", "img");
+    wheelRing.setAttribute("aria-label", "Roulette wheel with numbered pockets from 0 to 36");
+    const wheelHub = document.createElement("div");
+    wheelHub.className = "wheel-hub";
+    wheelHub.setAttribute("aria-hidden", "true");
+    wheelHub.textContent = "✦";
+    const wheelTitle = document.createElement("b");
+    wheelTitle.textContent = "ASTEROID ROLL";
+    const tierLabel = document.createElement("label");
+    tierLabel.className = "wheel-tier-label";
+    tierLabel.append(document.createTextNode("Buy-in"));
+    const tierSelect = document.createElement("select");
+    tierSelect.setAttribute("aria-label", "Roulette buy-in");
+    rouletteTiers.forEach((tier) => {
+        const option = document.createElement("option");
+        option.value = String(tier.buyIn);
+        option.textContent = `${tier.buyIn} special asteroids`;
+        option.selected = tier.buyIn === selectedRouletteBuyIn;
+        tierSelect.append(option);
+    });
+    tierLabel.append(tierSelect);
+    const wheelStatus = document.createElement("small");
+    wheelStatus.className = "wheel-status";
+    wheelStatus.setAttribute("role", "status");
+    const collectionComplete = document.createElement("small");
+    collectionComplete.className = "wheel-collection-complete";
+    const wheelControls = document.createElement("div");
+    wheelControls.className = "wheel-stage";
+    wheelControls.append(wheelRing, wheelHub, wheelPointer);
     const roll = document.createElement("button");
     roll.className = "text-button shop-buy";
     roll.type = "button";
-    roll.textContent = "Spin left to right / 1 special";
-    roll.disabled = specialAsteroids < 1 || spinInProgress;
+    roll.textContent = "Spin";
+    const drawWheel = () => {
+        const tier = rouletteTiers.find((item) => item.buyIn === selectedRouletteBuyIn) ?? rouletteTiers[0];
+        currency.textContent = `NORMAL ${asteroidsClaimed}  /  SPECIAL ${specialAsteroids}`;
+        const pocketCount = 37;
+        const pocketAngle = 360 / pocketCount;
+        const colors = ["#167d83", "#2550a2"];
+        const gradients: string[] = [];
+        wheelRing.replaceChildren();
+        rouletteWheelPockets = [];
+        for (let index = 0; index < pocketCount; index++) {
+            const start = index * pocketAngle;
+            const end = start + pocketAngle;
+            const color = index === 0 ? "#c79736" : colors[index % colors.length];
+            gradients.push(`${color} ${start + 0.55}deg ${end - 0.55}deg`);
+            const label = document.createElement("span");
+            label.className = "wheel-pocket-label";
+            label.textContent = String(index);
+            const midpoint = (start + end) / 2;
+            label.style.transform = `translate(-50%, -50%) rotate(${midpoint}deg) translateY(-102px) rotate(${-midpoint}deg)`;
+            wheelRing.append(label);
+            rouletteWheelPockets.push({ index, startAngle: start, endAngle: end });
+        }
+        wheelRing.style.background = `conic-gradient(${gradients.join(", ")})`;
+        collectionComplete.textContent = areRouletteCosmeticsComplete() ? "Collection complete — only asteroid prizes remain." : "";
+        roll.disabled = specialAsteroids < tier.buyIn || spinInProgress;
+        roll.textContent = `Spin / ${tier.buyIn} special`;
+        wheelStatus.textContent = spinInProgress
+            ? `The ${tier.buyIn}-asteroid wheel is spinning...`
+            : `Available: ${specialAsteroids} special asteroids`;
+    };
+    tierSelect.addEventListener("change", () => {
+        selectedRouletteBuyIn = Number(tierSelect.value) as RouletteTier["buyIn"];
+        drawWheel();
+    });
     roll.addEventListener("click", () => {
-        if (specialAsteroids < 1 || spinInProgress) return;
+        const tier = rouletteTiers.find((item) => item.buyIn === selectedRouletteBuyIn) ?? rouletteTiers[0];
+        const segments = getRouletteSegments(tier);
+        if (specialAsteroids < tier.buyIn || spinInProgress || !segments.length) return;
         spinInProgress = true;
-        specialAsteroids--;
+        specialAsteroids -= tier.buyIn;
         localStorage.setItem("orbit-special-claims", String(specialAsteroids));
-        wheel.classList.add("spinning");
+        const totalWeight = segments.reduce((sum, segment) => sum + segment.weight, 0);
+        let targetWeight = Math.random() * totalWeight;
+        const chosenSegment = segments.find((segment) => {
+            targetWeight -= segment.weight;
+            return targetWeight < 0;
+        }) ?? segments[segments.length - 1];
+        const reward = getRouletteReward(chosenSegment.type, tier);
+        const chosenPocket = rouletteWheelPockets[Math.floor(Math.random() * rouletteWheelPockets.length)];
+        const midpoint = (chosenPocket.startAngle + chosenPocket.endAngle) / 2;
+        const duration = reward.rarity === "Legendary" ? 7400 : reward.rarity === "Epic" ? 6800 : 6000;
+        const finalRotation = 6 * 360 + ((360 - midpoint) % 360);
+        const startedAt = performance.now();
+        const currentRotation = 0;
+        tierSelect.disabled = true;
         roll.disabled = true;
-        const rarity = rollSpecialAsteroidRarity();
-        const resultCopy = getSpecialSpinReward(rarity);
-        window.setTimeout(() => {
+        wheel.classList.add("spinning");
+        wheelStatus.textContent = `The ${tier.buyIn}-asteroid wheel is spinning...`;
+        drawWheel();
+        tierSelect.disabled = true;
+        roll.disabled = true;
+        let savedAccountError = "";
+        if (currentOnlineUser) {
+            void syncAccountProgress("save", true).catch((error: unknown) => {
+                console.error("Could not sync roulette reward:", error);
+                savedAccountError = " It is saved on this device; account sync failed and will retry.";
+            });
+        }
+        const animate = (now: number) => {
+            if (!menu.isConnected) {
+                spinInProgress = false;
+                return;
+            }
+            const progress = Math.min(1, (now - startedAt) / duration);
+            const accelerationEnd = 0.17;
+            const cruiseEnd = 0.5;
+            const angle = progress < accelerationEnd
+                ? 540 * ((progress / accelerationEnd) ** 2)
+                : progress < cruiseEnd
+                    ? 540 + (2160 - 540) * ((progress - accelerationEnd) / (cruiseEnd - accelerationEnd))
+                    : 2160 + (finalRotation - 2160) * (1 - (1 - (progress - cruiseEnd) / (1 - cruiseEnd)) ** 4);
+            const nearMiss = progress > 0.9 ? Math.sin(((progress - 0.9) / 0.1) * Math.PI) * 8 : 0;
+            wheelRing.style.transform = `rotate(${currentRotation + angle + nearMiss}deg)`;
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+                return;
+            }
+            wheelRing.style.transform = `rotate(${finalRotation}deg)`;
             spinInProgress = false;
-            if (!document.body.contains(menu)) return;
             wheel.classList.remove("spinning");
+            tierSelect.disabled = false;
+            drawWheel();
             const result = document.createElement("div");
             result.className = "spin-result";
             result.setAttribute("role", "dialog");
             result.setAttribute("aria-modal", "true");
-            result.innerHTML = `<div class="spin-result-card"><p class="eyebrow">ROLL COMPLETE</p>${createRarityBadge(rarity)}<h2>${resultCopy.title}</h2><p>${resultCopy.description}</p></div>`;
+            const card = document.createElement("div");
+            card.className = `spin-result-card${reward.rarity === "Epic" || reward.rarity === "Legendary" ? " rare-win" : ""}`;
+            const eyebrow = document.createElement("p");
+            eyebrow.className = "eyebrow";
+            eyebrow.textContent = reward.collectionComplete ? "COLLECTION COMPLETE" : "ROLL COMPLETE";
+            const heading = document.createElement("h2");
+            heading.textContent = reward.title;
+            if (reward.amount !== undefined && reward.currencyLabel) {
+                const countStartedAt = performance.now();
+                const countUp = (timestamp: number) => {
+                    if (!heading.isConnected) return;
+                    const ratio = Math.min(1, (timestamp - countStartedAt) / 1000);
+                    const displayed = Math.round(reward.amount! * ratio);
+                    heading.textContent = `+${displayed} ${reward.currencyLabel}`;
+                    if (ratio < 1) requestAnimationFrame(countUp);
+                };
+                requestAnimationFrame(countUp);
+            }
+            const description = document.createElement("p");
+            description.textContent = `${reward.description}${savedAccountError}`;
+            card.append(eyebrow);
+            if (reward.rarity) {
+                const badge = document.createElement("span");
+                badge.className = `rarity-badge rarity-${reward.rarity.toLowerCase()}`;
+                badge.textContent = reward.rarity;
+                card.append(badge);
+            }
+            card.append(heading, description);
             const close = document.createElement("button");
             close.className = "menu-button";
             close.type = "button";
             close.textContent = "Continue";
             close.addEventListener("click", () => showShop());
-            result.querySelector(".spin-result-card")?.append(close);
+            card.append(close);
+            result.append(card);
             menu.append(result);
-        }, 850);
+        };
+        requestAnimationFrame(animate);
     });
-    wheel.append(roll);
-    const odds = document.createElement("section");
-    odds.className = "shop-odds";
-    const rarityOdds = getConfiguredRarityOdds();
-    odds.innerHTML = `<b>Special asteroid odds</b>${RARITY_ORDER.map((rarity) => `<span>${rarity} ${rarityOdds[rarity]}%</span>`).join("")}`;
-    menu.append(currency, grid, wheel, odds, createTextButton("Mission select", showLevelMenu), createTextButton("Main menu", showMenu), createPageCounter());
+    wheel.append(wheelControls, wheelTitle, tierLabel, collectionComplete, roll, wheelStatus);
+    drawWheel();
+    menu.append(currency, grid, wheel, createTextButton("Mission select", showLevelMenu), createTextButton("Main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
 }
 
@@ -2503,39 +2996,101 @@ function cosmeticUnlockKey(group: CosmeticGroup, index: number) { return `orbit-
 function isSpinCosmeticUnlocked(group: CosmeticGroup, index: number) { return localStorage.getItem(cosmeticUnlockKey(group, index)) === "1"; }
 function unlockSpinCosmetic(group: CosmeticGroup, index: number) { localStorage.setItem(cosmeticUnlockKey(group, index), "1"); }
 
-function rollSpecialAsteroidRarity(): Rarity {
-    const roll = Math.random() * 100;
-    let threshold = 0;
-    const odds = getConfiguredRarityOdds();
-    for (const rarity of RARITY_ORDER) {
-        threshold += odds[rarity];
-        if (roll < threshold) return rarity;
+function getAvailableRouletteCosmetics(type: "color"): { color: string; index: number }[];
+function getAvailableRouletteCosmetics(type: "trail"): { item: TrailStyle; index: number }[];
+function getAvailableRouletteCosmetics(type: "avatar"): { item: AvatarStyle; index: number }[];
+function getAvailableRouletteCosmetics(type: "color" | "trail" | "avatar"): ({ color: string; index: number } | { item: TrailStyle | AvatarStyle; index: number })[];
+function getAvailableRouletteCosmetics(type: "color" | "trail" | "avatar") {
+    if (type === "color") {
+        return ROULETTE_SHIP_COLORS.map((color, offset) => ({ color, index: STARTER_SHIP_COLORS.length + offset }))
+            .filter(({ index }) => !isSpinCosmeticUnlocked("color", index));
     }
-    return "Common";
+    if (type === "trail") return trails.map((item, index) => ({ item, index })).filter(({ item, index }) => !isTrailUnlocked(item) && !isSpinCosmeticUnlocked("trail", index));
+    return avatars.map((item, index) => ({ item, index })).filter(({ item, index }) => !isAvatarUnlocked(item) && !isSpinCosmeticUnlocked("avatar", index));
 }
 
-function getSpecialSpinReward(rarity: Rarity) {
-    const skinChance = getConfiguredSkinChances()[rarity] / 100;
-    const availableSkins = skins
-        .map((skin, index) => ({ skin, index }))
-        .filter(({ skin, index }) => getCosmeticRarity(skin) === rarity && !isSpinCosmeticUnlocked("skin", index));
-    if (availableSkins.length && Math.random() < skinChance) {
-        const chosen = availableSkins[Math.floor(Math.random() * availableSkins.length)];
-        unlockSpinCosmetic("skin", chosen.index);
-        selectedSkin = chosen.index;
-        localStorage.setItem("orbit-skin", String(selectedSkin));
+function areRouletteCosmeticsComplete() {
+    return !getAvailableRouletteCosmetics("color").length
+        && !getAvailableRouletteCosmetics("trail").length
+        && !getAvailableRouletteCosmetics("avatar").length;
+}
+
+function chooseRouletteCosmetic<T>(candidates: T[], rarityFor: (candidate: T) => Rarity, tier: RouletteTier) {
+    const tierBoost = tier.buyIn === 25 ? 2 : tier.buyIn === 10 ? 1 : 0;
+    const weighted = candidates.map((candidate) => {
+        const rarityIndex = RARITY_ORDER.indexOf(rarityFor(candidate));
+        return { candidate, weight: (0.55 ** rarityIndex) * (1 + tierBoost * rarityIndex * 0.3) };
+    });
+    let random = Math.random() * weighted.reduce((sum, entry) => sum + entry.weight, 0);
+    return weighted.find((entry) => (random -= entry.weight) < 0)?.candidate ?? weighted[weighted.length - 1].candidate;
+}
+
+function getRouletteSegments(tier: RouletteTier) {
+    const labels: Record<"claims" | "specialClaims" | "color" | "trail" | "avatar", string> = {
+        claims: "Asteroids",
+        specialClaims: "Special",
+        color: "Color",
+        trail: "Trail",
+        avatar: "Avatar",
+    };
+    return (Object.keys(tier.chances) as (keyof RouletteTier["chances"])[])
+        .filter((type) => tier.chances[type] > 0 && (type === "claims" || type === "specialClaims" || getAvailableRouletteCosmetics(type).length > 0))
+        .map((type) => ({
+            type,
+            label: labels[type],
+            weight: tier.chances[type],
+            startAngle: 0,
+            endAngle: 0,
+        }));
+}
+
+function getRouletteReward(type: keyof RouletteTier["chances"], tier: RouletteTier): RouletteReward {
+    if (type === "claims" || type === "specialClaims") {
+        const [minimum, maximum] = tier.rewards[type];
+        const amount = minimum + Math.floor(Math.random() * (maximum - minimum + 1));
+        if (type === "claims") {
+            asteroidsClaimed += amount;
+            localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+        } else {
+            specialAsteroids += amount;
+            localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+        }
         return {
-            title: `You got <em>${chosen.skin.name}</em>`,
-            description: `${rarity} skin added to your collection. This spin awarded a skin only.`,
+            title: `+${amount} ${type === "claims" ? "asteroids" : "special asteroids"}`,
+            description: areRouletteCosmeticsComplete()
+                ? "Collection complete — asteroid prizes only. The reward was added before the wheel animation began."
+                : "The reward was added before the wheel animation began.",
+            collectionComplete: areRouletteCosmeticsComplete(),
+            amount,
+            currencyLabel: type === "claims" ? "asteroids" : "special asteroids",
         };
     }
-    const [minimum, maximum] = getConfiguredRewardRanges()[rarity];
-    const reward = minimum + Math.floor(Math.random() * (maximum - minimum + 1));
-    asteroidsClaimed += reward;
-    localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+    if (type === "color") {
+        const candidates = getAvailableRouletteCosmetics("color");
+        if (!candidates.length) return getRouletteReward("claims", tier);
+        const chosen = chooseRouletteCosmetic(candidates, () => getCosmeticRarity({ required: 30 }), tier);
+        unlockSpinCosmetic(type, chosen.index);
+        const color = chosen.color;
+        selectedShipColor = color;
+        localStorage.setItem("orbit-ship-color", color);
+        return { title: `${color} ship color`, description: "New color unlocked and equipped.", rarity: getCosmeticRarity({ required: 30 }), collectionComplete: false };
+    }
+    if (type === "trail") {
+        const candidates = getAvailableRouletteCosmetics("trail");
+        if (!candidates.length) return getRouletteReward("claims", tier);
+        const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier);
+        unlockSpinCosmetic(type, chosen.index);
+        return { title: `${chosen.item.name} trail`, description: "New trail unlocked. Equip it from Customization.", rarity: getCosmeticRarity(chosen.item), collectionComplete: false };
+    }
+    const candidates = getAvailableRouletteCosmetics("avatar");
+    if (!candidates.length) return getRouletteReward("claims", tier);
+    const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier);
+    unlockSpinCosmetic(type, chosen.index);
     return {
-        title: `You got <em>${reward} asteroids</em>`,
-        description: `${rarity} asteroid cache secured. This spin awarded asteroids only.`,
+        title: `${chosen.item.name} avatar`,
+        description: "New avatar unlocked. Equip it from Customization.",
+        rarity: getCosmeticRarity(chosen.item),
+        collectionComplete: false,
     };
 }
 
@@ -2544,7 +3099,53 @@ function showDropRates() {
     cancelAnimationFrame(animationFrame);
     const menu = document.createElement("main");
     menu.className = "menu-screen drop-rates-screen";
-    menu.innerHTML = `<p class="eyebrow">SPECIAL ASTEROID / DROP RATES</p><h1>Know the <em>odds</em></h1><p class="menu-copy">Every spin gives one reward. Roll chances, asteroid rewards, and skin chances can be adjusted in the tester panel.</p>`;
+    menu.innerHTML = `<p class="eyebrow">SPECIAL ASTEROID / DROP RATES</p><h1>Know the <em>odds</em></h1><p class="menu-copy">Roulette probabilities are listed here by buy-in. The wheel itself only shows numbered pockets.</p>`;
+    const rouletteOdds = document.createElement("section");
+    rouletteOdds.className = "roulette-odds";
+    const rouletteHeading = document.createElement("h2");
+    rouletteHeading.textContent = "Roulette odds";
+    rouletteOdds.append(rouletteHeading);
+    const rouletteOddsGrid = document.createElement("div");
+    rouletteOddsGrid.className = "roulette-odds-grid";
+    const rewardLabels: Record<keyof RouletteTier["chances"], string> = {
+        claims: "Asteroids",
+        specialClaims: "Special asteroids",
+        color: "Ship color",
+        trail: "Trail",
+        avatar: "Avatar",
+    };
+    const rewardTypes = Object.keys(rewardLabels) as (keyof RouletteTier["chances"])[];
+    [...rouletteTiers].sort((first, second) => first.buyIn - second.buyIn).forEach((tier) => {
+        const card = document.createElement("article");
+        card.className = "roulette-odds-card";
+        const title = document.createElement("h3");
+        title.textContent = `${tier.buyIn} special asteroid buy-in`;
+        const rows = document.createElement("dl");
+        rewardTypes.forEach((type) => {
+            const row = document.createElement("div");
+            const label = document.createElement("dt");
+            label.textContent = rewardLabels[type];
+            const value = document.createElement("dd");
+            value.textContent = `${tier.chances[type].toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+            row.append(label, value);
+            if (type === "claims" || type === "specialClaims") {
+                const [minimum, maximum] = tier.rewards[type];
+                const range = document.createElement("small");
+                range.textContent = `Reward: ${minimum.toLocaleString()}-${maximum.toLocaleString()}`;
+                row.append(range);
+            }
+            rows.append(row);
+        });
+        card.append(title, rows);
+        rouletteOddsGrid.append(card);
+    });
+    const oddsNote = document.createElement("p");
+    oddsNote.className = "roulette-odds-note";
+    oddsNote.textContent = "These are the configured odds. If a cosmetic collection is complete, its reward type is excluded and the remaining odds are normalized.";
+    rouletteOdds.append(rouletteOddsGrid, oddsNote);
+    const rarityHeading = document.createElement("h2");
+    rarityHeading.className = "rarity-odds-heading";
+    rarityHeading.textContent = "Asteroid rarity guide";
     const odds = document.createElement("section");
     odds.className = "rarity-odds";
     const rarityOdds = getConfiguredRarityOdds();
@@ -2573,7 +3174,7 @@ function showDropRates() {
         group.innerHTML = `<h2>${collection.title}</h2><div>${orderedItems.map((item) => `<span>${item.name}${createRarityBadge(getCosmeticRarity(item))}</span>`).join("")}</div>`;
         catalog.append(group);
     });
-    menu.append(odds, catalog, createTextButton("Back to main menu", showMenu), createPageCounter());
+    menu.append(rouletteOdds, rarityHeading, odds, catalog, createTextButton("Back to main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
 }
 
@@ -2656,6 +3257,7 @@ function showTesterLogin() {
                 body: JSON.stringify({ username: username.value, password: password.value }),
             });
             currentOnlineUser = response.user;
+            void sendPresenceHeartbeat();
             updateOwnerAccountIndicator();
             if (response.user.role !== "owner") {
                 message.textContent = "This account does not have owner access.";
@@ -2693,11 +3295,15 @@ function readTesterSetting(key: string, fallback: number, world?: "normal" | "pr
 }
 
 async function loadManagedUsers(container: HTMLElement) {
+    if (managedPresenceTimer) {
+        window.clearInterval(managedPresenceTimer);
+        managedPresenceTimer = 0;
+    }
     container.replaceChildren();
     const heading = document.createElement("h2");
     heading.textContent = "Player accounts";
     const description = document.createElement("p");
-    description.textContent = "Review player stats, ban or restore access, rename accounts, and edit saved profile data.";
+    description.textContent = "Review player stats and live online status, ban or restore access, rename accounts, and edit saved profile data.";
     const status = document.createElement("small");
     status.className = "tester-error";
     status.setAttribute("role", "status");
@@ -2714,6 +3320,11 @@ async function loadManagedUsers(container: HTMLElement) {
             const summary = document.createElement("summary");
             summary.textContent = `${user.username} / ${user.banned ? "BANNED" : "ACTIVE"} / ${user.role.toUpperCase()}`;
             card.append(summary);
+            const presence = document.createElement("small");
+            presence.className = `player-presence-status${user.isOnline ? " is-online" : ""}`;
+            presence.dataset.presenceUserId = user.id;
+            presence.textContent = user.isOnline ? "ONLINE NOW" : "OFFLINE";
+            card.append(presence);
             const stats = document.createElement("p");
             stats.textContent = `Asteroids: ${user.progress["orbit-claims"] ?? "0"} / Special: ${user.progress["orbit-special-claims"] ?? "0"} / Prestige: ${user.progress["orbit-prestige"] ?? "0"} / Power-ups: ${user.progress["orbit-powerups"] ?? "{}"}`;
             const created = document.createElement("small");
@@ -3103,6 +3714,28 @@ async function loadManagedUsers(container: HTMLElement) {
             void loadBackups();
             container.append(card);
         });
+        const refreshPresence = async () => {
+            const response = await apiRequest<{ users: Pick<ManagedUser, "id" | "isOnline">[] }>("/admin/presence");
+            if (!container.isConnected) return;
+            const onlineById = new Map(response.users.map((user) => [user.id, user.isOnline]));
+            container.querySelectorAll<HTMLElement>("[data-presence-user-id]").forEach((item) => {
+                const isOnline = onlineById.get(item.dataset.presenceUserId ?? "") ?? false;
+                item.classList.toggle("is-online", isOnline);
+                item.textContent = isOnline ? "ONLINE NOW" : "OFFLINE";
+            });
+        };
+        const presenceTimer = window.setInterval(() => {
+            if (!container.isConnected) {
+                window.clearInterval(presenceTimer);
+                if (managedPresenceTimer === presenceTimer) managedPresenceTimer = 0;
+                return;
+            }
+            void refreshPresence().catch((error: unknown) => {
+                console.error("Could not refresh player online statuses:", error);
+                status.textContent = `Accounts loaded, but online status refresh failed: ${error instanceof Error ? error.message : "unknown service error"}`;
+            });
+        }, 30_000);
+        managedPresenceTimer = presenceTimer;
     } catch (error) {
         status.textContent = error instanceof Error ? error.message : "Could not load player accounts.";
     }
@@ -3147,6 +3780,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const messageManagement = document.createElement("section");
     messageManagement.className = "tester-player-management";
     messageManagement.hidden = true;
+    const updateLogManagement = document.createElement("section");
+    updateLogManagement.className = "tester-player-management";
+    updateLogManagement.hidden = true;
     const testerTabs = document.createElement("nav");
     testerTabs.className = "tester-panel-tabs";
     const settingsTab = createTextButton("Game settings", () => {
@@ -3155,8 +3791,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         accountManagement.hidden = true;
         codeManagement.hidden = true;
         messageManagement.hidden = true;
+        updateLogManagement.hidden = true;
         settingsTab.classList.add("selected");
-        [usersTab, codesTab, messagesTab].forEach((tab) => tab.classList.remove("selected"));
+        [usersTab, codesTab, messagesTab, updateLogTab].forEach((tab) => tab.classList.remove("selected"));
     });
     const usersTab = createTextButton("Player accounts", () => {
         worldTabs.hidden = true;
@@ -3164,9 +3801,11 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         accountManagement.hidden = false;
         codeManagement.hidden = true;
         messageManagement.hidden = true;
+        updateLogManagement.hidden = true;
         settingsTab.classList.remove("selected");
         codesTab.classList.remove("selected");
         messagesTab.classList.remove("selected");
+        updateLogTab.classList.remove("selected");
         usersTab.classList.add("selected");
         void loadManagedUsers(accountManagement);
     });
@@ -3177,7 +3816,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         accountManagement.hidden = true;
         codeManagement.hidden = false;
         messageManagement.hidden = true;
-        [settingsTab, usersTab, messagesTab].forEach((tab) => tab.classList.remove("selected"));
+        updateLogManagement.hidden = true;
+        [settingsTab, usersTab, messagesTab, updateLogTab].forEach((tab) => tab.classList.remove("selected"));
         codesTab.classList.add("selected");
         void renderAdminCodeTools(codeManagement);
     });
@@ -3188,13 +3828,26 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         accountManagement.hidden = true;
         codeManagement.hidden = true;
         messageManagement.hidden = false;
-        [settingsTab, usersTab, codesTab].forEach((tab) => tab.classList.remove("selected"));
+        updateLogManagement.hidden = true;
+        [settingsTab, usersTab, codesTab, updateLogTab].forEach((tab) => tab.classList.remove("selected"));
         messagesTab.classList.add("selected");
         void renderAdminMessageTools(messageManagement);
     });
     messagesTab.hidden = !isOwner;
+    const updateLogTab = createTextButton("Update log", () => {
+        worldTabs.hidden = true;
+        form.hidden = true;
+        accountManagement.hidden = true;
+        codeManagement.hidden = true;
+        messageManagement.hidden = true;
+        updateLogManagement.hidden = false;
+        [settingsTab, usersTab, codesTab, messagesTab].forEach((tab) => tab.classList.remove("selected"));
+        updateLogTab.classList.add("selected");
+        void renderAdminUpdateLog(updateLogManagement);
+    });
+    updateLogTab.hidden = !isOwner;
     settingsTab.classList.add("selected");
-    testerTabs.append(settingsTab, usersTab, codesTab, messagesTab);
+    testerTabs.append(settingsTab, usersTab, codesTab, messagesTab, updateLogTab);
     const selectedConfig = gameConfig[selectedWorld];
     const claimsLabel = document.createElement("label");
     claimsLabel.innerHTML = `<span>Asteroids</span>`;
@@ -3307,6 +3960,56 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     rewardSettingsError.setAttribute("role", "status");
     rewardSettings.append(rewardSettingsError);
     form.append(rewardSettings);
+    const rouletteSettings = document.createElement("section");
+    rouletteSettings.className = "tester-reward-settings roulette-settings-editor";
+    const rouletteHeading = document.createElement("p");
+    rouletteHeading.className = "setting-title";
+    rouletteHeading.textContent = "Roulette buy-in and prize chances";
+    const rouletteDescription = document.createElement("p");
+    rouletteDescription.className = "menu-copy";
+    rouletteDescription.textContent = "Edit the 5, 10, and 25 special-asteroid tiers as JSON. Percentages in each tier must total 100 and appear on the odds page; the wheel only shows numbered pockets.";
+    const rouletteEditor = document.createElement("textarea");
+    rouletteEditor.value = JSON.stringify(rouletteTiers, null, 2);
+    rouletteEditor.setAttribute("aria-label", "Roulette tier configuration");
+    const rouletteStatus = document.createElement("small");
+    rouletteStatus.setAttribute("role", "status");
+    const saveRoulette = createTextButton("Save roulette tiers", async () => {
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(rouletteEditor.value);
+        } catch {
+            rouletteStatus.textContent = "Enter valid JSON for all three roulette tiers.";
+            return;
+        }
+        if (!isUsableRouletteTiers(parsed)) {
+            rouletteStatus.textContent = "Each tier needs its fixed buy-in, valid reward chances totaling 100%, and bounded reward ranges.";
+            return;
+        }
+        saveRoulette.disabled = true;
+        try {
+            if (isOwner) {
+                const response = await apiRequest<{ rouletteTiers: RouletteTier[] }>("/settings/roulette-tiers", {
+                    method: "PUT",
+                    body: JSON.stringify({ tiers: parsed }),
+                });
+                rouletteTiers = response.rouletteTiers;
+            } else {
+                rouletteTiers = structuredClone(parsed);
+                localStorage.setItem("orbit-tester-roulette-tiers", JSON.stringify(rouletteTiers));
+            }
+            rouletteEditor.value = JSON.stringify(rouletteTiers, null, 2);
+            rouletteStatus.textContent = isOwner ? "Roulette tiers saved for all players." : "Tester-only roulette tiers saved on this device.";
+        } catch (error) {
+            rouletteStatus.textContent = error instanceof Error ? error.message : "Could not save roulette tiers.";
+        } finally {
+            saveRoulette.disabled = false;
+        }
+    });
+    const resetRoulette = createTextButton("Reset roulette defaults", () => {
+        rouletteEditor.value = JSON.stringify(DEFAULT_ROULETTE_TIERS, null, 2);
+    });
+    rouletteSettings.append(rouletteHeading, rouletteDescription, rouletteEditor, saveRoulette, resetRoulette, rouletteStatus);
+    form.append(rouletteSettings);
     const effectSettings = document.createElement("section");
     effectSettings.className = "tester-reward-settings tester-powerup-effects";
     effectSettings.innerHTML = `<p class="setting-title">Power-up behavior</p><p class="menu-copy">Effect strength and duration apply to every world. Cannon duration of 0 means it stays active until hull breach.</p>`;
@@ -3574,7 +4277,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         button.setAttribute("aria-pressed", String(category === selectedCategory));
     });
     form.replaceChildren(categoryNav, ...availableCategories.map((category) => categoryPanels.get(category)!), apply);
-    menu.append(worldTabs, testerTabs, form, accountManagement, codeManagement, messageManagement, createTextButton("Exit tester tools", () => { testerSettingsDraft.clear(); showMenu(); }));
+    menu.append(worldTabs, testerTabs, form, accountManagement, codeManagement, messageManagement, updateLogManagement, createTextButton("Exit tester tools", () => { testerSettingsDraft.clear(); showMenu(); }));
     document.body.replaceChildren(menu);
 }
 
@@ -3661,6 +4364,29 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
         && isRecord(effects.rapid) && Number.isFinite(effects.rapid.durationSeconds)
         && isRecord(effects.cannon) && Number.isFinite(effects.cannon.durationSeconds)
         && isRecord(effects.star) && Number.isFinite(effects.star.durationSeconds);
+}
+
+function isUsableRouletteTiers(value: unknown): value is RouletteTier[] {
+    if (!Array.isArray(value) || value.length !== 3) return false;
+    const keys = ["claims", "specialClaims", "color", "trail", "avatar"] as const;
+    return value.every((tier, index) => {
+        if (!tier || typeof tier !== "object") return false;
+        const candidate = tier as Partial<RouletteTier>;
+        const chances = candidate.chances;
+        const rewards = candidate.rewards;
+        if (!chances || !rewards) return false;
+        return candidate.buyIn === [5, 10, 25][index]
+            && keys.every((key) => Number.isSafeInteger(chances[key]) && chances[key] >= 0 && chances[key] <= 100)
+            && keys.reduce((total, key) => total + chances[key], 0) === 100
+            && Boolean(rewards)
+            && (["claims", "specialClaims"] as const).every((key) => Array.isArray(rewards[key])
+                && rewards[key].length === 2
+                && Number.isSafeInteger(rewards[key][0])
+                && Number.isSafeInteger(rewards[key][1])
+                && rewards[key][0] >= 1
+                && rewards[key][1] >= rewards[key][0]
+                && rewards[key][1] <= 1000000);
+    });
 }
 
 function getConfiguredRainbowStarChance(prestige = activePlanet === "prestige") {
@@ -3893,7 +4619,7 @@ function fireSecretBossProjectile(spread = 0) {
 function damageSecretBoss() {
     if (!secretBoss || secretBoss.defeated) return;
     secretBoss.health--;
-    const room = document.querySelector(".portal-key-room");
+    const room = document.querySelector<HTMLElement>(".portal-key-room");
     const bossElement = room?.querySelector(".void-warden");
     bossElement?.classList.add("hit");
     window.setTimeout(() => bossElement?.classList.remove("hit"), 180);
@@ -3905,6 +4631,7 @@ function damageSecretBoss() {
     }
     secretBoss.defeated = true;
     bossElement?.classList.add("defeated");
+    if (room) createEnemyExplosion(room, secretBoss.x + 64, secretBoss.y + SECRET_BOSS_HEIGHT / 2, "#6ecbff");
     const keyId = currentSecretPortalTarget;
     if (keyId) {
         markSecretPortalClaimed(keyId);
@@ -4044,7 +4771,7 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; bossProjectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     document.body.innerHTML = "";
     createGameShell(); createPlayer(); createWorldObjects(); createTrail(false); createControls(); startGameLoop();
 }
@@ -4609,22 +5336,33 @@ function updateTrail(visible = trailActive) {
         trailElement.forEach((element) => { element.classList.remove("trail-active"); element.style.opacity = "0"; });
         return;
     }
-    trailElement.forEach((element) => element.classList.add("trail-active"));
     const anchor = { x: playerX + (playerWidth - 14) / 2, y: shipFlipped ? playerY + 2 : playerY + playerHeight - 2 };
     const last = trailPositions[0];
     if (last && anchor.x !== last.x) trailDirection = anchor.x > last.x ? 1 : -1;
     if (!last || last.x !== anchor.x || last.y !== anchor.y) trailPositions.unshift(anchor);
     trailPositions = trailPositions.slice(0, 24);
-    trailElement.forEach((element, index) => {
-        const point = trailPositions[Math.min(index * 2, trailPositions.length - 1)] ?? anchor;
-        const tailX = trailDirection > 0 ? Math.min(point.x, anchor.x) : Math.max(point.x, anchor.x);
-        const tailY = shipFlipped ? Math.min(point.y, anchor.y - index * 2) : Math.max(point.y, anchor.y + index * 2);
-        element.classList.toggle("flipped-trail", shipFlipped);
+    drawTrailParticles(trailElement, trailPositions, anchor, trailDirection, shipFlipped);
+}
+
+function drawTrailParticles(
+    elements: HTMLElement[],
+    positions: { x: number; y: number }[],
+    anchor: { x: number; y: number },
+    direction: number,
+    flipped: boolean,
+) {
+    elements.forEach((element, index) => {
+        element.classList.add("trail-active");
+        const point = positions[Math.min(index * 2, positions.length - 1)] ?? anchor;
+        const tailX = direction > 0 ? Math.min(point.x, anchor.x) : Math.max(point.x, anchor.x);
+        const tailY = flipped ? Math.min(point.y, anchor.y - index * 2) : Math.max(point.y, anchor.y + index * 2);
+        element.classList.toggle("flipped-trail", flipped);
         element.style.left = `${index === 0 ? anchor.x : tailX}px`;
         element.style.top = `${index === 0 ? anchor.y : tailY}px`;
         element.style.opacity = `${Math.max(0.1, 1 - index * 0.2)}`;
     });
 }
+
 function updateProjectiles() {
     projectiles = projectiles.filter((projectile) => {
         projectile.x += projectile.vx * currentFrameScale;
@@ -4642,6 +5380,7 @@ function updateProjectiles() {
             if (enemy) {
                 enemy.defeated = true;
                 document.querySelectorAll(".enemy")[levelEnemies.indexOf(enemy)]?.classList.add("defeated");
+                createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
                 projectile.element.remove();
                 statusLabel.textContent = "Cannon hit. Sentry disabled.";
                 return false;
@@ -4653,6 +5392,7 @@ function updateProjectiles() {
                 if (miniBoss.health <= 0) {
                     miniBoss.defeated = true;
                     document.querySelectorAll(".mini-boss")[levelMiniBosses.indexOf(miniBoss)]?.classList.add("defeated");
+                    createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
                     statusLabel.textContent = "Cannon fire shattered the mini-boss.";
                 } else statusLabel.textContent = `Cannon hit. ${miniBoss.health} hit remaining.`;
                 return false;
@@ -4686,6 +5426,21 @@ function updateProjectiles() {
     });
 }
 function createSplash(x: number, y: number) { const splash = document.createElement("div"); splash.className = "splash"; splash.style.left = `${x}px`; splash.style.top = `${y}px`; world.append(splash); window.setTimeout(() => splash.remove(), reducedEffects ? 180 : 350); }
+function createEnemyExplosion(container: HTMLElement, x: number, y: number, color = "#f6c46e") {
+    const burst = document.createElement("div");
+    burst.className = "enemy-explosion";
+    burst.style.left = `${x}px`;
+    burst.style.top = `${y}px`;
+    burst.style.setProperty("--explosion-color", color);
+    const fragmentCount = reducedEffects ? 4 : 8;
+    for (let index = 0; index < fragmentCount; index++) {
+        const fragment = document.createElement("i");
+        fragment.style.setProperty("--explosion-angle", `${index * (360 / fragmentCount)}deg`);
+        burst.append(fragment);
+    }
+    container.append(burst);
+    window.setTimeout(() => burst.remove(), reducedEffects ? 360 : 720);
+}
 function intersects(first: Box, second: Box) { return first.x < second.x + second.width && first.x + first.width > second.x && first.y < second.y + second.height && first.y + first.height > second.y; }
 
 function checkCollisions() {
@@ -4766,6 +5521,7 @@ if (portalTravelInProgress) return;
             : verticalSpeed >= 0 && previousPlayerY + playerHitboxInsetY + playerHitboxHeight <= enemy.y + 15);
         if (landedOnHead) {
             enemy.defeated = true;
+            createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
             playerY = shipFlipped ? enemy.y + enemyBox.height - playerHitboxInsetY : enemy.y - playerHitboxInsetY - playerHitboxHeight;
             verticalSpeed = shipFlipped ? Math.abs(jumpPower) * 0.58 : jumpPower * 0.58;
             jumpCount = 1;
@@ -4797,6 +5553,7 @@ if (portalTravelInProgress) return;
             if (miniBoss.health <= 0) {
                 miniBoss.defeated = true;
                 document.querySelectorAll(".mini-boss")[index]?.classList.add("defeated");
+                createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
                 statusLabel.textContent = inFlippedRoute ? "Dark Knight crushed. Ground pound supremacy!" : "Dark Knight shattered. The route is clear.";
             } else {
                 statusLabel.textContent = inFlippedRoute ? `Dark Knight staggered. ${miniBoss.health} hit remaining.` : `Dark Knight damaged. ${miniBoss.health} hit remaining.`;
@@ -4849,9 +5606,23 @@ function activatePowerup(kind: PowerupKind) {
         playerLabel.classList.add("star-invincible");
         statusLabel.textContent = `RAINBOW STAR ACTIVE! Your ship is rainbow and invincible for ${durationSeconds} seconds!`;
         // Kill all enemies instantly
-        levelEnemies.forEach((enemy) => { if (!enemy.defeated) { enemy.defeated = true; document.querySelectorAll(".enemy")[levelEnemies.indexOf(enemy)]?.classList.add("defeated"); } });
-        levelMiniBosses.forEach((miniBoss) => { if (!miniBoss.defeated) { miniBoss.defeated = true; document.querySelectorAll(".mini-boss")[levelMiniBosses.indexOf(miniBoss)]?.classList.add("defeated"); } });
-        if (boss && !boss.defeated) { boss.defeated = true; document.querySelector(".boss")?.classList.add("defeated"); }
+        levelEnemies.forEach((enemy, index) => {
+            if (enemy.defeated) return;
+            enemy.defeated = true;
+            document.querySelectorAll(".enemy")[index]?.classList.add("defeated");
+            createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
+        });
+        levelMiniBosses.forEach((miniBoss, index) => {
+            if (miniBoss.defeated) return;
+            miniBoss.defeated = true;
+            document.querySelectorAll(".mini-boss")[index]?.classList.add("defeated");
+            createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
+        });
+        if (boss && !boss.defeated) {
+            boss.defeated = true;
+            document.querySelector(".boss")?.classList.add("defeated");
+            createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657");
+        }
         if (secretBoss && !secretBoss.defeated) while (secretBoss && !secretBoss.defeated) damageSecretBoss();
     } 
     updatePowerupHud(); 
@@ -4868,7 +5639,7 @@ function updatePowerupHud() {
     }); 
     playerLabel.classList.toggle("shielded", shieldCharges > 0); 
 }
-function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); window.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; bossElement?.classList.add("defeated"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
+function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); window.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; bossElement?.classList.add("defeated"); createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
 
 function getPrestigeRequirement(level: number) { return { normal: 100 + level * 50, special: 10 + level * 5 }; }
 function getNormalRouteCount() { return levels.filter((level) => !level.secret && !level.prestige).length; }
@@ -4954,7 +5725,7 @@ function tryPrestige() {
 }
 function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean }, index?: number) { return localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && isSpinCosmeticUnlocked("skin", index)) || (skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required); }
 function getUnlockedSkinCount() { return skins.filter(isSkinUnlocked).length; }
-function isAvatarUnlocked(avatar: AvatarStyle) { return localStorage.getItem("orbit-unlock-avatars") === "1" || (avatar.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : avatar.prestige !== undefined ? prestigeLevel >= avatar.prestige : avatar.jackpot ? localStorage.getItem("orbit-jackpot-avatar") === "1" : true); }
-function isTrailUnlocked(trail: TrailStyle) { return localStorage.getItem("orbit-unlock-trails") === "1" || (trail.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : trail.prestige !== undefined ? prestigeLevel >= trail.prestige : trail.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : trail.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= trail.required); }
+function isAvatarUnlocked(avatar: AvatarStyle) { const index = avatars.indexOf(avatar); return localStorage.getItem("orbit-unlock-avatars") === "1" || (index >= 0 && isSpinCosmeticUnlocked("avatar", index)) || (avatar.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : avatar.prestige !== undefined ? prestigeLevel >= avatar.prestige : avatar.jackpot ? localStorage.getItem("orbit-jackpot-avatar") === "1" : true); }
+function isTrailUnlocked(trail: TrailStyle) { const index = trails.indexOf(trail); return localStorage.getItem("orbit-unlock-trails") === "1" || (index >= 0 && isSpinCosmeticUnlocked("trail", index)) || (trail.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : trail.prestige !== undefined ? prestigeLevel >= trail.prestige : trail.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : trail.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= trail.required); }
 function getUnlockedTrailCount() { return trails.filter(isTrailUnlocked).length; }
 function formatTime(milliseconds: number) { const total = Math.max(0, Math.floor(milliseconds)); const minutes = Math.floor(total / 60000).toString().padStart(2, "0"); const seconds = Math.floor(total / 1000 % 60).toString().padStart(2, "0"); const millis = (total % 1000).toString().padStart(3, "0"); return `${minutes}:${seconds}.${millis}`; }

@@ -13,13 +13,15 @@ The online leaderboard and accounts use a Node.js API and MongoDB. User password
 
 The API provisions the reserved owner accounts `vslxped` and `riverwth` from `OWNER_PASSWORD` and `ADDITIONAL_OWNER_PASSWORD`. It stores Argon2id hashes and reapplies the configured secrets at startup, so changing a private environment value rotates that owner's password. Other registered accounts cannot receive the owner role. The owner indicator appears only for authenticated owner sessions.
 
-The API initializes its MongoDB collections and indexes on startup. While signed in, player progress, currency, inventory, unlocks, loadout, settings, and personal levels sync to the account and are restored on other signed-in devices. Signing out stops account synchronization. Players can change their username once every seven days. The owner-only tester panel saves shared world settings and workshop levels, and includes tools to view player stats, edit saved player data and usernames, grant currency and power-up skills, unlock or clear levels, unlock cosmetics, and ban or restore player accounts. Published workshop levels can be edited and playtested before saving.
+The API initializes its MongoDB collections and indexes on startup. While signed in, player progress, currency, inventory, unlocks, loadout, settings, and personal levels sync to the account and are restored on other signed-in devices. Signing out stops account synchronization. Players can change their username once every seven days. The owner-only tester panel saves shared world settings, roulette tiers, and workshop levels, and includes tools to view player stats, edit saved player data and usernames, grant currency and power-up skills, unlock or clear levels, unlock cosmetics, and ban or restore player accounts. Owners can also publish a public update log shown in Credits. Published workshop levels can be edited and playtested before saving.
 
 ### Render deployment
 
 Create a MongoDB Atlas cluster and a Node web service in Render. Set the service build command to `npm ci && npm run build` and the start command to `npm start`. Configure `DATABASE_MONGODB_URI`, `OWNER_PASSWORD`, `ADDITIONAL_OWNER_PASSWORD`, and `NODE_ENV=production` as private service environment variables. Use the MongoDB connection URI and owner passwords directly in the private deployment dashboard; never commit these secrets. The server creates its indexes and default settings on startup and serves the built client and API from the same origin.
 
 The owner can edit or remove leaderboard entries and change the golden-skin clear-time threshold in the online leaderboard, available from Launch Mission. The home-screen account control is separate. Player submissions keep each player's fastest time per route; the leaderboard displays the player's username, route, time, and abilities used.
+
+Online presence is shown publicly on the leaderboard and in the owner-only Player accounts panel. Signed-in clients send a heartbeat every 30 seconds; a player is shown online while their session has checked in within the last 90 seconds. Players can choose "Appear offline" in Account settings to hide their status publicly and on their profile. Player profiles show their current character loadout, completion stats, presence, and an optional title earned by completing route milestones.
 
 ### Vercel deployment
 

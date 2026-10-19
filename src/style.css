@@ -166,6 +166,11 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .boss-projectile, .mini-projectile { position: absolute; z-index: 6; width: 22px; height: 22px; border: 3px solid #f58bff; border-radius: 50%; background: #6d3548; box-shadow: 0 0 24px #f58bff; }
 .mini-projectile { width: 14px; height: 14px; border-width: 2px; border-color: #ff8fbd; background: #492c56; box-shadow: 0 0 16px #ff8fbd; }
 .splash { position: absolute; z-index: 6; width: 12px; height: 12px; border: 3px solid #f6c46e; border-radius: 50%; pointer-events: none; animation: splash .35s ease-out forwards; }
+.enemy-explosion { position: absolute; z-index: 12; width: 1px; height: 1px; color: var(--explosion-color, #f6c46e); pointer-events: none; }
+.enemy-explosion::before { position: absolute; top: -10px; left: -10px; width: 20px; height: 20px; content: ''; border: 3px solid currentColor; border-radius: 50%; box-shadow: 0 0 18px currentColor; animation: explosion-core .55s ease-out forwards; }
+.enemy-explosion i { position: absolute; top: -4px; left: -4px; width: 8px; height: 8px; border-radius: 2px; background: currentColor; box-shadow: 0 0 12px currentColor; animation: explosion-fragment .62s cubic-bezier(.12,.76,.28,1) forwards; transform: rotate(var(--explosion-angle)) translateX(0); }
+#game-world.reduced-effects .enemy-explosion::before { animation-duration: .3s; }
+#game-world.reduced-effects .enemy-explosion i { animation-duration: .34s; }
 .beacon { position: absolute; top: 150px; width: 14px; height: 250px; border: 3px solid #f6c46e; background: #ed7657; box-shadow: 0 0 35px #f6c46e; }
 .beacon::after { position: absolute; top: -14px; left: -17px; width: 42px; height: 28px; content: ''; border-radius: 50%; background: #f6c46e; box-shadow: 0 0 30px #f6c46e; }
 .boss { position: absolute; z-index: 4; width: 128px; height: 150px; border: 5px solid #f58bff; border-radius: 48% 48% 18% 18%; background: #35294f; box-shadow: 0 0 0 14px #f58bff22, 0 0 42px #f58bff, inset 0 0 24px #b991ff; animation: boss-float 2.2s ease-in-out infinite; }
@@ -206,6 +211,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 
 @keyframes float { 50% { margin-top: -12px; } }
 @keyframes splash { to { width: 58px; height: 58px; margin: -23px; opacity: 0; } }
+@keyframes explosion-core { to { transform: scale(3.8); opacity: 0; } }
+@keyframes explosion-fragment { to { transform: rotate(var(--explosion-angle)) translateX(36px) scale(.2); opacity: 0; } }
 @keyframes mini-boss-float { 50% { margin-top: -10px; } }
 
 @media (max-width: 600px) {
@@ -241,13 +248,12 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .preview-ship span { position: absolute; top: 14px; left: 14px; width: 26px; height: 20px; border: 3px solid #143746; border-radius: 50%; background: #89d0bf; }
 .preview-ship-art, .preview-stage .ship-art-image, .preview-stage .ship-css-art { width: 52px; height: 60px; object-fit: contain; filter: drop-shadow(0 0 8px #f6c46e); }
 .preview-stage .ship-art-image { position: static; filter: none; }
-.trail-preview { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 42px; margin-top: 4px; }
-.trail-preview-particle { display: block; width: 14px; height: 25px; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 0 0 24px color-mix(in srgb, var(--trail-color) 65%, transparent); animation-delay: var(--trail-delay); }
-.trail-preview-particle.trail-effect-ember { animation: trail-flicker .55s ease-in-out infinite alternate; }
-.trail-preview-particle.trail-effect-comet { animation: trail-comet .65s ease-in-out infinite alternate; }
-.trail-preview-particle.trail-effect-spark { animation: trail-spark .7s ease-in-out infinite; }
-.trail-preview-particle.trail-effect-ribbon { animation: trail-ribbon .9s ease-in-out infinite alternate; }
-.trail-preview-particle.trail-effect-arc { animation: trail-arc .8s linear infinite; }
+.trail-preview-scene { position: relative; width: 240px; height: 72px; overflow: hidden; }
+.trail-preview-scene .trail-preview-ship { position: absolute; z-index: 3; top: 0; left: 0; width: 48px; height: 36px; pointer-events: none; }
+.trail-preview-scene .ship-art-image, .trail-preview-scene .ship-css-art { position: absolute; inset: 0; width: 48px; height: 36px; object-fit: contain; }
+.trail-preview-scene .preview-ship { position: absolute; top: 0; left: 0; width: 42px; height: 34px; border-width: 3px; }
+.trail-preview-scene .preview-ship span { top: 5px; left: 8px; width: 18px; height: 13px; border-width: 2px; }
+.trail-preview-scene .preview-ship i { bottom: -11px; left: 12px; width: 12px; height: 14px; }
 .customization-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .color-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)); gap: 12px; }
 .ship-color-choice { width: 44px; height: 44px; justify-self: center; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--ship-color-choice); cursor: pointer; }
@@ -283,6 +289,12 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .leaderboard-player-level { color: #f3f5e9; }
 .leaderboard-entry strong { color: #f6c46e; font: .72rem 'DM Mono', monospace; }
 .leaderboard-abilities { grid-column: 2 / -1; color: #99b3a6; font: .58rem 'DM Mono', monospace; }
+.online-presence { display: grid; gap: 8px; width: min(820px, 90vw); margin: 8px 0 16px; padding: 14px; border: 1px solid #385267; background: #101b2bcc; text-align: left; }
+.online-presence h2 { margin: 0; color: #f6c46e; font: 700 .9rem 'Space Grotesk', sans-serif; }
+.online-presence-status { margin: 0; color: #99b3a6; font: .62rem 'DM Mono', monospace; }
+.online-player-list { display: flex; flex-wrap: wrap; gap: 7px; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
+.online-player-name { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #37634c; background: #10291f; }
+.online-player-name::before { width: 7px; height: 7px; border-radius: 50%; background: #71dc91; box-shadow: 0 0 8px #71dc91aa; content: ""; }
 .leaderboard-entry-controls { grid-column: 2 / -1; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
 .leaderboard-entry-controls summary { cursor: pointer; color: #f6c46e; }
 .leaderboard-entry-controls form, .leaderboard-admin form { display: grid; gap: 8px; margin-top: 8px; }
@@ -340,8 +352,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .portal-key-room.key-collected .portal-key-chamber { border-color: #a7e0bc; box-shadow: 0 0 18px #a7e0bc88; }
 .portal-key-room.key-collected .portal-key-room-key { border-color: #a7e0bc; color: #a7e0bc; box-shadow: 0 0 30px #a7e0bc; animation: key-room-secured .55s ease-out both; }
 .player.flipped { transform: rotate(180deg); }
-.wheel-ring { transition: transform .8s cubic-bezier(.2,.8,.2,1); }
-.asteroid-wheel.spinning .wheel-ring { animation: jackpot-spin .9s ease-in-out infinite; }
+.wheel-ring { transition: none; animation: none; }
+.asteroid-wheel.spinning .wheel-ring { animation: none; }
 @keyframes portal-pulse { 50% { transform: rotate(45deg) scaleX(.72); opacity: .72; } }
 @keyframes portal-room-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes portal-room-warp { to { transform: translateX(-50%) rotate(360deg) scale(.72); } }
@@ -389,6 +401,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .setting-row b, .skin-option span { display: block; color: #f3f5e9; font-size: .9rem; }
 .setting-row small { display: block; margin-top: 5px; color: #99b3a6; font: .66rem 'DM Mono', monospace; }
 .setting-row input { width: 22px; height: 22px; accent-color: #f6c46e; }
+.setting-row select { max-width: 180px; padding: 8px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .65rem 'DM Mono', monospace; }
+.presence-setting-status { display: block; margin: 0; color: #99b3a6; font: .62rem/1.5 'DM Mono', monospace; }
 .tester-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; padding-top: 18px; border-top: 1px solid #385267; }
 .tester-entry b { display: block; color: #f3f5e9; font-size: .9rem; }
 .tester-entry small { display: block; margin-top: 5px; color: #99b3a6; font: .66rem 'DM Mono', monospace; }
@@ -469,14 +483,46 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .secret-gate:hover, .secret-gate:focus-visible { background: #fff4; box-shadow: 0 0 28px #fff; outline: none; }
 .shop-currency { margin: -8px 0 18px; color: #f6c46e; letter-spacing: 1px; }
 .asteroid-wheel { display: grid; justify-items: center; gap: 8px; width: min(680px, 90vw); margin: 0 auto 20px; padding: 14px; border: 1px solid #f58bff66; background: #143746cc; }
-.wheel-ring { display: grid; place-items: center; width: 68px; height: 68px; border: 3px solid #fff; border-radius: 50%; color: #fff; box-shadow: 0 0 22px #f58bff; animation: wheel-spin 1.2s linear infinite; }
-.wheel-ring span { font-size: 1.8rem; }
+.wheel-stage { position: relative; display: grid; place-items: center; width: 292px; height: 292px; }
+.wheel-stage::before, .wheel-stage::after { position: absolute; content: ""; border-radius: 50%; pointer-events: none; }
+.wheel-stage::before { inset: 0; z-index: 0; border: 8px ridge #88703f; background: radial-gradient(circle, #202b37 65%, #111a25 66%); box-shadow: 0 0 0 3px #111821, 0 8px 22px #060b12; }
+.wheel-stage::after { inset: 7px; z-index: 3; border: 2px solid #d6b45b; box-shadow: inset 0 0 0 2px #17232e; }
+.wheel-ring { position: relative; z-index: 2; display: block; width: 258px; height: 258px; overflow: hidden; border: 8px solid #c99c45; border-radius: 50%; box-shadow: inset 0 0 0 3px #111821, 0 0 0 2px #101821; }
+.wheel-pocket-label { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; width: 17px; color: #f5edcf; font: 700 .47rem 'DM Mono', monospace; line-height: 1; text-shadow: 0 1px 2px #101820; }
+.wheel-hub { position: absolute; z-index: 4; display: grid; place-items: center; width: 70px; height: 70px; border: 5px ridge #d4ad4f; border-radius: 50%; color: #f9e7a4; background: radial-gradient(circle at 35% 30%, #415569, #111b26 72%); box-shadow: 0 0 0 4px #14202c, inset 0 0 0 2px #101721; font-size: 1.6rem; }
+.wheel-pointer { position: absolute; z-index: 5; top: 3px; width: 0; height: 0; border: 12px solid transparent; border-top: 21px solid #f8e4a0; filter: drop-shadow(0 2px 4px #101b2b); }
+.wheel-tier-label { display: flex; align-items: center; gap: 10px; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
+.wheel-tier-label select { padding: 7px 10px; border: 1px solid #f6c46e88; color: #f3f5e9; background: #101b2b; font: inherit; }
+.wheel-status, .wheel-collection-complete { min-height: 1em; }
+.wheel-collection-complete { color: #f6c46e !important; }
+.wheel-settings-editor textarea, .roulette-settings-editor textarea { width: 100%; min-height: 250px; font: .72rem/1.5 'DM Mono', monospace; }
+.roulette-settings-editor { width: min(760px, 90vw); }
+.roulette-odds { width: min(760px, 90vw); margin: 0 auto 24px; }
+.roulette-odds > h2, .rarity-odds-heading { margin: 0 0 12px; color: #f6c46e; font: 700 1.15rem 'Space Grotesk', sans-serif; }
+.roulette-odds-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.roulette-odds-card { padding: 14px; border: 1px solid #547086; background: #101b2bcc; }
+.roulette-odds-card h3 { margin: 0 0 10px; color: #f6c46e; font: 700 .78rem 'DM Mono', monospace; }
+.roulette-odds-card dl { display: grid; gap: 7px; margin: 0; }
+.roulette-odds-card dl > div { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; align-items: baseline; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
+.roulette-odds-card dt, .roulette-odds-card dd { margin: 0; }
+.roulette-odds-card dd { color: #f3f5e9; font-weight: 700; }
+.roulette-odds-card small { grid-column: 1 / -1; color: #99b3a6; font: .55rem 'DM Mono', monospace; }
+.roulette-odds-note { margin: 10px 0 0; color: #99b3a6; font: .6rem/1.5 'DM Mono', monospace; }
+.rarity-odds-heading { margin-top: 4px; }
 .asteroid-wheel b { color: #fff; font-size: .8rem; }
 .spin-result { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: #08121fcc; animation: result-fade-in .25s ease-out; }
 .spin-result-card { display: grid; justify-items: center; gap: 12px; width: min(420px, 90vw); padding: 28px 24px; border: 1px solid #f6c46e; background: #143746; box-shadow: 0 0 45px #f58bff66; }
 .spin-result-card h2 { margin: 0; color: #f3f5e9; font-size: clamp(1.6rem, 5vw, 2.5rem); }
 .spin-result-card h2 em { color: #f6c46e; font-style: normal; }
 .spin-result-card > p:not(.eyebrow) { margin: 0; color: #c4d1bd; font: .7rem/1.5 'DM Mono', monospace; }
+.credits-updates { display: grid; gap: 10px; width: min(640px, 90vw); margin: 22px 0; text-align: left; }
+.credits-updates h2 { margin: 0; color: #f6c46e; font: 700 1rem 'Space Grotesk', sans-serif; }
+.credits-updates article { padding: 14px; border: 1px solid #385267; background: #143746cc; }
+.credits-updates time { color: #99b3a6; font: .58rem 'DM Mono', monospace; }
+.credits-updates h3 { margin: 5px 0; color: #f3f5e9; font-size: .95rem; }
+.credits-updates p { margin: 0; color: #c4d1bd; font: .7rem/1.5 'DM Mono', monospace; white-space: pre-wrap; }
+.update-log-editor-list { display: grid; gap: 10px; }
+.update-log-editor-entry { display: grid; gap: 8px; padding: 12px; border: 1px solid #385267; background: #101b2b; }
 .planet-transition { position: fixed; z-index: 30; inset: 0; display: grid; place-items: center; color: #f3f5e9; background: #101b2b; pointer-events: none; animation: planet-shift 1.1s ease-in-out forwards; }
 .planet-transition.prestige { background: #35245d; }
 .planet-transition span { font: .75rem 'DM Mono', monospace; letter-spacing: 3px; animation: result-fade-in .4s ease-out; }
@@ -544,6 +590,9 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 	.trail-grid { grid-template-columns: repeat(2, 1fr); }
 	.home-stats { gap: 15px; }
 	.shop-grid { grid-template-columns: repeat(2, 1fr); }
+	.roulette-odds-grid { grid-template-columns: 1fr; }
+	.wheel-stage { width: min(292px, 88vw); height: min(292px, 88vw); }
+	.wheel-ring { width: min(258px, 78vw); height: min(258px, 78vw); }
 	.hud { flex-wrap: wrap; justify-content: flex-end; }
 	.powerup-hud { order: 3; width: 100%; justify-content: flex-end; }
 	.tester-levels { grid-template-columns: 1fr; }
@@ -572,6 +621,12 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-screen > .text-button { padding: 6px 12px; }
 .account-dashboard { display: grid; gap: 12px; width: min(720px, 94vw); margin: 12px 0 20px; padding: 18px; border: 1px solid #385267; background: #143746cc; text-align: left; }
 .account-dashboard h2 { margin: 8px 0 0; color: #f6c46e; font-size: 1rem; }
+.pilot-title-badge { display: inline-block; margin-left: 8px; padding: 4px 8px; border: 1px solid #f6c46e88; color: #f6c46e; background: #101b2b; font: 600 .58rem 'DM Mono', monospace; vertical-align: middle; }
+.profile-presence { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 0; color: #adb7b0; font: 700 .62rem 'DM Mono', monospace; }
+.profile-presence::before { width: 8px; height: 8px; border-radius: 50%; background: #89929a; content: ""; }
+.profile-presence.is-online { color: #71dc91; }
+.profile-presence.is-online::before { background: #71dc91; box-shadow: 0 0 8px #71dc91aa; }
+.profile-character-card { width: min(100%, 360px); padding: 12px; border-color: #f6c46e88; background: #101b2b; }
 .account-stats, .account-items { display: flex; flex-wrap: wrap; gap: 8px; }
 .account-stats article, .account-items span { display: grid; gap: 4px; min-width: 120px; padding: 9px 12px; border: 1px solid #385267; background: #101b2b; }
 .account-stats small { color: #99b3a6; font: .6rem 'DM Mono', monospace; }
@@ -580,6 +635,12 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-profile-form { display: grid; gap: 10px; max-width: 420px; }
 .account-profile-form label { display: grid; gap: 6px; color: #c4d1bd; font: .7rem 'DM Mono', monospace; }
 .account-profile-form input { width: 100%; padding: 11px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .8rem 'DM Mono', monospace; }
+.account-profile-form .account-presence-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #385267; border-bottom: 1px solid #385267; }
+.account-presence-setting b, .account-title-setting b { display: block; color: #f3f5e9; font-size: .8rem; }
+.account-presence-setting span small, .account-title-setting span small { display: block; margin-top: 5px; color: #99b3a6; font: .62rem/1.5 'DM Mono', monospace; }
+.account-profile-form .account-presence-setting input[type="checkbox"] { flex: 0 0 22px; width: 22px; height: 22px; accent-color: #f6c46e; }
+.account-profile-form .account-title-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.account-title-setting select { max-width: 180px; padding: 8px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .65rem 'DM Mono', monospace; }
 .account-profile-form small { min-height: 1.4em; color: #99b3a6; font: .62rem 'DM Mono', monospace; }
 .account-profile-form button { justify-self: start; }
 .account-rail { position: fixed; z-index: 12; top: 50%; left: 18px; transform: translateY(-50%); }
@@ -596,6 +657,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-player-management { width: min(850px, 94vw); margin: 0 auto 18px; padding: 18px; border: 1px solid #385267; background: #143746cc; text-align: left; }
 .tester-player-management h2 { color: #f6c46e; }
 .tester-player-management > p, .tester-player-card p, .tester-player-card small { color: #c4d1bd; font: .65rem/1.5 'DM Mono', monospace; overflow-wrap: anywhere; }
+.tester-player-card .player-presence-status { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0; color: #a6b0aa; font-weight: 700; }
+.tester-player-card .player-presence-status::before { width: 7px; height: 7px; border-radius: 50%; background: #89929a; content: ""; }
+.tester-player-card .player-presence-status.is-online { color: #71dc91; }
+.tester-player-card .player-presence-status.is-online::before { background: #71dc91; box-shadow: 0 0 8px #71dc91aa; }
 .tester-player-card { margin: 10px 0; padding: 12px; border: 1px solid #385267; background: #101b2b; }
 .tester-player-card summary { color: #f6c46e; font: .75rem 'DM Mono', monospace; cursor: pointer; }
 .tester-player-form { display: grid; gap: 8px; margin-top: 10px; }

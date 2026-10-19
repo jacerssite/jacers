@@ -20,8 +20,10 @@ import {
   DEFAULT_GAME_CONFIG,
   USER_ROLES,
   validateCodeReward,
+  getEarnedProfileTitle,
   validatePlayerProgress,
   validateRouletteTiers,
+  validateUpdateLog,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -32,13 +34,12 @@ const ownerAccounts = [
 ];
 const cookieName = "jacer_session";
 const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
+const presenceActiveWindowMs = 90 * 1000;
 const recoveryLockMs = 24 * 60 * 60 * 1000;
 const defaultRouletteTiers = [
-  { name: "Common", chance: 52, minReward: 50, maxReward: 100 },
-  { name: "Uncommon", chance: 27, minReward: 101, maxReward: 250 },
-  { name: "Rare", chance: 13, minReward: 251, maxReward: 500 },
-  { name: "Epic", chance: 6, minReward: 501, maxReward: 750 },
-  { name: "Legendary", chance: 2, minReward: 751, maxReward: 1000 },
+  { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
+  { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
+  { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
 ];
 const databaseUrl = process.env.DATABASE_MONGODB_URI;
 const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: Boolean(process.env.VERCEL) });
@@ -148,17 +149,27 @@ function publicProfileFromProgress(username, role, progress = {}) {
     if (typeof value !== "string" || value.length > 60 || /[<>]/.test(value)) return null;
     return value;
   };
+  const completedRouteCount = completedRoutes.length;
+  const selectedTitle = equippedValue("orbit-title");
+  const title = getEarnedProfileTitle(completedRouteCount, selectedTitle);
+  const equippedIndex = (key) => {
+    const value = equippedValue(key);
+    const index = value === null ? 0 : Number(value);
+    return Number.isSafeInteger(index) && index >= 0 && index <= 1000 ? index : 0;
+  };
   return {
     username,
     role,
     roleBadge: role === "tester" ? "tester" : "player",
-    normalClaims: readCount("orbit-claims"),
-    specialClaims: readCount("orbit-special-claims"),
+    asteroids: readCount("orbit-claims"),
+    specialAsteroids: readCount("orbit-special-claims"),
     prestige: readCount("orbit-prestige"),
-    completedRoutes,
-    equippedColor: equippedValue("orbit-ship-color"),
-    equippedAvatar: equippedValue("orbit-avatar"),
-    equippedTrail: equippedValue("orbit-trail"),
+    routesCleared: completedRouteCount,
+    shipColor: equippedValue("orbit-ship-color") ?? "#ed7657",
+    avatar: equippedIndex("orbit-avatar"),
+    skin: equippedIndex("orbit-skin"),
+    trail: equippedIndex("orbit-trail"),
+    title,
   };
 }
 
@@ -276,10 +287,10 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1 } },
+    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1 } },
   );
   return user && !user.banned && USER_ROLES.includes(user.role)
-    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword) }
+    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline) }
     : null;
 }
 
@@ -317,6 +328,7 @@ async function requireStaff(req, res, next) {
 
 async function createSession(userId, res) {
   const token = crypto.randomBytes(32).toString("base64url");
+  const now = new Date();
   const expiresAt = new Date(Date.now() + sessionLifetimeMs);
   const db = await getDatabase();
   await db.collection("user_sessions").deleteMany({ expiresAt: { $lte: new Date() } });
@@ -324,9 +336,23 @@ async function createSession(userId, res) {
     tokenHash: hashSessionToken(token),
     userId,
     expiresAt,
-    createdAt: new Date(),
+    createdAt: now,
+    lastSeenAt: now,
   });
   setSessionCookie(res, token);
+}
+
+async function getActiveUserIds(db, userIds) {
+  const now = new Date();
+  const filter = {
+    expiresAt: { $gt: now },
+    lastSeenAt: { $gte: new Date(now.getTime() - presenceActiveWindowMs) },
+  };
+  if (userIds) filter.userId = { $in: userIds };
+  const sessions = await db.collection("user_sessions")
+    .find(filter, { projection: { userId: 1 } })
+    .toArray();
+  return new Set(sessions.map((session) => session.userId.toHexString()));
 }
 
 async function accountHandler(req, res, next, mode) {
@@ -352,6 +378,7 @@ async function accountHandler(req, res, next, mode) {
           recoveryCodeCreatedAt,
           role: "player",
           banned: false,
+          appearOffline: false,
           createdAt: new Date(),
         });
         user = { _id: created.insertedId, username: username.display, role: "player" };
@@ -362,7 +389,7 @@ async function accountHandler(req, res, next, mode) {
       await createSession(user._id, res);
       noStore(res);
       return res.status(201).json({
-        user: { username: user.username, role: user.role, mustChangePassword: false },
+        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false },
         recoveryCode: code,
       });
     }
@@ -379,6 +406,7 @@ async function accountHandler(req, res, next, mode) {
         username: user.username,
         role: user.role,
         mustChangePassword: Boolean(user.mustChangePassword),
+        appearOffline: Boolean(user.appearOffline),
       },
     });
   } catch (error) {
@@ -516,11 +544,55 @@ app.post("/api/auth/recover", requireSameOrigin, recoveryLimiter, async (req, re
 
 app.get("/api/auth/session", async (req, res, next) => {
   try {
+    noStore(res);
     const user = await getAuthenticatedUser(req);
     res.json({
       user: user
-        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword }
+        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline }
         : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/presence/heartbeat", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const token = getCookie(req, cookieName);
+    if (!token) return res.status(401).json({ error: "Log in to update your online status." });
+    const now = new Date();
+    const result = await (await getDatabase()).collection("user_sessions").updateOne({
+      tokenHash: hashSessionToken(token),
+      userId: req.user.id,
+      expiresAt: { $gt: now },
+    }, { $set: { lastSeenAt: now } });
+    if (!result.matchedCount) return res.status(401).json({ error: "Your login session has expired." });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/presence", async (_req, res, next) => {
+  try {
+    noStore(res);
+    const db = await getDatabase();
+    const activeUserIds = await getActiveUserIds(db);
+    if (!activeUserIds.size) return res.json({ users: [], truncated: false });
+    const users = await db.collection("users")
+      .find({
+        _id: { $in: [...activeUserIds].map((id) => new ObjectId(id)) },
+        role: { $in: ["player", "tester"] },
+        banned: { $ne: true },
+        appearOffline: { $ne: true },
+      }, {
+        projection: { username: 1, usernameNormalized: 1 },
+      })
+      .sort({ usernameNormalized: 1 })
+      .toArray();
+    res.json({
+      users: users.slice(0, 200).map((user) => ({ username: user.username })),
+      truncated: users.length > 200,
     });
   } catch (error) {
     next(error);
@@ -597,6 +669,23 @@ app.get("/api/account/profile", requireUser, async (req, res, next) => {
   }
 });
 
+app.put("/api/account/presence", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (typeof req.body?.appearOffline !== "boolean") {
+      return res.status(400).json({ error: "Choose whether your profile should appear offline." });
+    }
+    const result = await (await getDatabase()).collection("users").updateOne(
+      { _id: req.user.id, banned: { $ne: true } },
+      { $set: { appearOffline: req.body.appearOffline } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
+    noStore(res);
+    res.json({ appearOffline: req.body.appearOffline });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
     const username = normalizeUsername(req.body?.username);
@@ -633,18 +722,26 @@ app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, re
 
 app.get("/api/players/:id", async (req, res, next) => {
   try {
+    noStore(res);
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid player id." });
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
       { _id: new ObjectId(req.params.id), role: { $in: ["player", "tester"] }, banned: { $ne: true } },
-      { projection: { username: 1, role: 1 } },
+      { projection: { username: 1, role: 1, appearOffline: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Player not found." });
     const saved = await db.collection("player_progress").findOne(
       { _id: user._id },
       { projection: { data: 1 } },
     );
-    res.json({ player: publicProfileFromProgress(user.username, user.role, saved?.data ?? {}) });
+    const activeUserIds = user.appearOffline ? new Set() : await getActiveUserIds(db, [user._id]);
+    res.json({
+      player: {
+        id: user._id.toHexString(),
+        ...publicProfileFromProgress(user.username, user.role, saved?.data ?? {}),
+        isOnline: activeUserIds.has(user._id.toHexString()),
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -696,6 +793,27 @@ app.post("/api/account/recovery-code", requireSameOrigin, requireUser, async (re
   }
 });
 
+app.get("/api/admin/presence", requireOwner, async (_req, res, next) => {
+  try {
+    noStore(res);
+    const db = await getDatabase();
+    const accounts = await db.collection("users")
+      .find({}, { projection: { usernameNormalized: 1, banned: 1, appearOffline: 1 } })
+      .sort({ usernameNormalized: 1 })
+      .limit(200)
+      .toArray();
+    const onlineUserIds = await getActiveUserIds(db, accounts.map((user) => user._id));
+    res.json({
+      users: accounts.map((user) => ({
+        id: user._id.toHexString(),
+        isOnline: !user.banned && !user.appearOffline && onlineUserIds.has(user._id.toHexString()),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
   try {
     const db = await getDatabase();
@@ -716,6 +834,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
       .sort({ usernameNormalized: 1 })
       .limit(200)
       .toArray();
+    const onlineUserIds = await getActiveUserIds(db, users.map((user) => user._id));
     const progressRecords = await db.collection("player_progress")
       .find({ _id: { $in: users.map((user) => user._id) } }, { projection: { data: 1 } })
       .toArray();
@@ -738,6 +857,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         role: user.role,
         banned: Boolean(user.banned),
         status: user.banned ? "banned" : "active",
+        isOnline: !user.banned && onlineUserIds.has(user._id.toHexString()),
         createdAt: user.createdAt,
         usernameChangedAt: user.usernameChangedAt ?? null,
         lastLoginAt: user.lastLoginAt ?? null,
@@ -1025,15 +1145,17 @@ app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async 
 app.get("/api/settings", async (_req, res, next) => {
   try {
     const db = await getDatabase();
-    const [golden, roulette, version] = await Promise.all([
+    const [golden, roulette, version, updateLog] = await Promise.all([
       db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }),
       db.collection("game_settings").findOne({ _id: "roulette_tiers" }),
       db.collection("game_settings").findOne({ _id: "app_version" }),
+      db.collection("game_settings").findOne({ _id: "update_log" }),
     ]);
     res.json({
       goldenTimeLimitMs: Number(golden?.value ?? 60000),
-      rouletteTiers: roulette?.value ?? defaultRouletteTiers,
+      rouletteTiers: validateRouletteTiers(roulette?.value) ?? defaultRouletteTiers,
       version: version?.value ?? "1",
+      updateLog: validateUpdateLog(updateLog?.value) ?? [],
     });
   } catch (error) {
     next(error);
@@ -1078,6 +1200,18 @@ app.put("/api/settings/roulette-tiers", requireSameOrigin, requireOwner, async (
     const db = await getDatabase();
     await saveSetting(db, "roulette_tiers", tiers, req.user.id);
     res.json({ rouletteTiers: tiers });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/update-log", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const entries = validateUpdateLog(req.body?.entries);
+    if (!entries) return res.status(400).json({ error: "Update log entries need a valid date, title, and body (up to 100 entries)." });
+    const db = await getDatabase();
+    await saveSetting(db, "update_log", entries, req.user.id);
+    res.json({ updateLog: entries });
   } catch (error) {
     next(error);
   }
@@ -1736,6 +1870,7 @@ async function initializeDatabaseOnce() {
     users.createIndex({ usernameNormalized: 1 }, { unique: true }),
     sessions.createIndex({ tokenHash: 1 }, { unique: true }),
     sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    sessions.createIndex({ lastSeenAt: 1 }),
     entries.createIndex({ userId: 1, levelName: 1 }, { unique: true }),
     entries.createIndex({ levelName: 1, timeMs: 1, achievedAt: 1, _id: 1 }),
     recoveryAttempts.createIndex({ lockedUntil: 1 }),
@@ -1762,6 +1897,11 @@ async function initializeDatabaseOnce() {
   await settings.updateOne(
     { _id: "roulette_tiers" },
     { $setOnInsert: { value: defaultRouletteTiers, createdAt: new Date() } },
+    { upsert: true },
+  );
+  await settings.updateOne(
+    { _id: "update_log" },
+    { $setOnInsert: { value: [], createdAt: new Date() } },
     { upsert: true },
   );
   await settings.updateOne(

@@ -11,6 +11,13 @@ export const ALLOWED_ABILITIES = new Set([
 export const RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
 export const POWERUP_KINDS = ["shield", "boost", "rapid", "cannon", "star"];
 export const USER_ROLES = ["owner", "tester", "player"];
+export const PROFILE_TITLE_MILESTONES = [
+  { id: "cadet", name: "Cadet", routes: 1 },
+  { id: "pathfinder", name: "Pathfinder", routes: 5 },
+  { id: "sector-ace", name: "Sector Ace", routes: 10 },
+  { id: "stellar-navigator", name: "Stellar Navigator", routes: 20 },
+  { id: "cosmic-legend", name: "Cosmic Legend", routes: 40 },
+];
 const defaultRarityOdds = { Common: 52, Uncommon: 27, Rare: 13, Epic: 6, Legendary: 2 };
 const defaultRewardRanges = { Common: [50, 100], Uncommon: [101, 250], Rare: [251, 500], Epic: [501, 750], Legendary: [751, 1000] };
 const defaultSkinChances = { Common: 0, Uncommon: 0, Rare: 0, Epic: 15, Legendary: 35 };
@@ -143,7 +150,13 @@ export function validatePlayerProgress(value) {
     if (totalBytes > 100000) return null;
     progress[key] = item;
   }
+
   return progress;
+}
+
+export function getEarnedProfileTitle(completedRouteCount, selectedTitle) {
+  if (!Number.isSafeInteger(completedRouteCount) || completedRouteCount < 0 || typeof selectedTitle !== "string") return "";
+  return PROFILE_TITLE_MILESTONES.find((title) => title.id === selectedTitle && completedRouteCount >= title.routes)?.name ?? "";
 }
 
 export function normalizeUsername(value) {
@@ -176,22 +189,47 @@ export function validateCodeReward(value) {
 }
 
 export function validateRouletteTiers(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 20) return null;
-  const names = new Set();
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const expectedBuyIns = [5, 10, 25];
+  const rewardTypes = ["claims", "specialClaims", "color", "trail", "avatar"];
   const tiers = [];
-  for (const tier of value) {
-    if (!tier || typeof tier !== "object" || Array.isArray(tier)
-      || typeof tier.name !== "string" || tier.name.trim().length < 1 || tier.name.trim().length > 40
-      || /[<>]/.test(tier.name)
-      || !isBoundedInteger(tier.chance, 0, 100)
-      || !isBoundedInteger(tier.minReward, 0, 1000000)
-      || !isBoundedInteger(tier.maxReward, tier.minReward, 1000000)) return null;
-    const name = tier.name.trim();
-    if (names.has(name.toLowerCase())) return null;
-    names.add(name.toLowerCase());
-    tiers.push({ name, chance: tier.chance, minReward: tier.minReward, maxReward: tier.maxReward });
+  for (let index = 0; index < value.length; index++) {
+    const tier = value[index];
+    if (!tier || typeof tier !== "object" || Array.isArray(tier) || tier.buyIn !== expectedBuyIns[index]
+      || !tier.chances || typeof tier.chances !== "object" || Array.isArray(tier.chances)
+      || !rewardTypes.every((type) => isBoundedInteger(tier.chances[type], 0, 100))
+      || rewardTypes.reduce((total, type) => total + tier.chances[type], 0) !== 100
+      || !tier.rewards || typeof tier.rewards !== "object" || Array.isArray(tier.rewards)) return null;
+    const rewards = {};
+    for (const type of ["claims", "specialClaims"]) {
+      const range = tier.rewards[type];
+      if (!Array.isArray(range) || range.length !== 2
+        || !isBoundedInteger(range[0], 1, 1000000)
+        || !isBoundedInteger(range[1], range[0], 1000000)) return null;
+      rewards[type] = [...range];
+    }
+    tiers.push({
+      buyIn: tier.buyIn,
+      chances: Object.fromEntries(rewardTypes.map((type) => [type, tier.chances[type]])),
+      rewards,
+    });
   }
-  return tiers.reduce((total, tier) => total + tier.chance, 0) === 100 ? tiers : null;
+  return tiers;
+}
+
+export function validateUpdateLog(value) {
+  if (!Array.isArray(value) || value.length > 100) return null;
+  const entries = [];
+  for (const entry of value) {
+    const parsedDate = typeof entry?.date === "string" ? new Date(`${entry.date}T00:00:00Z`) : null;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(entry.date)
+      || !parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== entry.date
+      || typeof entry.title !== "string" || !entry.title.trim() || entry.title.trim().length > 80
+      || typeof entry.body !== "string" || !entry.body.trim() || entry.body.trim().length > 600) return null;
+    entries.push({ date: entry.date, title: entry.title.trim(), body: entry.body.trim() });
+  }
+  return entries;
 }
 
 export function isValidPassword(value) {
