@@ -8,7 +8,11 @@ import {
   normalizeUsername,
   parseGoldenTimeLimit,
   DEFAULT_GAME_CONFIG,
+  formatRecoveryCode,
+  normalizeRecoveryCode,
+  validateCodeReward,
   validatePlayerProgress,
+  validateRouletteTiers,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -22,6 +26,32 @@ test("password validation enforces length without changing the password", () => 
   assert.equal(isValidPassword("1234567890"), true);
   assert.equal(isValidPassword("short"), false);
   assert.equal(isValidPassword("x".repeat(129)), false);
+});
+
+test("recovery codes use the unambiguous alphabet and display in four groups", () => {
+  assert.equal(normalizeRecoveryCode("ABCD-2345-EFGH-6789"), "ABCD2345EFGH6789");
+  assert.equal(formatRecoveryCode("ABCD2345EFGH6789"), "ABCD-2345-EFGH-6789");
+  assert.equal(normalizeRecoveryCode("ABCD-1234-EFGH-6789"), null);
+  assert.equal(normalizeRecoveryCode("too-short"), null);
+  assert.equal(normalizeRecoveryCode("bad-code-with-punctuation!"), null);
+});
+
+test("code rewards use the bounded claims reward object contract", () => {
+  assert.deepEqual(validateCodeReward({ type: "claims", amount: 25 }), { type: "claims", amount: 25 });
+  assert.deepEqual(validateCodeReward({ type: "specialClaims", amount: 1 }), { type: "specialClaims", amount: 1 });
+  assert.equal(validateCodeReward({ type: "password", amount: 1 }), null);
+  assert.equal(validateCodeReward({ type: "claims", amount: -1 }), null);
+});
+
+test("roulette tiers validate bounds, unique names, and exact probability totals", () => {
+  const tiers = [
+    { name: "Common", chance: 75, minReward: 1, maxReward: 10 },
+    { name: "Rare", chance: 25, minReward: 11, maxReward: 50 },
+  ];
+  assert.deepEqual(validateRouletteTiers(tiers), tiers);
+  assert.equal(validateRouletteTiers([{ ...tiers[0], chance: 74 }, tiers[1]]), null);
+  assert.equal(validateRouletteTiers([tiers[0], { ...tiers[1], name: "common" }]), null);
+  assert.equal(validateRouletteTiers([{ ...tiers[0], maxReward: 0 }, tiers[1]]), null);
 });
 
 test("MongoDB connection configuration accepts hosted URIs and rejects local Vercel URIs", () => {
@@ -86,6 +116,8 @@ test("player progress accepts bounded game data and excludes shared caches", () 
   assert.deepEqual(validatePlayerProgress(progress), progress);
   assert.equal(validatePlayerProgress({ "orbit-global-level-cache": "[]" }), null);
   assert.equal(validatePlayerProgress({ token: "not game data" }), null);
+  assert.equal(validatePlayerProgress({ "orbit-password-hash": "private" }), null);
+  assert.equal(validatePlayerProgress({ "orbit-recovery-code": "private" }), null);
   assert.equal(validatePlayerProgress({ "orbit-claims": 42 }), null);
   assert.equal(validatePlayerProgress({ "orbit-claims": "x".repeat(20001) }), null);
 });

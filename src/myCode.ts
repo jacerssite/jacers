@@ -1,6 +1,9 @@
 import dartShipImage from "./assets/ships/dart.svg";
+import dartShipSvg from "./assets/ships/dart.svg?raw";
 import ufoShipImage from "./assets/ships/ufo.svg";
+import ufoShipSvg from "./assets/ships/ufo.svg?raw";
 import swordShipImage from "./assets/ships/sword.svg";
+import swordShipSvg from "./assets/ships/sword.svg?raw";
 import jackpotCrownImage from "./assets/ships/jackpot-crown.svg";
 import goldenCrownImage from "./assets/ships/golden-crown.svg";
 import prestigeCometImage from "./assets/ships/prestige-comet.png";
@@ -32,15 +35,41 @@ type PrestigeShipArt = "stellar-guard" | "quantum-dancer" | "cosmic-queen" | "vo
 type AvatarStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; cssArt?: PrestigeShipArt; defaultSkin: number; prestige?: number; golden?: boolean; jackpot?: boolean };
 type FlippedRoute = { walls: number[]; enemies: number[]; spikes: number[]; gravity: number[]; powerups?: { index: number; kind: PowerupKind }[]; key?: number };
 type SecretKeyPlacement = { id: string; index: number; y?: number; requiresPortal?: boolean };
-type SecretPortal = { index: number; secretId: string; y?: number };
+type SecretPortal = { id?: string; index: number; secretId: string; y?: number };
 type LevelMakerDraft = { name: string; briefing: string; prestige: boolean; tiles: string[]; flippedTiles: string[]; customId?: string };
-type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; customId?: string; localOnly?: boolean };
+type UnflippedRouteSnapshot = {
+    asteroids: Asteroid[];
+    obstacles: Obstacle[];
+    hazards: Hazard[];
+    enemies: Enemy[];
+    powerups: Powerup[];
+    key: LevelKey | null;
+    miniBosses: MiniBoss[];
+    boss: Boss | null;
+    playerX: number;
+};
+type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
 type ControlAction = "left" | "right" | "jump" | "down" | "shoot";
 type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 type CosmeticGroup = "skin" | "trail" | "avatar";
-type OnlineUser = { username: string; role: "player" | "owner" };
-type ManagedUser = { id: string; username: string; role: "player" | "owner"; banned: boolean; createdAt: string; usernameChangedAt: string | null; progress: Record<string, string> };
-type OnlineLeaderboardEntry = { id: string; username: string; level: string; timeMs: number; abilities: string[]; achievedAt: string };
+type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean };
+type ManagedUser = {
+    id: string;
+    username: string;
+    role: "player" | "tester" | "owner";
+    banned: boolean;
+    createdAt: string;
+    usernameChangedAt: string | null;
+    passwordChangedAt: string | null;
+    wipeVersion: number;
+    hasRecoveryCode: boolean;
+    recoveryCodeCreatedAt: string | null;
+    recoveryAttempts: number;
+    recoveryLockedUntil: string | null;
+    recoveryLockState: "locked" | "clear";
+    progress: Record<string, string>;
+};
+type OnlineLeaderboardEntry = { id: string; userId: string; username: string; level: string; timeMs: number; abilities: string[]; achievedAt: string };
 type OnlineSettings = { goldenTimeLimitMs: number };
 type WorldGameConfig = {
     rainbowStarChance: number;
@@ -64,6 +93,7 @@ type GameConfig = {
 const TILE_WIDTH = 180;
 const PORTAL_Y = 175;
 const PORTAL_SIZE = 58;
+const SECRET_LEVEL_COOLDOWN_MS = 30 * 60 * 1000;
 const CEILING_Y = 20;
 const FLOOR_Y = 300;
 const FLIPPED_WORLD_HEIGHT = 400;
@@ -238,6 +268,8 @@ let selectedSkin = Number(localStorage.getItem("orbit-skin") ?? "0");
 let selectedTrail = Number(localStorage.getItem("orbit-trail") ?? "0");
 let selectedAvatar = Number(localStorage.getItem("orbit-avatar") ?? "0");
 if (!localStorage.getItem("orbit-skin") && avatars[selectedAvatar]) selectedSkin = avatars[selectedAvatar].defaultSkin;
+let selectedShipColor = localStorage.getItem("orbit-ship-color") ?? skins[selectedSkin]?.color ?? skins[0].color;
+if (!/^#[0-9a-f]{6}$/i.test(selectedShipColor)) selectedShipColor = skins[selectedSkin]?.color ?? skins[0].color;
 let reducedEffects = localStorage.getItem("orbit-reduced-effects") === "true";
 let levelStartedAt = 0;
 let elapsedMilliseconds = 0;
@@ -251,6 +283,7 @@ let secretKeyRevealed = false;
 let endGoalLocked = false;
 let portalTravelInProgress = false;
 let portalTransitTimer = 0;
+let bossProjectileTimer = 0;
 let lastDownPressAt = 0;
 let spinInProgress = false;
 let activePlanet: "normal" | "prestige" = "normal";
@@ -258,9 +291,20 @@ let secretBossRoomActive = false;
 let secretBoss: Boss | null = null;
 let currentSecretPortalTarget: string | null = null;
 let portalReturnX: number | null = null;
+let unflippedRouteSnapshot: UnflippedRouteSnapshot | null = null;
+let portalReturnState: { x: number; y: number; verticalSpeed: number; jumpCount: number; shipFlipped: boolean; trailActive: boolean; trailPositions: { x: number; y: number }[]; trailDirection: number } | null = null;
 let currentOnlineUser: OnlineUser | null = null;
 let ownerBadgeObserver: MutationObserver | null = null;
+let accountNoticeTimer = 0;
+let accountNoticeOpen = false;
 let goldenTimeLimitMs = 60000;
+let musicContext: AudioContext | null = null;
+let musicGain: GainNode | null = null;
+let musicOscillators: OscillatorNode[] = [];
+let musicVolume = Number(localStorage.getItem("orbit-music-volume") ?? "0.3");
+let musicMuted = localStorage.getItem("orbit-music-muted") === "true";
+let musicUnlocked = false;
+if (!Number.isFinite(musicVolume) || musicVolume < 0 || musicVolume > 1) musicVolume = 0.3;
 let usedAbilities = new Set<string>();
 let lastJumpDirection = 0;
 let starPowerupActive = false;
@@ -336,15 +380,43 @@ function getHiddenPortalIndex(level: Level) {
     return candidates[Math.floor(Math.random() * candidates.length)] ?? Math.max(2, Math.floor(level.length / 2));
 }
 
+function getLevelType(level: Level): "normal" | "secret" | "prestige" {
+    return level.secret ? "secret" : level.prestige ? "prestige" : "normal";
+}
+
 function getHiddenPortalY() {
     return [68, 82, 96][Math.floor(Math.random() * 3)];
 }
 
-function pickDistinctLevelIndices(candidates: number[], count: number) {
-    const pool = [...candidates];
-    const selected: number[] = [];
-    while (selected.length < count && pool.length) selected.push(...pool.splice(Math.floor(Math.random() * pool.length), 1));
-    return selected;
+function readClaimedSecretPortals() {
+    try {
+        const claimed = JSON.parse(localStorage.getItem("orbit-claimed-secret-portals") ?? "[]");
+        return new Set<string>(Array.isArray(claimed) ? claimed.filter((id): id is string => typeof id === "string") : []);
+    } catch (error) {
+        console.error("Could not read claimed secret portals:", error);
+        return new Set<string>();
+    }
+}
+
+function isSecretPortalClaimed(secretId: string) {
+    return readClaimedSecretPortals().has(`${secretId}-portal`) || localStorage.getItem(`orbit-key-${secretId}`) === "1";
+}
+
+function markSecretPortalClaimed(secretId: string) {
+    const claimed = readClaimedSecretPortals();
+    claimed.add(`${secretId}-portal`);
+    localStorage.setItem("orbit-claimed-secret-portals", JSON.stringify([...claimed]));
+    localStorage.setItem(`orbit-key-${secretId}`, "1");
+}
+
+function readSecretPortalLocation(secretId: string): { source: string; index: number; y: number } | null {
+    try {
+        const saved = JSON.parse(localStorage.getItem(`orbit-portal-location-${secretId}`) ?? "null");
+        if (saved && typeof saved.source === "string" && Number.isSafeInteger(saved.index) && Number.isSafeInteger(saved.y)) return saved;
+    } catch (error) {
+        console.error(`Could not read portal location for ${secretId}:`, error);
+    }
+    return null;
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -393,6 +465,8 @@ function refreshProgressStateFromStorage() {
     selectedTrail = readCount("orbit-trail", 0, 0, trails.length - 1);
     selectedAvatar = readCount("orbit-avatar", 0, 0, avatars.length - 1);
     if (!localStorage.getItem("orbit-skin") && avatars[selectedAvatar]) selectedSkin = avatars[selectedAvatar].defaultSkin;
+    const savedShipColor = localStorage.getItem("orbit-ship-color");
+    selectedShipColor = savedShipColor && /^#[0-9a-f]{6}$/i.test(savedShipColor) ? savedShipColor : skins[selectedSkin]?.color ?? skins[0].color;
     reducedEffects = localStorage.getItem("orbit-reduced-effects") === "true";
     controlBindings = readControlBindings();
 }
@@ -479,6 +553,19 @@ async function refreshOnlineState() {
     if (session.user) await syncAccountProgress("load");
     goldenTimeLimitMs = settings.goldenTimeLimitMs;
     gameConfig = sharedConfig.config;
+    if (session.user?.role === "tester") {
+        const storedOverride = localStorage.getItem("orbit-tester-game-config");
+        if (storedOverride) {
+            try {
+                const parsed = JSON.parse(storedOverride) as GameConfig;
+                if (isUsableGameConfig(parsed)) gameConfig = parsed;
+                else throw new Error("Stored tester settings are malformed.");
+            } catch (error) {
+                localStorage.removeItem("orbit-tester-game-config");
+                console.error("Discarded invalid tester-only settings:", error);
+            }
+        }
+    }
     levels.splice(0, levels.length, ...levels.filter((level) => !level.customId || level.localOnly), ...sharedLevels.levels.map((level) => ({ ...level, localOnly: false })));
     localStorage.setItem("orbit-global-level-cache", JSON.stringify(sharedLevels.levels));
     configurePortalDistribution();
@@ -486,31 +573,41 @@ async function refreshOnlineState() {
 
 function configurePortalDistribution() {
     levels.forEach((level) => {
-        if (level.customId || level.localOnly) return;
-        level.portals = [];
-        level.secretPortals = undefined;
+        level.type = getLevelType(level);
+        if (!level.customId && !level.localOnly) {
+            level.portals = [];
+            level.secretPortals = undefined;
+        }
     });
     const secretLevels = levels.map((level, index) => ({ level, index })).filter(({ level }) => level.secret && !level.customId && !level.localOnly);
     secretLevels.forEach(({ level, index }) => {
         if (!level.secretId) level.secretId = `secret-level-${index + 1}`;
-        level.secretPortals = [{ index: getHiddenPortalIndex(level), y: getHiddenPortalY(), secretId: level.secretId }];
+        level.secretPortals = undefined;
     });
 
-    const normalSources = levels.map((level, index) => ({ level, index })).filter(({ level }) => !level.secret && !level.prestige && !level.customId && !level.localOnly);
-    const prestigeSources = levels.map((level, index) => ({ level, index })).filter(({ level }) => !level.secret && level.prestige && !level.customId && !level.localOnly);
-    const normalTargets = secretLevels.filter(({ level }) => !level.prestige && level.secretId !== "prestige-gate");
-    const prestigeTargets = secretLevels.filter(({ level }) => level.prestige);
-    pickDistinctLevelIndices(normalSources.map(({ index }) => index), 3).forEach((sourceIndex, portalIndex) => {
-        const target = normalTargets[portalIndex]?.level.secretId;
-        if (!target) return;
-        levels[sourceIndex].portals = [];
-        levels[sourceIndex].secretPortals = [{ index: getHiddenPortalIndex(levels[sourceIndex]), y: getHiddenPortalY(), secretId: target }];
-    });
-    pickDistinctLevelIndices(prestigeSources.map(({ index }) => index), 3).forEach((sourceIndex, portalIndex) => {
-        const target = prestigeTargets[portalIndex]?.level.secretId;
-        if (!target) return;
-        levels[sourceIndex].portals = [];
-        levels[sourceIndex].secretPortals = [{ index: getHiddenPortalIndex(levels[sourceIndex]), y: getHiddenPortalY(), secretId: target }];
+    const sources = levels.filter((level) => !level.secret && !level.customId && !level.localOnly);
+    const availableSources = new Set(sources);
+    secretLevels.forEach(({ level }) => {
+        const secretId = level.secretId;
+        if (!secretId || isSecretPortalClaimed(secretId)) return;
+        const saved = readSecretPortalLocation(secretId);
+        let source = saved ? sources.find((candidate) => candidate.name === saved.source) : undefined;
+        if (!source || !availableSources.has(source)) {
+            const candidates = sources.filter((candidate) => availableSources.has(candidate) && Boolean(candidate.prestige) === Boolean(level.prestige));
+            source = candidates[Math.floor(Math.random() * candidates.length)];
+            if (!source) return;
+            const location = { source: source.name, index: getHiddenPortalIndex(source), y: getHiddenPortalY() };
+            localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify(location));
+        }
+        availableSources.delete(source);
+        const location = readSecretPortalLocation(secretId);
+        if (!location) return;
+        source.secretPortals = [{
+            id: `${secretId}-portal`,
+            index: location.index,
+            y: location.y,
+            secretId,
+        }];
     });
 }
 
@@ -526,28 +623,161 @@ export function startApp() {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", () => pressedKeys.clear());
+    document.addEventListener("click", unlockMusic, { once: true });
+    document.addEventListener("keydown", unlockMusic, { once: true });
+    document.addEventListener("visibilitychange", () => {
+        if (!musicContext) return;
+        if (document.hidden) void musicContext.suspend();
+        else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
+    });
     if (!accountProgressTimer) accountProgressTimer = window.setInterval(() => {
         if (currentOnlineUser) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
     }, 2500);
+    if (!accountNoticeTimer) accountNoticeTimer = window.setInterval(() => void refreshAccountNotices(), 7000);
     showMenu();
+}
+
+async function refreshAccountNotices() {
+    try {
+        const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
+        const previousRole = currentOnlineUser?.role;
+        currentOnlineUser = session.user;
+        updateOwnerAccountIndicator();
+        if (previousRole && currentOnlineUser && previousRole !== currentOnlineUser.role
+            && document.querySelector(".tester-screen")
+            && currentOnlineUser.role !== "owner" && currentOnlineUser.role !== "tester") {
+            showMenu();
+        }
+        if (!currentOnlineUser || accountNoticeOpen) return;
+        const response = await apiRequest<{ messages: { id: string; title: string; body: string; type: string; acknowledged: boolean }[] }>("/messages");
+        const message = response.messages.find((candidate) => !candidate.acknowledged);
+        if (message) showAccountNotice(message);
+    } catch (error) {
+        if (currentOnlineUser) console.error("Could not refresh player messages:", error);
+    }
+}
+
+function showAccountNotice(message: { id: string; title: string; body: string; type: string }) {
+    accountNoticeOpen = true;
+    const overlay = document.createElement("div");
+    overlay.className = `player-message-overlay message-${["info", "warning", "reward"].includes(message.type) ? message.type : "info"}`;
+    const dialog = document.createElement("section");
+    dialog.className = "player-message-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "player-message-title");
+    const title = document.createElement("h2");
+    title.id = "player-message-title";
+    title.textContent = message.title;
+    const body = document.createElement("p");
+    body.textContent = message.body;
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const acknowledge = document.createElement("button");
+    acknowledge.className = "menu-button";
+    acknowledge.textContent = "OK";
+    acknowledge.addEventListener("click", async () => {
+        acknowledge.disabled = true;
+        status.textContent = "Saving...";
+        try {
+            await apiRequest(`/messages/${encodeURIComponent(message.id)}/ack`, { method: "POST", body: "{}" });
+            overlay.remove();
+            accountNoticeOpen = false;
+            void refreshAccountNotices();
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not acknowledge this message. Try again.";
+            acknowledge.disabled = false;
+        }
+    });
+    dialog.append(title, body, status, acknowledge);
+    overlay.append(dialog);
+    document.documentElement.append(overlay);
+}
+
+function unlockMusic() {
+    if (musicUnlocked || musicMuted) return;
+    musicUnlocked = true;
+    try {
+        musicContext = new AudioContext();
+        const filter = musicContext.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = 430;
+        musicGain = musicContext.createGain();
+        musicGain.gain.value = 0;
+        filter.connect(musicGain);
+        musicGain.connect(musicContext.destination);
+        [55, 82.41, 110].forEach((frequency, index) => {
+            const oscillator = musicContext!.createOscillator();
+            const voice = musicContext!.createGain();
+            oscillator.type = index === 1 ? "triangle" : "sine";
+            oscillator.frequency.value = frequency;
+            voice.gain.value = index === 0 ? 0.55 : 0.18;
+            oscillator.connect(voice);
+            voice.connect(filter);
+            oscillator.start();
+            musicOscillators.push(oscillator);
+        });
+        void musicContext.resume().then(() => fadeMusicTo(musicMuted ? 0 : musicVolume * 0.24));
+    } catch (error) {
+        musicUnlocked = false;
+        console.error("Could not initialize background music:", error);
+    }
+}
+
+function fadeMusicTo(volume: number) {
+    if (!musicContext || !musicGain) return;
+    const now = musicContext.currentTime;
+    musicGain.gain.cancelScheduledValues(now);
+    musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+    musicGain.gain.linearRampToValueAtTime(volume, now + 2);
+}
+
+function setMusicVolume(volume: number) {
+    if (!Number.isFinite(volume)) return;
+    musicVolume = Math.max(0, Math.min(1, volume));
+    localStorage.setItem("orbit-music-volume", String(musicVolume));
+    if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : musicVolume * 0.24);
+}
+
+function setMusicMuted(muted: boolean) {
+    musicMuted = muted;
+    localStorage.setItem("orbit-music-muted", String(muted));
+    if (muted) fadeMusicTo(0);
+    else if (!musicUnlocked) unlockMusic();
+    else fadeMusicTo(musicVolume * 0.24);
+}
+
+function setMusicScene(scene: "menu" | "normal" | "prestige" | "secret" | "boss") {
+    const rootFrequency = scene === "prestige" ? 46.25 : scene === "secret" ? 65.41 : scene === "boss" ? 58.27 : 55;
+    if (musicContext) {
+        [rootFrequency, rootFrequency * 1.5, rootFrequency * 2].forEach((frequency, index) => {
+            const oscillator = musicOscillators[index];
+            if (oscillator) oscillator.frequency.setTargetAtTime(frequency, musicContext!.currentTime, 0.65);
+        });
+    }
 }
 
 function updateOwnerAccountIndicator() {
     const existing = document.querySelector(".owner-account-indicator");
-    if (currentOnlineUser?.role === "owner") {
-        if (existing) return;
+    if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
         const indicator = document.createElement("span");
         indicator.className = "owner-account-indicator";
-        indicator.textContent = "★";
+        indicator.textContent = getRoleBadge(currentOnlineUser.role);
         indicator.setAttribute("role", "img");
-        indicator.setAttribute("aria-label", `Owner account active: ${currentOnlineUser.username}`);
-        indicator.title = `Owner account active: ${currentOnlineUser.username}`;
-        document.body.prepend(indicator);
+        indicator.setAttribute("aria-label", `${currentOnlineUser.role} account active: ${currentOnlineUser.username}`);
+        indicator.title = `${currentOnlineUser.role === "owner" ? "Owner" : "Tester"} account active: ${currentOnlineUser.username}`;
+        if (existing) existing.replaceWith(indicator);
+        else document.body.prepend(indicator);
     } else existing?.remove();
 }
 
 function showMenu() {
+    if (currentOnlineUser?.mustChangePassword) {
+        showAccount("Change your temporary password before continuing.");
+        return;
+    }
     gameActive = false;
+    setMusicScene("menu");
     cancelAnimationFrame(animationFrame);
     pressedKeys.clear();
         const menu = document.createElement("main");
@@ -561,12 +791,6 @@ function showMenu() {
     accountButton.classList.add("account-rail-button");
     accountButton.setAttribute("aria-label", currentOnlineUser ? `Account: ${currentOnlineUser.username}` : "Open account");
     accountRail.append(accountButton);
-    if (hasClearedPrestigeGate() && prestigeLevel < prestigeMax) {
-        const claimPrestige = createMenuButton(canClaimPrestige() ? "Claim prestige" : "Claim prestige / requirements unmet", () => { if (tryPrestige()) showMenu(); });
-        claimPrestige.disabled = !canClaimPrestige();
-        claimPrestige.classList.add("claim-prestige");
-        menuActions.append(claimPrestige);
-    }
     const secondaryActions = document.createElement("div"); secondaryActions.className = "secondary-actions"; secondaryActions.append(createTextButton("Special asteroid odds", showDropRates), createTextButton("Credits", showCredits));
     menu.append(accountRail, menuActions, secondaryActions);
     menu.append(createPageCounter()); document.body.replaceChildren(menu);
@@ -583,6 +807,7 @@ function createMenuButton(text: string, action: () => void) {
 
 function showLevelMenu() {
     gameActive = false;
+    setMusicScene(activePlanet === "prestige" ? "prestige" : "normal");
     cancelAnimationFrame(animationFrame);
     pressedKeys.clear();
     if (isLevelMakerPreview) {
@@ -593,9 +818,9 @@ function showLevelMenu() {
         menu.className = "menu-screen level-menu";
         menu.innerHTML = `<p class="eyebrow">MISSION SELECT / ${activePlanet === "prestige" ? "RINGED PLANET" : "BLUE PLANET"}</p><h1>Choose your <em>sector</em></h1><p class="menu-copy">Claim the asteroids in order. New sectors unlock after the previous beacon is reached.</p>`;
         const planetButton = createMenuButton(activePlanet === "normal" ? "Fly to prestige planet" : "Return to blue planet", switchPlanet);
-        if (activePlanet === "normal" && prestigeLevel < 2) {
+        if (activePlanet === "normal" && prestigeLevel < 1) {
             planetButton.disabled = true;
-            planetButton.textContent = "Prestige planet locked / reach prestige 2";
+            planetButton.textContent = "Prestige planet locked / reach prestige 1";
             planetButton.classList.add("locked");
         }
         menu.append(planetButton, createTextButton("Online leaderboard", showLeaderboard));
@@ -610,10 +835,10 @@ function showLevelMenu() {
         button.className = `level-button ${level.secret ? "secret-level" : ""} ${unlocked ? "" : "locked"}`;
         button.type = "button";
         button.disabled = !unlocked;
-        const prestigeUnlocked = prestigeLevel >= 2 || routeIndex === 0;
+        const prestigeUnlocked = prestigeLevel >= 1 || routeIndex === 0;
         const prestigeLocked = activePlanet === "prestige" && !prestigeUnlocked;
         button.disabled = !unlocked || prestigeLocked;
-        const lockMessage = prestigeLocked ? "LOCKED / reach prestige 2" : "LOCKED / clear the previous sector";
+        const lockMessage = prestigeLocked ? "LOCKED / reach prestige 1" : "LOCKED / clear the previous sector";
         button.innerHTML = `<span><b>${String(routeIndex + 1).padStart(2, "0")}</b> ${level.name}</span><small>${button.disabled ? lockMessage : `${level.asteroids.length} asteroids / ${level.briefing}`}</small>`;
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelList.append(button);
@@ -631,6 +856,7 @@ function showLevelMenu() {
 
 function showSecretLevels() {
     gameActive = false;
+    setMusicScene("secret");
     cancelAnimationFrame(animationFrame);
     const menu = document.createElement("main");
     menu.className = "menu-screen level-menu secret-menu";
@@ -640,16 +866,24 @@ function showSecretLevels() {
     levels.forEach((level, index) => {
         if (!level.secret) return;
         const unlocked = isSecretLevelUnlocked(level);
+        const cooldownUntil = level.secretId ? Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") + SECRET_LEVEL_COOLDOWN_MS : 0;
+        const remainingMs = Math.max(0, cooldownUntil - Date.now());
         const button = document.createElement("button");
         button.className = `level-button secret-level ${unlocked ? "" : "locked"}`;
         button.type = "button";
-        button.disabled = !unlocked;
-        button.innerHTML = `<span><b>??</b> ${level.name}</span><small>${unlocked ? `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}` : `LOCKED / find its ${level.prestige ? "prestige " : ""}key`}</small>`;
-        if (unlocked) button.addEventListener("click", () => startGame(index));
+        button.disabled = !unlocked || remainingMs > 0;
+        const cooldownText = remainingMs > 0 ? `AVAILABLE IN ${formatCooldown(remainingMs)}` : "";
+        button.innerHTML = `<span><b>??</b> ${level.name}</span><small>${!unlocked ? `LOCKED / find its ${level.prestige ? "prestige " : ""}key` : cooldownText || `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}`}</small>`;
+        if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelList.append(button);
     });
     menu.append(levelList, createTextButton("Mission select", showLevelMenu), createTextButton("Main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
+}
+
+function formatCooldown(milliseconds: number) {
+    const seconds = Math.ceil(milliseconds / 1000);
+    return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
 
 function showSettings() {
@@ -668,6 +902,80 @@ function showSettings() {
     effectsInput.addEventListener("change", () => { reducedEffects = effectsInput.checked; localStorage.setItem("orbit-reduced-effects", String(reducedEffects)); });
     effectsRow.append(effectsInput);
     panel.append(effectsRow);
+
+    const musicToggleRow = document.createElement("label");
+    musicToggleRow.className = "setting-row";
+    musicToggleRow.innerHTML = `<span><b>Background music</b><small>Soft procedural space ambience. Starts after your first click or key press.</small></span>`;
+    const musicToggle = document.createElement("input");
+    musicToggle.type = "checkbox";
+    musicToggle.checked = !musicMuted;
+    musicToggle.addEventListener("change", () => setMusicMuted(!musicToggle.checked));
+    musicToggleRow.append(musicToggle);
+    panel.append(musicToggleRow);
+
+    const musicVolumeRow = document.createElement("label");
+    musicVolumeRow.className = "setting-row music-volume-row";
+    musicVolumeRow.innerHTML = `<span><b>Music volume</b><small>Saved to your account and applied live.</small></span>`;
+    const musicVolumeInput = document.createElement("input");
+    musicVolumeInput.type = "range";
+    musicVolumeInput.min = "0";
+    musicVolumeInput.max = "1";
+    musicVolumeInput.step = "0.01";
+    musicVolumeInput.value = String(musicVolume);
+    musicVolumeInput.setAttribute("aria-label", "Background music volume");
+    musicVolumeInput.addEventListener("input", () => setMusicVolume(Number(musicVolumeInput.value)));
+    musicVolumeRow.append(musicVolumeInput);
+    panel.append(musicVolumeRow);
+
+    const codeSection = document.createElement("section");
+    codeSection.className = "settings-code-section";
+    codeSection.innerHTML = `<h2>Redeem a code</h2><p>Enter a code to claim its reward. Each code can only be used as allowed by its rules.</p>`;
+    const codeForm = document.createElement("form");
+    codeForm.className = "account-profile-form";
+    const codeLabel = document.createElement("label");
+    codeLabel.textContent = "Code";
+    const codeInput = document.createElement("input");
+    codeInput.type = "text";
+    codeInput.autocomplete = "off";
+    codeInput.maxLength = 40;
+    codeInput.required = true;
+    codeLabel.append(codeInput);
+    const codeStatus = document.createElement("small");
+    codeStatus.setAttribute("role", "status");
+    const redeem = document.createElement("button");
+    redeem.className = "menu-button";
+    redeem.type = "submit";
+    redeem.textContent = "Redeem";
+    if (!currentOnlineUser) {
+        redeem.disabled = true;
+        codeStatus.textContent = "Sign in to redeem a code.";
+    }
+    codeForm.append(codeLabel, redeem, codeStatus);
+    codeForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!currentOnlineUser) {
+            codeStatus.textContent = "Sign in to redeem a code.";
+            return;
+        }
+        redeem.disabled = true;
+        codeStatus.textContent = "Checking code...";
+        try {
+            const result = await apiRequest<{ reward: { type: "claims" | "specialClaims"; amount: number } }>("/codes/redeem", {
+                method: "POST",
+                body: JSON.stringify({ code: codeInput.value.trim().toUpperCase() }),
+            });
+            applyCodeReward(result.reward);
+            codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} added.`;
+            codeInput.value = "";
+            void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync code reward:", error));
+        } catch (error) {
+            codeStatus.textContent = error instanceof Error ? error.message : "Could not redeem this code.";
+        } finally {
+            redeem.disabled = !currentOnlineUser;
+        }
+    });
+    codeSection.append(codeForm);
+    panel.append(codeSection);
     
     // Planetary flip toggle for customization
     const flipRow = document.createElement("label");
@@ -759,31 +1067,26 @@ function showSettings() {
     
     panel.append(timesSection);
     
-    // Golden skin progress meter
-    const normalCompleted = getNormalCompletedLevelCount();
-    const normalTotal = getNormalRouteCount();
-    const goldenProgress = normalTotal > 0 ? (normalCompleted / normalTotal) * 100 : 0;
-    
-    const progressSection = document.createElement("section");
-    progressSection.className = "golden-progress-section";
-    progressSection.innerHTML = `
-        <h2>Golden Body Progress</h2>
-        <p class="menu-copy">Complete each normal route in ${formatTime(goldenTimeLimitMs)} or less to unlock the Golden Body skin.</p>
-        <div class="progress-bar-container">
-            <div class="progress-bar" style="width: ${goldenProgress}%"></div>
-        </div>
-        <small>${normalCompleted} / ${normalTotal} routes under the time limit (${Math.round(goldenProgress)}%)</small>
-    `;
-    panel.append(progressSection);
-    
-    const testerRow = document.createElement("div");
-    testerRow.className = "tester-entry";
-    testerRow.innerHTML = `<span><b>Tester tools</b><small>Adjust claims, power-ups, and level unlocks.</small></span>`;
-    testerRow.append(createTextButton("Login", showTesterLogin));
-    panel.append(testerRow);
+    if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
+        const testerRow = document.createElement("div");
+        testerRow.className = "tester-entry";
+        testerRow.innerHTML = `<span><b>${currentOnlineUser.role === "owner" ? "Owner panel" : "Tester tools"}</b><small>Open authorized game testing controls.</small></span>`;
+        testerRow.append(createTextButton("Open", () => void showTesterPanel()));
+        panel.append(testerRow);
+    }
     
     menu.append(panel, createTextButton("Back", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
+}
+
+function applyCodeReward(reward: { type: "claims" | "specialClaims"; amount: number }) {
+    if (reward.type === "claims") {
+        asteroidsClaimed += reward.amount;
+        localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+    } else {
+        specialAsteroids += reward.amount;
+        localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+    }
 }
 
 function showCustomization() {
@@ -805,11 +1108,7 @@ function showCustomization() {
     flipToggleRow.append(flipToggle);
     panel.append(flipToggleRow);
     
-    const selectedAvatarStyle = avatars[selectedAvatar] ?? avatars[0];
-    const selectedSkinStyle = skins[selectedSkin] ?? skins[0];
-    const previewArt = selectedAvatarStyle.image ?? selectedSkinStyle.image;
-    const selectedTrailStyle = trails[selectedTrail] ?? trails[0];
-    const preview = document.createElement("aside"); preview.className = "ship-preview"; preview.innerHTML = `<p class="setting-title">Current character</p><div class="preview-stage">${selectedAvatarStyle.cssArt ? createCssShipArtMarkup(selectedAvatarStyle.cssArt, selectedAvatarStyle.name, selectedAvatarStyle.color) : previewArt ? createShipArtMarkup(previewArt, selectedAvatarStyle.name) : `<div class="preview-ship ship-${selectedSkinStyle.shape}" style="--ship-color:${selectedSkinStyle.color}"><span></span><i></i></div>`}</div><b>${selectedAvatarStyle.name}</b><small>${selectedSkinStyle.name} skin / ${selectedTrailStyle.name} trail</small><div class="trail-preview" style="--trail-color:${selectedTrailStyle.color}">${Array.from({ length: 5 }, (_, index) => `<i class="trail-preview-particle trail-effect-${selectedTrailStyle.effect}" style="--trail-delay:${index * 90}ms"></i>`).join("")}</div>`;
+    const preview = createShipPreview();
     
     const rarityOrder: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
     
@@ -837,11 +1136,27 @@ function showCustomization() {
             group.append(grid); panel.append(group);
         });
     };
+    const colorOptions = ["#62d6b2", "#f6c46e", "#ed7657", "#b991ff", "#6ecbff", "#f26d9b", "#f3f5e9", "#8bd46e"];
+    appendRarityGroups("Ship color", colorOptions.map((color, index) => ({ name: color, color, required: 0, index })), "color-grid", (option) => {
+        const button = document.createElement("button");
+        button.className = `ship-color-choice ${selectedShipColor.toLowerCase() === option.color ? "selected" : ""}`;
+        button.type = "button";
+        button.title = option.color;
+        button.setAttribute("aria-label", `Ship color ${option.color}`);
+        button.setAttribute("aria-pressed", String(selectedShipColor.toLowerCase() === option.color));
+        button.style.setProperty("--ship-color-choice", option.color);
+        button.addEventListener("click", () => {
+            selectedShipColor = option.color;
+            localStorage.setItem("orbit-ship-color", selectedShipColor);
+            showCustomization();
+        });
+        return button;
+    });
     appendRarityGroups("Skins", skinsWithIndex, "customization-grid", (skin, _index, rarity) => {
         const button = document.createElement("button"); button.className = `loadout-choice ${selectedSkin === skin.originalIndex ? "selected" : ""}`; button.disabled = !isSkinUnlocked(skin, skin.originalIndex);
         const swatch = skin.image
             ? createShipArtMarkup(skin.image, `${skin.name} skin`)
-            : `<i class="skin-color-swatch ship-${skin.shape}" style="--skin-color:${skin.color}" aria-hidden="true"></i>`;
+            : `<i class="skin-color-swatch" style="--skin-color:${skin.color}" aria-hidden="true"></i>`;
         button.innerHTML = `${swatch}<span>${skin.name}</span>${createRarityBadge(rarity)}`;
         button.addEventListener("click", () => { selectedSkin = skin.originalIndex; localStorage.setItem("orbit-skin", String(selectedSkin)); showCustomization(); }); return button;
     });
@@ -864,9 +1179,70 @@ function showCustomization() {
     menu.append(layout, createTextButton("Back", showMenu), createPageCounter()); document.body.replaceChildren(menu);
 }
 
+function createShipPreview(loadout = { shipColor: selectedShipColor, avatar: selectedAvatar, skin: selectedSkin, trail: selectedTrail }) {
+    const avatar = avatars[loadout.avatar] ?? avatars[0];
+    const skin = skins[loadout.skin] ?? skins[0];
+    const trail = trails[loadout.trail] ?? trails[0];
+    const shipColor = /^#[0-9a-f]{6}$/i.test(loadout.shipColor) ? loadout.shipColor : skins[0].color;
+    const art = avatar.image ?? skin.image;
+    const preview = document.createElement("aside");
+    preview.className = "ship-preview";
+    preview.innerHTML = `<p class="setting-title">Current character</p><div class="preview-stage">${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, shipColor) : art ? createShipArtMarkup(art, avatar.name, shipColor) : `<div class="preview-ship ship-${skin.shape}" style="--ship-color:${shipColor}"><span></span><i></i></div>`}</div><b>${avatar.name}</b><small>Color ${shipColor} / ${skin.name} skin / ${trail.name} trail</small><div class="trail-preview" style="--trail-color:${trail.color}">${Array.from({ length: 5 }, (_, index) => `<i class="trail-preview-particle trail-effect-${trail.effect}" style="--trail-delay:${index * 90}ms"></i>`).join("")}</div>`;
+    return preview;
+}
+
+function createProgressArea() {
+    const section = document.createElement("section");
+    section.className = "account-progress";
+    const normalTotal = getNormalRouteCount();
+    const normalDone = getNormalCompletedLevelCount();
+    const requirement = getPrestigeRequirement(prestigeLevel);
+    const values = [
+        { label: "Normal routes", value: normalDone, total: normalTotal },
+        { label: "Asteroids", value: asteroidsClaimed, total: requirement.normal },
+        { label: "Special asteroids", value: specialAsteroids, total: requirement.special },
+        { label: "Prestige Gate", value: hasClearedPrestigeGate() ? 1 : 0, total: 1 },
+    ];
+    const pct = (value: number, total: number) => total > 0 ? Math.min(100, value / total * 100) : 0;
+    const overall = Math.round(values.reduce((sum, item) => sum + pct(item.value, item.total), 0) / values.length);
+    section.innerHTML = `<h2>Progress</h2>`;
+    values.forEach(({ label, value, total }) => {
+        const row = document.createElement("label");
+        row.className = "account-progress-row";
+        const title = document.createElement("span");
+        title.textContent = `${label}: ${value}/${total}`;
+        const progress = document.createElement("progress");
+        progress.max = 100;
+        progress.value = pct(value, total);
+        progress.setAttribute("aria-label", title.textContent);
+        row.append(title, progress);
+        section.append(row);
+    });
+    const overallLabel = document.createElement("p");
+    overallLabel.textContent = `Overall prestige progress: ${overall}%`;
+    section.append(overallLabel);
+    if (canClaimPrestige()) {
+        const ready = document.createElement("strong");
+        ready.className = "prestige-ready";
+        ready.textContent = "Ready to prestige. Enter the Prestige Gate to claim it.";
+        section.append(ready);
+    }
+    const goldenProgress = pct(normalDone, normalTotal);
+    const goldenHeading = document.createElement("h3");
+    goldenHeading.textContent = "Golden Body";
+    const goldenText = document.createElement("p");
+    goldenText.textContent = `Complete each normal route in ${formatTime(goldenTimeLimitMs)} or less: ${normalDone}/${normalTotal} (${Math.round(goldenProgress)}%).`;
+    const goldenBar = document.createElement("progress");
+    goldenBar.max = 100;
+    goldenBar.value = goldenProgress;
+    goldenBar.setAttribute("aria-label", "Golden Body unlock progress");
+    section.append(goldenHeading, goldenText, goldenBar);
+    return section;
+}
+
 function showCredits() {
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
-    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section>`;
+    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Procedural Space Ambience / generated in-browser by Jacer / no external track or license.</p>`;
     menu.append(createTextButton("Back", showMenu)); document.body.replaceChildren(menu);
 }
 
@@ -878,6 +1254,18 @@ function showLeaderboard() {
     accountSummary.className = "online-account-summary";
     accountSummary.setAttribute("role", "status");
     const accountButton = createTextButton("Sign in / Create account", showAccount);
+    const levelPicker = document.createElement("select");
+    levelPicker.className = "leaderboard-level-picker";
+    const allLevels = document.createElement("option");
+    allLevels.value = "";
+    allLevels.textContent = "All levels";
+    levelPicker.append(allLevels);
+    levels.filter((level) => !level.localOnly).forEach((level) => {
+        const option = document.createElement("option");
+        option.value = level.name;
+        option.textContent = level.name;
+        levelPicker.append(option);
+    });
     const list = document.createElement("section");
     list.className = "leaderboard-list";
     const adminPanel = document.createElement("section");
@@ -885,23 +1273,23 @@ function showLeaderboard() {
     const serviceStatus = document.createElement("p");
     serviceStatus.className = "online-service-status";
     serviceStatus.setAttribute("role", "status");
-    menu.append(accountSummary, accountButton, serviceStatus, list, adminPanel, createTextButton("Mission select", showLevelMenu), createTextButton("Back", showMenu));
+    menu.append(accountSummary, accountButton, levelPicker, serviceStatus, list, adminPanel, createTextButton("Mission select", showLevelMenu), createTextButton("Back", showMenu));
     document.body.replaceChildren(menu);
 
-    void (async () => {
+    const loadEntries = async () => {
         try {
             const [session, settings, response] = await Promise.all([
                 apiRequest<{ user: OnlineUser | null }>("/auth/session"),
                 apiRequest<OnlineSettings>("/settings"),
-                apiRequest<{ entries: OnlineLeaderboardEntry[] }>("/leaderboard"),
+                apiRequest<{ entries: OnlineLeaderboardEntry[] }>(`/leaderboard${levelPicker.value ? `?level=${encodeURIComponent(levelPicker.value)}` : ""}`),
             ]);
             currentOnlineUser = session.user;
             goldenTimeLimitMs = settings.goldenTimeLimitMs;
             accountSummary.textContent = session.user
-                ? `Signed in as ${session.user.username}${session.user.role === "owner" ? " / OWNER" : ""}`
+                ? `Signed in as ${session.user.username}${getRoleBadge(session.user.role) ? ` / ${getRoleBadge(session.user.role)}` : ""}`
                 : "Sign in or create a username account to submit a time.";
             accountButton.textContent = session.user ? "Account / Sign out" : "Sign in / Create account";
-            accountButton.onclick = session.user ? () => showAccount() : showAccount;
+            accountButton.onclick = () => showAccount();
             renderLeaderboardEntries(list, response.entries, session.user);
             serviceStatus.textContent = response.entries.length ? `${response.entries.length} online best runs` : "No online runs have been submitted yet.";
             if (session.user?.role === "owner") renderOwnerControls(adminPanel, settings, () => showLeaderboard());
@@ -909,7 +1297,9 @@ function showLeaderboard() {
             serviceStatus.textContent = `Online leaderboard unavailable: ${error instanceof Error ? error.message : "unknown service error"}`;
             list.textContent = "Leaderboard data could not be loaded.";
         }
-    })();
+    };
+    levelPicker.addEventListener("change", () => void loadEntries());
+    void loadEntries();
 }
 
 function renderLeaderboardEntries(container: HTMLElement, entries: OnlineLeaderboardEntry[], user: OnlineUser | null) {
@@ -926,18 +1316,86 @@ function renderLeaderboardEntries(container: HTMLElement, entries: OnlineLeaderb
         row.className = "leaderboard-entry";
         const rank = document.createElement("b");
         rank.textContent = String(index + 1).padStart(2, "0");
+        const username = createTextButton(entry.username, () => showLeaderboardPlayerProfile(entry.userId, showLeaderboard));
+        username.classList.add("leaderboard-player-button");
+        const badge = getRoleBadge((entry as OnlineLeaderboardEntry & { role?: OnlineUser["role"] }).role ?? "player");
+        if (badge) username.append(document.createTextNode(` ${badge}`));
         const playerLevel = document.createElement("span");
         playerLevel.className = "leaderboard-player-level";
-        playerLevel.textContent = `${entry.username} / ${entry.level}`;
+        playerLevel.textContent = entry.level;
         const abilities = document.createElement("small");
         abilities.className = "leaderboard-abilities";
         abilities.textContent = `Abilities: ${entry.abilities.length ? entry.abilities.map(formatAbilityName).join(", ") : "None"}`;
         const time = document.createElement("strong");
         time.textContent = formatTime(entry.timeMs);
-        row.append(rank, playerLevel, time, abilities);
+        row.append(rank, username, playerLevel, time, abilities);
         if (user?.role === "owner") row.append(createOwnerEntryControls(entry, () => showLeaderboard()));
         container.append(row);
     });
+}
+
+function getRoleBadge(role: OnlineUser["role"]) {
+    return role === "owner" ? "★" : role === "tester" ? "T" : "";
+}
+
+async function showLeaderboardPlayerProfile(playerId: string, returnTo: () => void) {
+    const menu = document.createElement("main");
+    menu.className = "menu-screen account-screen";
+    menu.innerHTML = `<p class="eyebrow">FLIGHT DATA / PILOT PROFILE</p><h1>Player <em>profile</em></h1>`;
+    const status = document.createElement("p");
+    status.className = "online-service-status";
+    status.setAttribute("role", "status");
+    status.textContent = "Loading pilot profile...";
+    menu.append(status, createTextButton("Back to leaderboard", returnTo));
+    document.body.replaceChildren(menu);
+    try {
+        const response = await apiRequest<{ player: {
+            id: string;
+            username: string;
+            role: OnlineUser["role"];
+            asteroids: number;
+            specialAsteroids: number;
+            prestige: number;
+            routesCleared: number;
+            shipColor: string;
+            avatar: number;
+            skin: number;
+            trail: number;
+        } }>(`/players/${encodeURIComponent(playerId)}`);
+        if (!menu.isConnected) return;
+        const { player } = response;
+        const badge = getRoleBadge(player.role);
+        const title = document.createElement("h2");
+        title.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
+        const dashboard = document.createElement("section");
+        dashboard.className = "account-dashboard";
+        const stats = document.createElement("div");
+        stats.className = "account-stats";
+        [
+            ["Asteroids", String(player.asteroids)],
+            ["Special asteroids", String(player.specialAsteroids)],
+            ["Prestige", String(player.prestige)],
+            ["Routes cleared", String(player.routesCleared)],
+        ].forEach(([label, value]) => {
+            const item = document.createElement("article");
+            item.innerHTML = "<small></small><b></b>";
+            item.querySelector("small")!.textContent = label;
+            item.querySelector("b")!.textContent = value;
+            stats.append(item);
+        });
+        dashboard.append(title, stats, createShipPreview({
+            shipColor: player.shipColor,
+            avatar: player.avatar,
+            skin: player.skin,
+            trail: player.trail,
+        }));
+        const back = createTextButton("Back to leaderboard", returnTo);
+        menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);
+    } catch (error) {
+        status.textContent = error instanceof Error && error.message.includes("404")
+            ? "That player profile could not be found."
+            : error instanceof Error ? error.message : "That player profile could not be loaded.";
+    }
 }
 
 function formatAbilityName(ability: string) {
@@ -1039,15 +1497,218 @@ function renderOwnerControls(container: HTMLElement, settings: OnlineSettings, r
     container.append(title, description, form);
 }
 
-function showAccount() {
+async function renderAdminCodeTools(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Redemption codes";
+    const description = document.createElement("p");
+    description.textContent = "Codes are shown once when created. Rewards are normal or special asteroids; limits are enforced on the server.";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const form = document.createElement("form");
+    form.className = "account-profile-form";
+    const createInput = (labelText: string, type: string, value = "") => {
+        const label = document.createElement("label");
+        label.append(document.createTextNode(labelText));
+        const input = document.createElement("input");
+        input.type = type;
+        input.value = value;
+        label.append(input);
+        form.append(label);
+        return input;
+    };
+    const code = createInput("Code (leave blank to generate)", "text");
+    code.maxLength = 40;
+    code.pattern = "[A-Za-z0-9-]{8,40}";
+    const rewardType = document.createElement("select");
+    [["claims", "Normal asteroids"], ["specialClaims", "Special asteroids"]].forEach(([value, labelText]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = labelText;
+        rewardType.append(option);
+    });
+    const typeLabel = document.createElement("label");
+    typeLabel.append(document.createTextNode("Reward type"), rewardType);
+    form.append(typeLabel);
+    const amount = createInput("Reward amount", "number", "50");
+    amount.min = "0";
+    amount.max = "1000000";
+    const maxUses = createInput("Total use limit", "number", "100");
+    maxUses.min = "1";
+    maxUses.max = "1000000";
+    const perPlayerLimit = createInput("Uses per player", "number", "1");
+    perPlayerLimit.min = "1";
+    perPlayerLimit.max = "1000";
+    const expiresAt = createInput("Expires at (optional)", "datetime-local");
+    const create = document.createElement("button");
+    create.type = "submit";
+    create.className = "menu-button";
+    create.textContent = "Create code";
+    form.append(create, status);
+    const history = document.createElement("section");
+    history.className = "tester-player-management";
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        create.disabled = true;
+        try {
+            const response = await apiRequest<{ redemptionCode: string }>("/admin/codes", {
+                method: "POST",
+                body: JSON.stringify({
+                    code: code.value.trim() || undefined,
+                    reward: { type: rewardType.value, amount: Number(amount.value) },
+                    maxUses: Number(maxUses.value),
+                    perPlayerLimit: Number(perPlayerLimit.value),
+                    expiresAt: expiresAt.value ? new Date(expiresAt.value).toISOString() : undefined,
+                }),
+            });
+            status.textContent = `New code (shown once): ${response.redemptionCode}`;
+            code.value = "";
+            await refreshCodes();
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not create the code.";
+        } finally {
+            create.disabled = false;
+        }
+    });
+    const refreshCodes = async () => {
+        try {
+            const response = await apiRequest<{ codes: { id: string; maxUses: number; perPlayerLimit: number; uses: number; reward: { type: string; amount: number }; enabled: boolean; expiresAt: string | null }[] }>("/admin/codes");
+            history.replaceChildren();
+            response.codes.forEach((entry) => {
+                const row = document.createElement("article");
+                row.className = "tester-custom-level-row";
+                const label = document.createElement("span");
+                label.textContent = `${entry.reward.amount} ${entry.reward.type === "specialClaims" ? "special" : "normal"} asteroids / ${entry.uses}/${entry.maxUses} uses / ${entry.enabled ? "enabled" : "disabled"}${entry.expiresAt ? ` / expires ${new Date(entry.expiresAt).toLocaleString()}` : ""}`;
+                row.append(label);
+                if (entry.enabled) {
+                    const disable = createTextButton("Turn off", async () => {
+                        disable.disabled = true;
+                        try {
+                            await apiRequest(`/admin/codes/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+                            await refreshCodes();
+                        } catch (error) {
+                            status.textContent = error instanceof Error ? error.message : "Could not disable the code.";
+                            disable.disabled = false;
+                        }
+                    });
+                    row.append(disable);
+                }
+                history.append(row);
+            });
+            if (!response.codes.length) history.textContent = "No codes yet.";
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not load redemption codes.";
+        }
+    };
+    const refresh = createTextButton("Refresh code list", () => void refreshCodes());
+    container.append(heading, description, form, refresh, history);
+    await refreshCodes();
+}
+
+async function renderAdminMessageTools(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Player messages";
+    const form = document.createElement("form");
+    form.className = "account-profile-form";
+    const title = document.createElement("input");
+    title.required = true;
+    title.maxLength = 100;
+    title.placeholder = "Message title";
+    title.setAttribute("aria-label", "Message title");
+    const body = document.createElement("textarea");
+    body.required = true;
+    body.maxLength = 300;
+    body.placeholder = "Message (up to 300 characters)";
+    body.setAttribute("aria-label", "Message body");
+    const recipient = document.createElement("select");
+    recipient.setAttribute("aria-label", "Message recipient");
+    const everyone = document.createElement("option");
+    everyone.value = "";
+    everyone.textContent = "Everyone (available for 24 hours)";
+    recipient.append(everyone);
+    const kind = document.createElement("select");
+    kind.setAttribute("aria-label", "Message type");
+    [["info", "Info"], ["warning", "Warning"], ["reward", "Reward"]].forEach(([value, labelText]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = labelText;
+        kind.append(option);
+    });
+    const users = await apiRequest<{ users: ManagedUser[] }>("/admin/users");
+    users.users.filter((user) => user.role !== "owner").forEach((user) => {
+        const option = document.createElement("option");
+        option.value = user.id;
+        option.textContent = user.username;
+        recipient.append(option);
+    });
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "menu-button";
+    submit.textContent = "Send message";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const history = document.createElement("section");
+    history.className = "tester-player-management";
+    form.append(title, body, recipient, kind, submit, status);
+    const loadHistory = async () => {
+        const response = await apiRequest<{ messages: { id: string; title: string; body: string; type: string; userId: string | null; createdAt: string }[] }>("/admin/messages");
+        history.replaceChildren();
+        response.messages.forEach((message) => {
+            const row = document.createElement("article");
+            row.className = "tester-custom-level-row";
+            const summary = document.createElement("span");
+            summary.textContent = `${message.title} / ${message.type} / ${message.userId ? "one pilot" : "everyone"} / ${new Date(message.createdAt).toLocaleString()}`;
+            const deleteButton = createTextButton("Delete", async () => {
+                deleteButton.disabled = true;
+                try {
+                    await apiRequest(`/admin/messages/${encodeURIComponent(message.id)}`, { method: "DELETE" });
+                    await loadHistory();
+                } catch (error) {
+                    status.textContent = error instanceof Error ? error.message : "Could not delete the message.";
+                    deleteButton.disabled = false;
+                }
+            });
+            row.append(summary, deleteButton);
+            history.append(row);
+        });
+        if (!response.messages.length) history.textContent = "No messages have been sent.";
+    };
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        try {
+            await apiRequest("/admin/messages", {
+                method: "POST",
+                body: JSON.stringify({ title: title.value, body: body.value, type: kind.value, ...(recipient.value ? { userId: recipient.value } : {}) }),
+            });
+            status.textContent = "Message queued for delivery.";
+            form.reset();
+            await loadHistory();
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not send the message.";
+        } finally {
+            submit.disabled = false;
+        }
+    });
+    const refresh = createTextButton("Refresh message history", () => void loadHistory().catch((error) => { status.textContent = error instanceof Error ? error.message : "Could not load messages."; }));
+    container.append(heading, form, refresh, history);
+    try {
+        await loadHistory();
+    } catch (error) {
+        status.textContent = error instanceof Error ? error.message : "Could not load messages.";
+    }
+}
+
+function showAccount(initialMessage = "") {
     let registrationMode = false;
-    const render = (messageText = "") => {
+    const render = (messageText = initialMessage) => {
         const menu = document.createElement("main");
         menu.className = "menu-screen account-screen";
         menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${currentOnlineUser ? "Your" : registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">${currentOnlineUser ? "Your account is signed in on this device." : "Choose a unique username and password. Passwords are salted and hashed on the server."}</p>`;
         if (currentOnlineUser) {
             const signedIn = document.createElement("p");
-            signedIn.textContent = `Signed in as ${currentOnlineUser.username}${currentOnlineUser.role === "owner" ? " / OWNER" : ""}.`;
+            signedIn.textContent = `Signed in as ${currentOnlineUser.username}${currentOnlineUser.role === "owner" ? " / OWNER" : currentOnlineUser.role === "tester" ? " / TESTER" : ""}.`;
             if (messageText) {
                 const message = document.createElement("small");
                 message.className = "online-service-status";
@@ -1066,6 +1727,10 @@ function showAccount() {
                 ["Special currency", String(specialAsteroids)],
                 ["Prestige", `${prestigeLevel} / ${prestigeMax}`],
                 ["Routes cleared", `${getCompletedLevelCount()} / ${levels.length}`],
+                ["Normal routes", `${getNormalCompletedLevelCount()} / ${getNormalRouteCount()}`],
+                ["Golden Body", `${getNormalCompletedLevelCount()} / ${getNormalRouteCount()} under ${formatTime(goldenTimeLimitMs)}`],
+                ["Prestige Gate", hasClearedPrestigeGate() ? "Cleared" : "Not cleared"],
+                ["Next gate cost", `${getPrestigeRequirement(prestigeLevel).normal} normal / ${getPrestigeRequirement(prestigeLevel).special} special`],
             ].forEach(([label, value]) => {
                 const item = document.createElement("article");
                 item.innerHTML = `<small></small><b></b>`;
@@ -1122,9 +1787,124 @@ function showAccount() {
                     saveProfile.disabled = false;
                 }
             });
-            dashboard.append(statsHeading, stats, inventoryHeading, itemList, loadout, profileHeading, profileForm);
+            const passwordSection = document.createElement("section");
+            passwordSection.className = "account-security-section";
+            const passwordHeading = document.createElement("h2");
+            passwordHeading.textContent = "Change password";
+            const passwordForm = document.createElement("form");
+            passwordForm.className = "account-profile-form";
+            const passwordFields = [
+                { label: "Current password", autocomplete: "current-password" },
+                { label: "New password", autocomplete: "new-password" },
+                { label: "Repeat new password", autocomplete: "new-password" },
+            ] as const;
+            const passwordInputs = passwordFields.map(({ label, autocomplete }) => {
+                const fieldLabel = document.createElement("label");
+                fieldLabel.textContent = label;
+                const input = document.createElement("input");
+                input.type = "password";
+                input.autocomplete = autocomplete;
+                input.minLength = 10;
+                input.maxLength = 128;
+                input.required = true;
+                fieldLabel.append(input);
+                passwordForm.append(fieldLabel);
+                return input;
+            });
+            const passwordStatus = document.createElement("small");
+            passwordStatus.setAttribute("role", "status");
+            const passwordSubmit = document.createElement("button");
+            passwordSubmit.className = "menu-button";
+            passwordSubmit.type = "submit";
+            passwordSubmit.textContent = "Change password";
+            passwordForm.append(passwordSubmit, passwordStatus);
+            if (currentOnlineUser.role === "owner") {
+                passwordSubmit.disabled = true;
+                passwordStatus.textContent = "Owner passwords are managed through deployment secrets.";
+            } else if (currentOnlineUser.mustChangePassword) {
+                passwordStatus.textContent = "Choose a new password before continuing.";
+            }
+            passwordForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (passwordInputs[1].value !== passwordInputs[2].value) {
+                    passwordStatus.textContent = "The new passwords do not match.";
+                    return;
+                }
+                if (passwordInputs[0].value === passwordInputs[1].value) {
+                    passwordStatus.textContent = "Choose a password different from your current password.";
+                    return;
+                }
+                passwordSubmit.disabled = true;
+                passwordStatus.textContent = "Changing password...";
+                try {
+                    await apiRequest<{ ok: true }>("/account/password", {
+                        method: "POST",
+                        body: JSON.stringify({ currentPassword: passwordInputs[0].value, newPassword: passwordInputs[1].value }),
+                    });
+                    currentOnlineUser = null;
+                    lastSyncedAccountProgress = "";
+                    render("Password changed. Sign in again with your new password.");
+                } catch (error) {
+                    passwordStatus.textContent = error instanceof Error ? error.message : "Could not change password.";
+                    passwordSubmit.disabled = false;
+                } finally {
+                    passwordInputs.forEach((field) => { field.value = ""; });
+                }
+            });
+            passwordSection.append(passwordHeading, passwordForm);
+            dashboard.append(statsHeading, stats, createShipPreview(), createProgressArea(), inventoryHeading, itemList, loadout, profileHeading, profileForm, passwordSection);
+            if (currentOnlineUser.role !== "owner") {
+                const recoverySection = document.createElement("section");
+                recoverySection.className = "account-security-section";
+                recoverySection.innerHTML = `<h2>Recovery code</h2><p class="menu-copy">A recovery code is the safest way to regain access if you forget your password. It is shown once when created.</p>`;
+                const recoveryStatus = document.createElement("small");
+                recoveryStatus.setAttribute("role", "status");
+                const recoveryForm = document.createElement("form");
+                recoveryForm.className = "account-profile-form";
+                const currentPasswordLabel = document.createElement("label");
+                currentPasswordLabel.textContent = "Current password to make a new code";
+                const currentPassword = document.createElement("input");
+                currentPassword.type = "password";
+                currentPassword.autocomplete = "current-password";
+                currentPassword.required = true;
+                currentPasswordLabel.append(currentPassword);
+                const makeCode = document.createElement("button");
+                makeCode.className = "menu-button";
+                makeCode.type = "submit";
+                makeCode.textContent = "Make a new recovery code";
+                recoveryForm.append(currentPasswordLabel, makeCode, recoveryStatus);
+                recoveryForm.addEventListener("submit", async (event) => {
+                    event.preventDefault();
+                    makeCode.disabled = true;
+                    recoveryStatus.textContent = "Creating a new recovery code...";
+                    try {
+                        const result = await apiRequest<{ recoveryCode: string }>("/account/recovery-code", {
+                            method: "POST",
+                            body: JSON.stringify({ currentPassword: currentPassword.value }),
+                        });
+                        showRecoveryCodeOnce(result.recoveryCode, () => render("Your new recovery code was saved."));
+                    } catch (error) {
+                        recoveryStatus.textContent = error instanceof Error ? error.message : "Could not create a recovery code.";
+                        makeCode.disabled = false;
+                    } finally {
+                        currentPassword.value = "";
+                    }
+                });
+                recoverySection.append(recoveryForm);
+                dashboard.append(recoverySection);
+                void apiRequest<{ hasRecoveryCode: boolean; recoveryCodeCreatedAt: string | null }>("/account/profile")
+                    .then((profile) => {
+                        if (!recoverySection.isConnected) return;
+                        recoveryStatus.textContent = profile.hasRecoveryCode
+                            ? `Recovery code set on ${profile.recoveryCodeCreatedAt ? new Date(profile.recoveryCodeCreatedAt).toLocaleDateString() : "an earlier date"}.`
+                            : "No recovery code yet. Make one now so you can get back into your account.";
+                    })
+                    .catch((error: unknown) => {
+                        if (recoverySection.isConnected) recoveryStatus.textContent = error instanceof Error ? error.message : "Could not load recovery-code status.";
+                    });
+            }
             menu.append(dashboard);
-            void apiRequest<{ role: "player" | "owner"; nextUsernameChangeAt: string | null }>("/account/profile")
+            void apiRequest<{ role: "player" | "tester" | "owner"; nextUsernameChangeAt: string | null; mustChangePassword?: boolean }>("/account/profile")
                 .then((profile) => {
                     if (!menu.isConnected) return;
                     if (profile.role === "owner") {
@@ -1136,6 +1916,7 @@ function showAccount() {
                         saveProfile.disabled = true;
                         profileHint.textContent = `Username editing unlocks ${availableDate.toLocaleString()}.`;
                     } else profileHint.textContent = "Username changes are limited to once every 7 days.";
+                    if (profile.mustChangePassword && currentOnlineUser) currentOnlineUser.mustChangePassword = true;
                 })
                 .catch((error: unknown) => {
                     if (menu.isConnected) profileHint.textContent = error instanceof Error ? error.message : "Could not load profile settings.";
@@ -1157,7 +1938,7 @@ function showAccount() {
                     render(error instanceof Error ? error.message : "Could not sign out.");
                 }
             });
-            menu.append(signOut);
+            if (!currentOnlineUser.mustChangePassword) menu.append(signOut);
         } else {
             const form = document.createElement("form");
             form.className = "account-form";
@@ -1197,7 +1978,8 @@ function showAccount() {
                 submit.disabled = true;
                 message.textContent = "Connecting to the account service...";
                 try {
-                    const response = await apiRequest<{ user: OnlineUser }>(`/auth/${registrationMode ? "register" : "login"}`, {
+                    const wasRegistration = registrationMode;
+                    const response = await apiRequest<{ user: OnlineUser; recoveryCode?: string }>(`/auth/${wasRegistration ? "register" : "login"}`, {
                         method: "POST",
                         body: JSON.stringify({ username: username.value, password: password.value }),
                     });
@@ -1209,6 +1991,10 @@ function showAccount() {
                         render(`Signed in, but account progress could not sync: ${error instanceof Error ? error.message : "online service error"}`);
                         return;
                     }
+                    if (wasRegistration && response.recoveryCode) {
+                        showRecoveryCodeOnce(response.recoveryCode, () => showAccount("Account created. Save your recovery code somewhere private."));
+                        return;
+                    }
                     showAccount();
                 } catch (error) {
                     message.textContent = error instanceof Error ? error.message : "The account service could not complete the request.";
@@ -1216,11 +2002,143 @@ function showAccount() {
                 }
             });
             menu.append(form, switchMode);
+            if (!registrationMode) menu.append(createTextButton("Forgot password?", showForgotPassword));
         }
-        menu.append(createTextButton("Back", showMenu));
+        if (!currentOnlineUser?.mustChangePassword) menu.append(createTextButton("Back", showMenu));
         document.body.replaceChildren(menu);
     };
     render();
+}
+
+function showRecoveryCodeOnce(code: string, onContinue: () => void) {
+    const screen = document.createElement("main");
+    screen.className = "menu-screen recovery-code-screen";
+    screen.innerHTML = `<p class="eyebrow">ACCOUNT SECURITY / SAVE THIS CODE</p><h1>Recovery <em>code</em></h1><p class="menu-copy">This is the only way back into your account if you forget your password. It cannot be shown again.</p>`;
+    const codeDisplay = document.createElement("strong");
+    codeDisplay.className = "recovery-code-display";
+    codeDisplay.textContent = code;
+    const actions = document.createElement("div");
+    actions.className = "secondary-actions";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const copy = createTextButton("Copy recovery code", async () => {
+        try {
+            await navigator.clipboard.writeText(code);
+            status.textContent = "Recovery code copied.";
+        } catch {
+            status.textContent = "Copy was unavailable. Select the code and copy it manually.";
+        }
+    });
+    const download = createTextButton("Download as text file", () => {
+        const file = new Blob([`Jacer recovery code: ${code}\nKeep this code private and do not share it.\n`], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(file);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "jacer-recovery-code.txt";
+        link.click();
+        URL.revokeObjectURL(url);
+        status.textContent = "Recovery code downloaded.";
+    });
+    actions.append(copy, download);
+    const savedLabel = document.createElement("label");
+    savedLabel.className = "recovery-code-confirm";
+    const saved = document.createElement("input");
+    saved.type = "checkbox";
+    savedLabel.append(saved, document.createTextNode(" I saved my recovery code."));
+    const continueButton = createMenuButton("Continue", onContinue);
+    continueButton.disabled = true;
+    saved.addEventListener("change", () => { continueButton.disabled = !saved.checked; });
+    screen.append(codeDisplay, actions, status, savedLabel, continueButton);
+    document.body.replaceChildren(screen);
+}
+
+function showForgotPassword() {
+    const screen = document.createElement("main");
+    screen.className = "menu-screen account-screen recovery-screen";
+    screen.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / RECOVERY</p><h1>Reset your <em>password</em></h1><p class="menu-copy">Accounts made before recovery codes existed can use their last level played until they make a recovery code.</p>`;
+    const form = document.createElement("form");
+    form.className = "account-form";
+    const createField = (labelText: string, type: string, autocomplete: HTMLInputElement["autocomplete"], minLength?: number, maxLength?: number) => {
+        const label = document.createElement("label");
+        label.textContent = labelText;
+        const input = document.createElement("input");
+        input.type = type;
+        input.autocomplete = autocomplete;
+        input.required = true;
+        if (minLength !== undefined) input.minLength = minLength;
+        if (maxLength !== undefined) input.maxLength = maxLength;
+        label.append(input);
+        form.append(label);
+        return input;
+    };
+    const username = createField("Username", "text", "username", 3, 20);
+    username.pattern = "[A-Za-z0-9_]{3,20}";
+    const recoveryCode = createField("Recovery code", "text", "off", 16, 19);
+    recoveryCode.autocapitalize = "characters";
+    const lastLevelLabel = document.createElement("label");
+    lastLevelLabel.textContent = "Pick the last level you played while signed in";
+    const lastLevel = document.createElement("select");
+    lastLevel.required = true;
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "Choose a level";
+    lastLevel.append(emptyOption);
+    levels.filter((level) => !level.localOnly).forEach((level) => {
+        const option = document.createElement("option");
+        option.value = level.name;
+        option.textContent = level.name;
+        lastLevel.append(option);
+    });
+    lastLevelLabel.append(lastLevel);
+    lastLevelLabel.hidden = true;
+    const toggleMode = createTextButton("I don't have a recovery code", () => {
+        const useFallback = !lastLevelLabel.hidden;
+        lastLevelLabel.hidden = useFallback;
+        recoveryCode.closest("label")!.hidden = !useFallback;
+        recoveryCode.required = useFallback;
+        lastLevel.required = !useFallback;
+        toggleMode.textContent = useFallback ? "I don't have a recovery code" : "Use a recovery code";
+    });
+    const newPassword = createField("New password", "password", "new-password", 10, 128);
+    const repeatPassword = createField("Repeat new password", "password", "new-password", 10, 128);
+    const status = document.createElement("small");
+    status.className = "online-service-status";
+    status.setAttribute("role", "status");
+    const submit = document.createElement("button");
+    submit.className = "menu-button";
+    submit.type = "submit";
+    submit.textContent = "Reset password";
+    form.append(toggleMode, lastLevelLabel, submit, status);
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (newPassword.value !== repeatPassword.value) {
+            status.textContent = "The new passwords do not match.";
+            return;
+        }
+        submit.disabled = true;
+        status.textContent = "Checking recovery details...";
+        try {
+            const result = await apiRequest<{ recoveryCode: string }>("/auth/recover", {
+                method: "POST",
+                body: JSON.stringify({
+                    username: username.value,
+                    recoveryCode: lastLevelLabel.hidden ? recoveryCode.value : undefined,
+                    lastLevel: lastLevelLabel.hidden ? undefined : lastLevel.value,
+                    newPassword: newPassword.value,
+                }),
+            });
+            showRecoveryCodeOnce(result.recoveryCode, () => showAccount("Password reset. Sign in with your new password."));
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not reset the password.";
+            submit.disabled = false;
+        } finally {
+            newPassword.value = "";
+            repeatPassword.value = "";
+            recoveryCode.value = "";
+        }
+    });
+    screen.append(form, createTextButton("Back to sign in", () => showAccount()));
+    document.body.replaceChildren(screen);
 }
 
 function levelToMakerDraft(level: Level): LevelMakerDraft {
@@ -1488,7 +2406,12 @@ function controlKeysFor(action: ControlAction) {
         : [controlBindings[action]];
 }
 
-function createShipArtMarkup(image: string, label: string) { return `<img class="ship-art-image" src="${image}" alt="${label}" />`; }
+function createShipArtMarkup(image: string, label: string, color = "#f3f5e9") {
+    if (image === dartShipImage) return `<span class="ship-art-inline" role="img" aria-label="${label}">${dartShipSvg.replace('fill="#62d6b2"', `fill="${color}"`)}</span>`;
+    if (image === ufoShipImage) return `<span class="ship-art-inline" role="img" aria-label="${label}">${ufoShipSvg.replaceAll('fill="#f6c46e"', `fill="${color}"`)}</span>`;
+    if (image === swordShipImage) return `<span class="ship-art-inline" role="img" aria-label="${label}">${swordShipSvg.replace('fill="#b991ff"', `fill="${color}"`)}</span>`;
+    return `<img class="ship-art-image" src="${image}" alt="${label}" />`;
+}
 function createCssShipArtMarkup(art: PrestigeShipArt, label: string, color: string) { return `<span class="ship-css-art ship-css-${art}" role="img" aria-label="${label}" style="--ship-color:${color}"></span>`; }
 
 function getInventory(): Record<PowerupKind, number> {
@@ -1795,7 +2718,17 @@ async function loadManagedUsers(container: HTMLElement) {
             stats.textContent = `Asteroids: ${user.progress["orbit-claims"] ?? "0"} / Special: ${user.progress["orbit-special-claims"] ?? "0"} / Prestige: ${user.progress["orbit-prestige"] ?? "0"} / Power-ups: ${user.progress["orbit-powerups"] ?? "{}"}`;
             const created = document.createElement("small");
             created.textContent = `Created ${new Date(user.createdAt).toLocaleString()}`;
-            card.append(stats, created);
+            const recoveryStatus = document.createElement("small");
+            recoveryStatus.textContent = user.hasRecoveryCode
+                ? `Recovery code set ${user.recoveryCodeCreatedAt ? `on ${new Date(user.recoveryCodeCreatedAt).toLocaleString()}` : "(date unavailable)"}`
+                : "No recovery code set";
+            const passwordStatus = document.createElement("small");
+            passwordStatus.textContent = `Password last changed ${user.passwordChangedAt ? new Date(user.passwordChangedAt).toLocaleString() : "never"}`;
+            const lockStatus = document.createElement("small");
+            lockStatus.textContent = user.recoveryLockState === "locked" && user.recoveryLockedUntil
+                ? `Recovery locked until ${new Date(user.recoveryLockedUntil).toLocaleString()} (${user.recoveryAttempts} attempts)`
+                : `Recovery open (${user.recoveryAttempts} attempts)`;
+            card.append(stats, created, recoveryStatus, passwordStatus, lockStatus);
             if (user.role === "owner") {
                 const protectedMessage = document.createElement("small");
                 protectedMessage.textContent = "Owner accounts are protected from player management.";
@@ -1811,6 +2744,18 @@ async function loadManagedUsers(container: HTMLElement) {
             username.pattern = "[A-Za-z0-9_]{3,20}";
             username.required = true;
             username.setAttribute("aria-label", `Username for ${user.username}`);
+            const roleLabel = document.createElement("label");
+            roleLabel.append(document.createTextNode("Role"));
+            const role = document.createElement("select");
+            role.setAttribute("aria-label", `Role for ${user.username}`);
+            [["player", "Player"], ["tester", "Tester"]].forEach(([value, label]) => {
+                const option = document.createElement("option");
+                option.value = value;
+                option.textContent = label;
+                option.selected = user.role === value;
+                role.append(option);
+            });
+            roleLabel.append(role);
             const banLabel = document.createElement("label");
             const banned = document.createElement("input");
             banned.type = "checkbox";
@@ -1957,7 +2902,7 @@ async function loadManagedUsers(container: HTMLElement) {
             result.setAttribute("role", "status");
             const progressHeading = document.createElement("b");
             progressHeading.textContent = "Advanced saved profile data";
-            form.append(username, banLabel, progression, levelSection, progressHeading, progress, save, result);
+            form.append(username, roleLabel, banLabel, progression, levelSection, progressHeading, progress, save, result);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 save.disabled = true;
@@ -2015,10 +2960,10 @@ async function loadManagedUsers(container: HTMLElement) {
                     });
                     await apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
                         method: "PATCH",
-                        body: JSON.stringify({ username: username.value, banned: banned.checked, progress: updatedProgress }),
+                        body: JSON.stringify({ username: username.value, role: role.value, banned: banned.checked, progress: updatedProgress }),
                     });
                     result.textContent = "Profile saved. Changes are available on the player's signed-in devices.";
-                    summary.textContent = `${username.value} / ${banned.checked ? "BANNED" : "ACTIVE"} / PLAYER`;
+                    summary.textContent = `${username.value} / ${banned.checked ? "BANNED" : "ACTIVE"} / ${role.value.toUpperCase()}`;
                 } catch (error) {
                     result.textContent = error instanceof Error ? error.message : "Could not save this profile.";
                 } finally {
@@ -2026,6 +2971,136 @@ async function loadManagedUsers(container: HTMLElement) {
                 }
             });
             card.append(form);
+            const accountActions = document.createElement("section");
+            accountActions.className = "tester-player-actions";
+            const actionStatus = document.createElement("small");
+            actionStatus.setAttribute("role", "status");
+            const resetPassword = createTextButton("Reset password", () => {});
+            resetPassword.addEventListener("click", async () => {
+                if (!window.confirm(`Reset ${user.username}'s password? They will be signed out everywhere and required to change it.`)) return;
+                resetPassword.disabled = true;
+                actionStatus.textContent = "Resetting password...";
+                try {
+                    const response = await apiRequest<{ temporaryPassword: string }>(`/admin/users/${encodeURIComponent(user.id)}/password`, { method: "POST", body: "{}" });
+                    actionStatus.textContent = `Temporary password (shown once): ${response.temporaryPassword}`;
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not reset the password.";
+                } finally {
+                    resetPassword.disabled = false;
+                }
+            });
+            const makeRecoveryCode = createTextButton("Make new recovery code", () => {});
+            makeRecoveryCode.addEventListener("click", async () => {
+                if (!window.confirm(`Replace ${user.username}'s current recovery code? The old code will stop working.`)) return;
+                makeRecoveryCode.disabled = true;
+                try {
+                    const response = await apiRequest<{ recoveryCode: string }>(`/admin/users/${encodeURIComponent(user.id)}/recovery-code`, { method: "POST", body: "{}" });
+                    actionStatus.textContent = `New recovery code (shown once): ${response.recoveryCode}`;
+                    recoveryStatus.textContent = "Recovery code set just now (the code itself is shown once above).";
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not create a recovery code.";
+                } finally {
+                    makeRecoveryCode.disabled = false;
+                }
+            });
+            const clearRecoveryLock = createTextButton("Clear recovery lock", () => {});
+            clearRecoveryLock.addEventListener("click", async () => {
+                clearRecoveryLock.disabled = true;
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/recovery-lock`, { method: "DELETE" });
+                    lockStatus.textContent = "Recovery open (0 attempts)";
+                    actionStatus.textContent = "Recovery lock cleared.";
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not clear the recovery lock.";
+                } finally {
+                    clearRecoveryLock.disabled = false;
+                }
+            });
+            const wipeTitle = document.createElement("b");
+            wipeTitle.textContent = "Selective profile wipe";
+            const wipeOptions = document.createElement("div");
+            wipeOptions.className = "tester-player-unlocks";
+            const wipeCategories = [
+                ["progress", "Progress & inventory"],
+                ["cosmetics", "Cosmetics"],
+                ["leaderboard", "Leaderboard times"],
+                ["portalsCooldowns", "Claimed portals & cooldowns"],
+            ] as const;
+            const selectedWipeCategories = new Set<string>();
+            wipeCategories.forEach(([value, labelText]) => {
+                const label = document.createElement("label");
+                const input = document.createElement("input");
+                input.type = "checkbox";
+                input.addEventListener("change", () => input.checked ? selectedWipeCategories.add(value) : selectedWipeCategories.delete(value));
+                label.append(input, document.createTextNode(labelText));
+                wipeOptions.append(label);
+            });
+            const wipeButton = createTextButton("Wipe selected data", () => {});
+            wipeButton.classList.add("danger");
+            wipeButton.addEventListener("click", async () => {
+                const categories = [...selectedWipeCategories];
+                if (!categories.length) {
+                    actionStatus.textContent = "Select at least one category to wipe.";
+                    return;
+                }
+                if (!window.confirm(`This will permanently remove the selected data for ${user.username} and sign them out everywhere. A seven-day backup will be created.`)
+                    || window.prompt(`Type ${user.username} to confirm this wipe:`) !== user.username) return;
+                wipeButton.disabled = true;
+                try {
+                    const response = await apiRequest<{ backupId: string }>(`/admin/users/${encodeURIComponent(user.id)}/wipe`, {
+                        method: "POST",
+                        body: JSON.stringify({ categories }),
+                    });
+                    actionStatus.textContent = `Selected data wiped. Backup ${response.backupId} is available for seven days.`;
+                    void loadBackups();
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not wipe this profile.";
+                } finally {
+                    wipeButton.disabled = false;
+                }
+            });
+            const backupSelect = document.createElement("select");
+            backupSelect.setAttribute("aria-label", `Profile backup for ${user.username}`);
+            const loadBackups = async () => {
+                try {
+                    const response = await apiRequest<{ backups: { id: string; categories: string[]; createdAt: string }[] }>(`/admin/users/${encodeURIComponent(user.id)}/backups`);
+                    backupSelect.replaceChildren();
+                    response.backups.forEach((backup) => {
+                        const option = document.createElement("option");
+                        option.value = backup.id;
+                        option.textContent = `${new Date(backup.createdAt).toLocaleString()} / ${backup.categories.join(", ")}`;
+                        backupSelect.append(option);
+                    });
+                    if (!response.backups.length) {
+                        const option = document.createElement("option");
+                        option.textContent = "No restorable backups";
+                        option.value = "";
+                        backupSelect.append(option);
+                    }
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not load profile backups.";
+                }
+            };
+            const restoreButton = createTextButton("Restore selected backup", () => {});
+            restoreButton.addEventListener("click", async () => {
+                if (!backupSelect.value || !window.confirm(`Restore this backup for ${user.username}? Current values may be replaced.`)) return;
+                restoreButton.disabled = true;
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/restore`, {
+                        method: "POST",
+                        body: JSON.stringify({ backupId: backupSelect.value }),
+                    });
+                    actionStatus.textContent = "Profile backup restored.";
+                    void loadManagedUsers(container);
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not restore the profile backup.";
+                } finally {
+                    restoreButton.disabled = false;
+                }
+            });
+            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, actionStatus);
+            card.append(accountActions);
+            void loadBackups();
             container.append(card);
         });
     } catch (error) {
@@ -2042,14 +3117,16 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         console.error("Could not verify owner account:", error);
         return;
     }
-    if (user?.role !== "owner") {
+    if (user?.role !== "owner" && user?.role !== "tester") {
         showTesterLogin();
         return;
     }
     currentOnlineUser = user;
+    updateOwnerAccountIndicator();
+    const isOwner = user.role === "owner";
     const menu = document.createElement("main");
     menu.className = "menu-screen tester-screen";
-    menu.innerHTML = `<p class="eyebrow">OWNER TOOLS / SHARED SAVE</p><h1>Adjust the <em>game</em></h1><p class="menu-copy">Manage shared game settings, workshop routes, and player profiles.</p>`;
+    menu.innerHTML = `<p class="eyebrow">${isOwner ? "OWNER TOOLS / SHARED SAVE" : "TESTER TOOLS / LOCAL OVERRIDE"}</p><h1>Adjust the <em>game</em></h1><p class="menu-copy">${isOwner ? "Manage shared game settings, workshop routes, and player profiles." : "Try allowed game-setting changes on this device only. Nothing here publishes changes for other players."}</p>`;
     const worldTabs = document.createElement("nav");
     worldTabs.className = "tester-world-tabs";
     const normalTab = createTextButton("Normal world", () => showTesterPanel("normal"));
@@ -2059,30 +3136,65 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     normalTab.setAttribute("aria-pressed", String(selectedWorld === "normal"));
     prestigeTab.setAttribute("aria-pressed", String(selectedWorld === "prestige"));
     worldTabs.append(normalTab, prestigeTab);
+    const form = document.createElement("form");
+    form.className = "tester-panel";
+    const accountManagement = document.createElement("section");
+    accountManagement.className = "tester-player-management";
+    accountManagement.hidden = true;
+    const codeManagement = document.createElement("section");
+    codeManagement.className = "tester-player-management";
+    codeManagement.hidden = true;
+    const messageManagement = document.createElement("section");
+    messageManagement.className = "tester-player-management";
+    messageManagement.hidden = true;
     const testerTabs = document.createElement("nav");
     testerTabs.className = "tester-panel-tabs";
     const settingsTab = createTextButton("Game settings", () => {
         worldTabs.hidden = false;
         form.hidden = false;
         accountManagement.hidden = true;
+        codeManagement.hidden = true;
+        messageManagement.hidden = true;
         settingsTab.classList.add("selected");
-        usersTab.classList.remove("selected");
+        [usersTab, codesTab, messagesTab].forEach((tab) => tab.classList.remove("selected"));
     });
     const usersTab = createTextButton("Player accounts", () => {
         worldTabs.hidden = true;
         form.hidden = true;
         accountManagement.hidden = false;
+        codeManagement.hidden = true;
+        messageManagement.hidden = true;
         settingsTab.classList.remove("selected");
+        codesTab.classList.remove("selected");
+        messagesTab.classList.remove("selected");
         usersTab.classList.add("selected");
         void loadManagedUsers(accountManagement);
     });
+    usersTab.hidden = !isOwner;
+    const codesTab = createTextButton("Codes", () => {
+        worldTabs.hidden = true;
+        form.hidden = true;
+        accountManagement.hidden = true;
+        codeManagement.hidden = false;
+        messageManagement.hidden = true;
+        [settingsTab, usersTab, messagesTab].forEach((tab) => tab.classList.remove("selected"));
+        codesTab.classList.add("selected");
+        void renderAdminCodeTools(codeManagement);
+    });
+    codesTab.hidden = !isOwner;
+    const messagesTab = createTextButton("Messages", () => {
+        worldTabs.hidden = true;
+        form.hidden = true;
+        accountManagement.hidden = true;
+        codeManagement.hidden = true;
+        messageManagement.hidden = false;
+        [settingsTab, usersTab, codesTab].forEach((tab) => tab.classList.remove("selected"));
+        messagesTab.classList.add("selected");
+        void renderAdminMessageTools(messageManagement);
+    });
+    messagesTab.hidden = !isOwner;
     settingsTab.classList.add("selected");
-    testerTabs.append(settingsTab, usersTab);
-    const form = document.createElement("form");
-    form.className = "tester-panel";
-    const accountManagement = document.createElement("section");
-    accountManagement.className = "tester-player-management";
-    accountManagement.hidden = true;
+    testerTabs.append(settingsTab, usersTab, codesTab, messagesTab);
     const selectedConfig = gameConfig[selectedWorld];
     const claimsLabel = document.createElement("label");
     claimsLabel.innerHTML = `<span>Asteroids</span>`;
@@ -2340,7 +3452,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     resetPanel.append(resetButton);
     form.append(resetTitle, resetPanel);
     const apply = document.createElement("button");
-    apply.className = "menu-button"; apply.type = "submit"; apply.textContent = "Save shared settings and apply";
+    apply.className = "menu-button"; apply.type = "submit"; apply.textContent = isOwner ? "Save shared settings and apply" : "Save tester-only settings";
     form.append(apply);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -2382,18 +3494,23 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         rewardSettingsError.textContent = "Saving shared settings...";
         apply.disabled = true;
         try {
-            const response = await apiRequest<{ config: GameConfig }>("/game-config", {
-                method: "PUT",
-                body: JSON.stringify({ config: nextConfig }),
-            });
-            gameConfig = response.config;
+            if (isOwner) {
+                const response = await apiRequest<{ config: GameConfig }>("/game-config", {
+                    method: "PUT",
+                    body: JSON.stringify({ config: nextConfig }),
+                });
+                gameConfig = response.config;
+            } else {
+                localStorage.setItem("orbit-tester-game-config", JSON.stringify(nextConfig));
+                gameConfig = nextConfig;
+            }
             testerSettingsDraft.clear();
         } catch (error) {
             rewardSettingsError.textContent = error instanceof Error ? error.message : "Could not save shared game settings.";
             apply.disabled = false;
             return;
         }
-        rewardSettingsError.textContent = "Shared game settings saved for all players.";
+        rewardSettingsError.textContent = isOwner ? "Shared game settings saved for all players." : "Tester-only settings saved on this device.";
         asteroidsClaimed = Math.max(0, Number(claimsInput.value) || 0);
         specialAsteroids = Math.max(0, Number(specialInput.value) || 0);
         prestigeLevel = Math.max(0, Number(prestigeInput.value) || 0);
@@ -2409,7 +3526,55 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         form.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => { const level = levels[Number(input.dataset.level)]; if (level.secret && level.secretId) { if (input.checked) localStorage.setItem(`orbit-key-${level.secretId}`, "1"); else localStorage.removeItem(`orbit-key-${level.secretId}`); } else if (input.checked) localStorage.setItem(`orbit-level-${input.dataset.level}`, "1"); else localStorage.removeItem(`orbit-level-${input.dataset.level}`); });
         if (prestigeGateInput.checked) localStorage.setItem("orbit-key-prestige-gate", "1"); else localStorage.removeItem("orbit-key-prestige-gate");
     });
-    menu.append(worldTabs, testerTabs, form, accountManagement, createTextButton("Exit tester tools", () => { testerSettingsDraft.clear(); showMenu(); }));
+    const settingsCategories = ["General", "Economy", "Abilities", "Cosmetics", "Levels", "Prestige", "Workshop"] as const;
+    const categoryNav = document.createElement("nav");
+    categoryNav.className = "tester-settings-tabs";
+    const categoryPanels = new Map<string, HTMLElement>();
+    const categoryButtons = new Map<string, HTMLButtonElement>();
+    settingsCategories.forEach((category) => {
+        const panel = document.createElement("section");
+        panel.className = "tester-settings-category";
+        panel.setAttribute("aria-label", `${category} settings`);
+        panel.hidden = true;
+        categoryPanels.set(category, panel);
+        const button = createTextButton(category, () => {
+            categoryPanels.forEach((candidate, name) => { candidate.hidden = name !== category; });
+            categoryButtons.forEach((candidate, name) => {
+                candidate.classList.toggle("selected", name === category);
+                candidate.setAttribute("aria-pressed", String(name === category));
+            });
+            localStorage.setItem("orbit-owner-panel-tab", category);
+        });
+        categoryButtons.set(category, button);
+        categoryNav.append(button);
+    });
+    const categorizeSetting = (element: Element) => {
+        const text = (element.textContent ?? "").toLowerCase();
+        if (text.includes("workshop") || text.includes("level maker")) return "Workshop";
+        if (text.includes("prestige")) return "Prestige";
+        if (text.includes("level") || text.includes("portal") || text.includes("secret")) return "Levels";
+        if (text.includes("customization") || text.includes("skin") || text.includes("trail") || text.includes("avatar")) return "Cosmetics";
+        if (text.includes("power-up behavior") || text.includes("effect strength")) return "Abilities";
+        if (text.includes("chance") || text.includes("reward") || text.includes("asteroid") || text.includes("rarity")) return "Economy";
+        return "General";
+    };
+    const existingFormChildren = Array.from(form.children).filter((child) => child !== apply);
+    existingFormChildren.forEach((child) => {
+        categoryPanels.get(categorizeSetting(child))?.append(child);
+    });
+    const availableCategories = settingsCategories.filter((category) => (categoryPanels.get(category)?.childElementCount ?? 0) > 0);
+    categoryNav.replaceChildren(...availableCategories.map((category) => categoryButtons.get(category)!));
+    const preferredCategory = localStorage.getItem("orbit-owner-panel-tab");
+    const selectedCategory = availableCategories.includes(preferredCategory as typeof settingsCategories[number])
+        ? preferredCategory!
+        : availableCategories[0];
+    categoryPanels.forEach((panel, category) => { panel.hidden = category !== selectedCategory; });
+    categoryButtons.forEach((button, category) => {
+        button.classList.toggle("selected", category === selectedCategory);
+        button.setAttribute("aria-pressed", String(category === selectedCategory));
+    });
+    form.replaceChildren(categoryNav, ...availableCategories.map((category) => categoryPanels.get(category)!), apply);
+    menu.append(worldTabs, testerTabs, form, accountManagement, codeManagement, messageManagement, createTextButton("Exit tester tools", () => { testerSettingsDraft.clear(); showMenu(); }));
     document.body.replaceChildren(menu);
 }
 
@@ -2473,6 +3638,29 @@ function separateActorsFromObstacles() {
 
 function getWorldConfig(prestige = activePlanet === "prestige") {
     return gameConfig[prestige ? "prestige" : "normal"];
+}
+
+function isUsableGameConfig(value: unknown): value is GameConfig {
+    if (!value || typeof value !== "object") return false;
+    const config = value as Partial<GameConfig>;
+    const isRecord = (candidate: unknown): candidate is Record<string, unknown> =>
+        Boolean(candidate) && typeof candidate === "object" && !Array.isArray(candidate);
+    for (const world of ["normal", "prestige"] as const) {
+        const settings = config[world] as WorldGameConfig | undefined;
+        if (!isRecord(settings) || !isRecord(settings.rarityOdds) || !isRecord(settings.rewardRanges)
+            || !isRecord(settings.skinChances) || !isRecord(settings.powerupSpawnChances)) return false;
+        if (![settings.rainbowStarChance, ...RARITY_ORDER.map((rarity) => settings.rarityOdds[rarity]),
+            ...RARITY_ORDER.flatMap((rarity) => settings.rewardRanges[rarity] ?? []),
+            ...RARITY_ORDER.map((rarity) => settings.skinChances[rarity]),
+            ...Object.values(settings.powerupSpawnChances)].every((item) => typeof item === "number" && Number.isFinite(item))) return false;
+    }
+    const effects = config.powerupEffects;
+    return isRecord(effects)
+        && isRecord(effects.shield) && Number.isFinite(effects.shield.charges)
+        && isRecord(effects.boost) && Number.isFinite(effects.boost.durationSeconds) && Number.isFinite(effects.boost.movementMultiplier)
+        && isRecord(effects.rapid) && Number.isFinite(effects.rapid.durationSeconds)
+        && isRecord(effects.cannon) && Number.isFinite(effects.cannon.durationSeconds)
+        && isRecord(effects.star) && Number.isFinite(effects.star.durationSeconds);
 }
 
 function getConfiguredRainbowStarChance(prestige = activePlanet === "prestige") {
@@ -2563,7 +3751,9 @@ function buildLevel(levelIndex: number) {
     if (endGoalLocked) {
         levelObstacles.push({ x: (level.length - 1) * TILE_WIDTH + 82, y: 0, width: 58, height: 400, goalLock: true });
     }
-    levelMiniBosses = (level.miniBosses ?? []).map((index) => ({ x: 140 + index * TILE_WIDTH, y: 245, health: 2, maxHealth: 2, defeated: false }));
+    const prestigeDifficulty = getPrestigeDifficultyMultiplier();
+    const miniBossHealth = Math.ceil(2 * prestigeDifficulty);
+    levelMiniBosses = (level.miniBosses ?? []).map((index) => ({ x: 140 + index * TILE_WIDTH, y: 245, health: miniBossHealth, maxHealth: miniBossHealth, defeated: false }));
 separateActorsFromObstacles();
     boss = (level.boss || level.secret) ? { x: 140 + (level.bossIndex ?? level.length - 2) * TILE_WIDTH, y: 205, health: level.asteroids.length, maxHealth: level.asteroids.length, defeated: false } : null;
     if (boss) {
@@ -2578,6 +3768,7 @@ function isFlippedPlanetLevel(level = levels[currentLevel]) { return Boolean(lev
 function resetFlippedVisualState() {
     shipFlipped = false;
     inFlippedRoute = false;
+    unflippedRouteSnapshot = null;
     flippedRouteKeyCollected = false;
     world.classList.remove("flipped-route");
     playerLabel.classList.remove("flipped");
@@ -2599,6 +3790,7 @@ function cancelPortalTransit() {
     secretBoss = null;
     currentSecretPortalTarget = null;
     portalReturnX = null;
+    portalReturnState = null;
     world.classList.remove("portal-boss-room-active");
     document.querySelector(".portal-key-room")?.remove();
 }
@@ -2634,6 +3826,12 @@ function updateSecretBossRoom() {
     }
     if (secretBoss) {
         const bossElement = room.querySelector<HTMLElement>(".void-warden");
+        if (!secretBoss.defeated) {
+            const chaseTarget = playerX + playerWidth / 2 - 64;
+            secretBoss.x += Math.sign(chaseTarget - secretBoss.x) * Math.min(Math.abs(chaseTarget - secretBoss.x), 1.2 * currentFrameScale);
+            secretBoss.x = Math.max(36, Math.min(roomWidth - 164, secretBoss.x));
+            secretBoss.y = Math.max(54, secretRoomFloorY - SECRET_BOSS_HEIGHT - (playerY < secretRoomFloorY - 120 ? 34 : 0));
+        }
         if (bossElement) { bossElement.style.left = `${secretBoss.x}px`; bossElement.style.top = `${secretBoss.y}px`; }
         if (!secretBoss.defeated) {
             const bossBox = { x: secretBoss.x, y: secretBoss.y, width: 128, height: SECRET_BOSS_HEIGHT };
@@ -2660,7 +3858,13 @@ function updateSecretBossRoom() {
             }
             if (shootingHeld || controlKeysFor("shoot").some((key) => pressedKeys.has(key))) shootSecretBoss();
             projectileTimer += currentFrameScale;
-            if (projectileTimer >= (rapidTimer > 0 ? 52 : reducedEffects ? 120 : 90)) { projectileTimer = 0; fireSecretBossProjectile(); }
+            const secondPhase = secretBoss.health <= secretBoss.maxHealth / 2;
+            const attackInterval = secondPhase ? 48 : rapidTimer > 0 ? 56 : reducedEffects ? 96 : 72;
+            if (projectileTimer >= attackInterval) {
+                projectileTimer = 0;
+                if (secondPhase) [-0.3, 0, 0.3].forEach((spread) => fireSecretBossProjectile(spread));
+                else fireSecretBossProjectile();
+            }
         }
     }
     updateProjectiles();
@@ -2674,15 +3878,16 @@ function shootSecretBoss() {
     if (room) firePlayerProjectile(room);
 }
 
-function fireSecretBossProjectile() {
+function fireSecretBossProjectile(spread = 0) {
     if (!secretBoss || secretBoss.defeated) return;
-    const directionX = playerX + 24 - secretBoss.x;
-    const directionY = playerY + 28 - secretBoss.y;
-    const distance = Math.max(1, Math.hypot(directionX, directionY));
+    const directionX = playerX + 24 - (secretBoss.x + 64);
+    const directionY = playerY + 28 - (secretBoss.y + SECRET_BOSS_HEIGHT / 2);
+    const angle = Math.atan2(directionY, directionX) + spread;
     const element = document.createElement("div");
     element.className = "boss-projectile secret-boss-projectile";
     document.querySelector(".portal-key-room")?.append(element);
-    projectiles.push({ x: secretBoss.x + 64, y: secretBoss.y + SECRET_BOSS_HEIGHT / 2, vx: directionX / distance * 4.2, vy: directionY / distance * 4.2, element, owner: "enemy" });
+    const speed = 5.04;
+    projectiles.push({ x: secretBoss.x + 64, y: secretBoss.y + SECRET_BOSS_HEIGHT / 2, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, element, owner: "enemy" });
 }
 
 function damageSecretBoss() {
@@ -2702,6 +3907,7 @@ function damageSecretBoss() {
     bossElement?.classList.add("defeated");
     const keyId = currentSecretPortalTarget;
     if (keyId) {
+        markSecretPortalClaimed(keyId);
         localStorage.setItem(`orbit-key-${keyId}`, "1");
         if (keyId === "eclipse") localStorage.setItem("orbit-secret-unlocked", "1");
         if (levelKey && !levelKey.collected) { levelKey.collected = true; secretKeyRevealed = true; localStorage.setItem(`orbit-key-${levelKey.id}`, "1"); unlockEndGoal(); }
@@ -2721,6 +3927,17 @@ function redrawRouteObjects() {
 
 function enterFlippedRoute() {
     if (inFlippedRoute || !isFlippedPlanetLevel()) return;
+    unflippedRouteSnapshot = {
+        asteroids: levelAsteroids.map((asteroid) => ({ ...asteroid })),
+        obstacles: levelObstacles,
+        hazards: levelHazards,
+        enemies: levelEnemies,
+        powerups: levelPowerups,
+        key: levelKey,
+        miniBosses: levelMiniBosses,
+        boss,
+        playerX,
+    };
     inFlippedRoute = true;
     const level = levels[currentLevel];
     const route = level.flippedRoute ?? {
@@ -2766,8 +3983,25 @@ function leaveFlippedRoute() {
     if (!isFlippedPlanetLevel()) return;
     inFlippedRoute = false; shipFlipped = false;
     world.classList.remove("flipped-route");
-    buildLevel(currentLevel);
-    playerX = Math.max(120, 140 + (levels[currentLevel].flip?.[0] ?? 2) * TILE_WIDTH + 140); playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0;
+    if (unflippedRouteSnapshot) {
+        levelAsteroids = unflippedRouteSnapshot.asteroids.map((asteroid, index) => ({
+            ...asteroid,
+            claimed: asteroid.claimed || Boolean(levelAsteroids[index]?.claimed),
+        }));
+        levelObstacles = unflippedRouteSnapshot.obstacles;
+        levelHazards = unflippedRouteSnapshot.hazards;
+        levelEnemies = unflippedRouteSnapshot.enemies;
+        levelPowerups = unflippedRouteSnapshot.powerups;
+        levelKey = unflippedRouteSnapshot.key;
+        levelMiniBosses = unflippedRouteSnapshot.miniBosses;
+        boss = unflippedRouteSnapshot.boss;
+        playerX = Math.max(120, Math.min(levels[currentLevel].length * TILE_WIDTH - playerWidth, unflippedRouteSnapshot.playerX));
+        unflippedRouteSnapshot = null;
+    } else {
+        buildLevel(currentLevel);
+        playerX = Math.max(120, 140 + (levels[currentLevel].flip?.[0] ?? 2) * TILE_WIDTH + 140);
+    }
+    playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0;
     areaLabel.textContent = "AREA / PRESTIGE ORBIT";
     statusLabel.textContent = "Exit key secured. You returned to the main route.";
     redrawRouteObjects();
@@ -2779,10 +4013,38 @@ function showPlanetaryTransition(text: string) {
 }
 
 function startGame(levelIndex = currentLevel) {
+    const level = levels[levelIndex];
+    if (!level) return;
+    if (level.secret && level.secretId) {
+        const cooldownUntil = Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") + SECRET_LEVEL_COOLDOWN_MS;
+        if (cooldownUntil > Date.now()) {
+            showSecretLevels();
+            return;
+        }
+    }
+    if (level.secretId === "prestige-gate") {
+        const gateError = getPrestigeGateAccessError();
+        if (gateError) {
+            const screen = document.createElement("main");
+            screen.className = "menu-screen";
+            screen.innerHTML = `<p class="eyebrow">PRESTIGE GATE / REQUIREMENTS</p><h1>Gate <em>sealed</em></h1>`;
+            const message = document.createElement("p");
+            message.className = "menu-copy";
+            message.textContent = gateError;
+            screen.append(message, createTextButton("Secret space", showSecretLevels), createTextButton("Mission select", showLevelMenu));
+            document.body.replaceChildren(screen);
+            return;
+        }
+    }
+    setMusicScene(level.secret ? "secret" : level.boss ? "boss" : level.prestige ? "prestige" : "normal");
     cancelPortalTransit();
     currentLevel = levelIndex;
+    if (currentOnlineUser && !level.localOnly && !level.customId) {
+        localStorage.setItem("orbit-last-level", level.name);
+        void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
+    }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; bossProjectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     document.body.innerHTML = "";
     createGameShell(); createPlayer(); createWorldObjects(); createTrail(false); createControls(); startGameLoop();
 }
@@ -2801,7 +4063,10 @@ function showWinScreen() {
     localStorage.setItem(`orbit-level-complete-${currentLevel}`, "1");
     const previousBest = Number(localStorage.getItem(`orbit-best-${currentLevel}`) ?? "0");
     if (!previousBest || elapsedMilliseconds < previousBest) localStorage.setItem(`orbit-best-${currentLevel}`, String(elapsedMilliseconds));
-    localStorage.setItem(`orbit-level-${currentLevel + 1}`, "1");
+    const level = levels[currentLevel];
+    if (level.secret && level.secretId) localStorage.setItem(`orbit-secret-cooldown-${level.secretId}`, String(Date.now()));
+    const nextLevel = getNextRouteIndex(currentLevel);
+    if (nextLevel >= 0) localStorage.setItem(`orbit-level-${nextLevel}`, "1");
     if (levels[currentLevel].boss) localStorage.setItem("orbit-boss-defeated", "1");
     if (levels[currentLevel].secretId === "prestige-gate") localStorage.setItem("orbit-level-complete-prestige-gate", "1");
     const screen = document.createElement("main");
@@ -2809,13 +4074,28 @@ function showWinScreen() {
     const prestigeGateCleared = levels[currentLevel].secretId === "prestige-gate";
     const reward = prestigeGateCleared ? "Prestige Gate cleared. Return to the main menu to claim your prestige." : levels[currentLevel].boss ? "Titan Core skin unlocked. The fleet has a new legend." : levels[currentLevel].secret ? "The Eclipse skin has joined your collection." : `Every asteroid secured. Total fleet claims: ${asteroidsClaimed}.`;
     screen.innerHTML = `<p class="eyebrow">BEACON REACHED / ${levels[currentLevel].secret ? "SECRET" : `SECTOR 0${currentLevel + 1}`}</p><h1>Claim <em>complete</em></h1><p class="time-result">${formatTime(elapsedMilliseconds)}</p><p class="menu-copy">${reward}</p>`;
+    if (level.secret && !prestigeGateCleared) {
+        screen.append(createMenuButton("Leave", showLevelMenu));
+        document.body.replaceChildren(screen);
+        return;
+    }
     const runStatus = document.createElement("p");
     runStatus.className = "menu-copy online-service-status";
     runStatus.setAttribute("role", "status");
     runStatus.textContent = `Abilities used: ${usedAbilities.size ? [...usedAbilities].map(formatAbilityName).join(", ") : "None"}. Saving online score...`;
-    screen.append(runStatus);
+    if (!level.secret) screen.append(runStatus);
     void submitLeaderboardRun(runStatus, levels[currentLevel].name, Math.round(elapsedMilliseconds), [...usedAbilities]);
-    const nextLevel = levels.findIndex((level, index) => index > currentLevel && (level.secret ? isSecretLevelUnlocked(level) : index === 0 || Number(localStorage.getItem(`orbit-level-${index}`) ?? "0") === 1));
+    if (level.secret) {
+        if (prestigeGateCleared) {
+            const prestige = createMenuButton("Prestige", showPrestigeConfirmation);
+            prestige.disabled = !canClaimPrestige();
+            screen.append(prestige, createTextButton("Leave", showLevelMenu));
+        } else {
+            screen.append(createMenuButton("Leave", showLevelMenu));
+        }
+        document.body.replaceChildren(screen);
+        return;
+    }
     screen.append(createMenuButton(nextLevel >= 0 ? "Next sector" : "Replay sector", () => nextLevel >= 0 ? startGame(nextLevel) : startGame(currentLevel)), createTextButton("Mission select", showLevelMenu), createPageCounter());
     document.body.replaceChildren(screen);
 }
@@ -2889,7 +4169,11 @@ function createPlayer() {
     const avatar = avatars[selectedAvatar] ?? avatars[0];
     const shipArt = avatar.image ?? skin.image;
     const hasCustomArt = Boolean(avatar.cssArt || shipArt);
-    playerLabel.className = `player ${hasCustomArt ? "" : `ship-${skin.shape}`} avatar-${selectedAvatar}`; playerLabel.style.setProperty("--ship-color", skin.color); playerLabel.innerHTML = `${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, avatar.color) : shipArt ? createShipArtMarkup(shipArt, avatar.name) : "<span class=\"ship-window\"></span>"}<span class="ship-gun"></span><span class="ship-flame"></span>`; world.append(playerLabel); updatePlayerPosition();
+    playerLabel.className = `player ${hasCustomArt ? "" : `ship-${skin.shape}`} avatar-${selectedAvatar}`;
+    playerLabel.style.setProperty("--ship-color", selectedShipColor);
+    playerLabel.innerHTML = `${avatar.cssArt ? createCssShipArtMarkup(avatar.cssArt, avatar.name, selectedShipColor) : shipArt ? createShipArtMarkup(shipArt, avatar.name, selectedShipColor) : "<span class=\"ship-window\"></span>"}<span class="ship-gun"></span><span class="ship-flame"></span>`;
+    world.append(playerLabel);
+    updatePlayerPosition();
 }
 
 function createWorldObjects() {
@@ -2918,7 +4202,7 @@ createLevelKeyObject();
     if (inFlippedRoute && !flippedRouteKeyCollected) { const routeKey = document.createElement("div"); routeKey.className = "level-key flipped-route-key"; routeKey.textContent = "⚿"; routeKey.style.left = `${140 + Math.min(levels[currentLevel].length - 2, Math.max(2, levels[currentLevel].flippedRoute?.key ?? levels[currentLevel].length - 3)) * TILE_WIDTH}px`; routeKey.style.top = `${flippedRouteKeyY}px`; routeKey.setAttribute("aria-label", "Flipped planet exit key"); world.append(routeKey); }
     
     // Secret portals - one per secret level, placed in hard-to-reach/obscured locations (y=80, reveal radius 50px)
-    const secretPortals = levels[currentLevel].secretPortals ?? [];
+    const secretPortals = levels[currentLevel].secret ? [] : levels[currentLevel].secretPortals ?? [];
     secretPortals.forEach((portal, portalIndex) => {
         const element = document.createElement("div");
         element.className = "secret-portal";
@@ -2956,7 +4240,12 @@ createLevelKeyObject();
         world.append(element); 
     }
     
-    const beacon = document.createElement("div"); beacon.className = "beacon"; beacon.style.left = `${(levels[currentLevel].length - 1) * TILE_WIDTH + 140}px`; world.append(beacon);
+    if (!inFlippedRoute) {
+        const beacon = document.createElement("div");
+        beacon.className = "beacon";
+        beacon.style.left = `${(levels[currentLevel].length - 1) * TILE_WIDTH + 140}px`;
+        world.append(beacon);
+    }
 }
 
 function createSpaceBackdrop() {
@@ -3003,10 +4292,28 @@ function startPortalTransit(target: number, secretId?: string) {
     const sourceLevel = levels[currentLevel];
     const targetLevel = levels.find((level) => level.secretId === secretId);
     if (targetLevel?.prestige && !sourceLevel.prestige) return;
+    if (secretId === "prestige-gate") {
+        const gateError = getPrestigeGateAccessError();
+        if (gateError) {
+            statusLabel.textContent = gateError;
+            return;
+        }
+    }
     portalTravelInProgress = true;
+    setMusicScene("boss");
     secretBossRoomActive = true;
     currentSecretPortalTarget = secretId ?? `secret-room-${currentLevel + 1}-${target}`;
     portalReturnX = playerX;
+    portalReturnState = {
+        x: playerX,
+        y: playerY,
+        verticalSpeed,
+        jumpCount,
+        shipFlipped,
+        trailActive,
+        trailPositions: [...trailPositions],
+        trailDirection,
+    };
     shipFlipped = false;
     verticalSpeed = 0;
     jumpCount = 0;
@@ -3014,10 +4321,18 @@ function startPortalTransit(target: number, secretId?: string) {
     playerY = FLOOR_Y;
     projectiles.forEach((projectile) => projectile.element.remove());
     projectiles = [];
+    projectileTimer = 0;
+    const skin = skins[selectedSkin] ?? skins[0];
+    const avatar = avatars[selectedAvatar] ?? avatars[0];
     const room = document.createElement("section");
     room.className = "portal-key-room secret-boss-room";
     room.setAttribute("aria-live", "polite");
-    room.innerHTML = `<div class="portal-key-room-warp"></div><div class="portal-room-boundary"></div><div class="portal-room-floor"></div><div class="portal-room-player player"></div><div class="portal-key-chamber"><p>PORTAL KEY ARENA</p><b>DEFEAT THE VOID WARDEN</b><div class="portal-key-room-key">⚿</div><small class="portal-boss-health">8 HITS LEFT / JUMP ON ITS HEAD OR USE CANNON</small></div>`;
+    room.innerHTML = `<div class="portal-key-room-warp"></div><div class="portal-room-boundary"></div><div class="portal-room-floor"></div><div class="portal-key-chamber"><p>PORTAL KEY ARENA</p><b>DEFEAT THE VOID WARDEN</b><div class="portal-key-room-key">⚿</div><small class="portal-boss-health">12 HITS LEFT / JUMP ON ITS HEAD OR USE CANNON</small></div>`;
+    const roomPlayer = document.createElement("div");
+    roomPlayer.className = `portal-room-player player ${avatar.cssArt || avatar.image || skin.image ? "" : `ship-${skin.shape}`} avatar-${selectedAvatar}`;
+    roomPlayer.style.setProperty("--ship-color", selectedShipColor);
+    roomPlayer.innerHTML = playerLabel.innerHTML;
+    room.append(roomPlayer);
     document.querySelector(".game-frame")?.append(room);
     world.classList.add("portal-boss-room-active");
     secretRoomFloorY = Math.max(170, room.clientHeight - playerHeight - 26);
@@ -3026,31 +4341,42 @@ function startPortalTransit(target: number, secretId?: string) {
     previousPlayerY = playerY;
     statusLabel.textContent = "Portal arena entered. Defeat the Void Warden to claim its key.";
     const bossX = Math.max(112, Math.min(room.clientWidth - 152, room.clientWidth * 0.68));
-    secretBoss = { x: bossX, y: secretRoomFloorY - SECRET_BOSS_HEIGHT, health: 8, maxHealth: 8, defeated: false };
+    secretBoss = { x: bossX, y: secretRoomFloorY - SECRET_BOSS_HEIGHT, health: 12, maxHealth: 12, defeated: false };
     const bossElement = document.createElement("div");
     bossElement.className = "boss secret-boss void-warden";
     bossElement.style.left = `${secretBoss.x}px`;
     bossElement.style.top = `${secretBoss.y}px`;
     room.append(bossElement);
     room.classList.add("has-secret-boss");
-    const roomPlayer = room.querySelector<HTMLElement>(".portal-room-player");
-    if (roomPlayer) roomPlayer.style.transform = `translate(${playerX}px, ${playerY}px)`;
+    roomPlayer.style.transform = `translate(${playerX}px, ${playerY}px)`;
     updateTrail(false);
 }
 
 function exitSecretBossRoom() {
     if (!gameActive || !portalTravelInProgress) return;
-    if (portalReturnX !== null) playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH - playerWidth, portalReturnX + PORTAL_SIZE + 24));
-    playerY = FLOOR_Y;
+    if (portalReturnState) {
+        playerX = portalReturnState.x;
+        playerY = portalReturnState.y;
+        verticalSpeed = portalReturnState.verticalSpeed;
+        jumpCount = portalReturnState.jumpCount;
+        shipFlipped = portalReturnState.shipFlipped;
+        trailActive = portalReturnState.trailActive;
+        trailPositions = [...portalReturnState.trailPositions];
+        trailDirection = portalReturnState.trailDirection;
+    } else {
+        if (portalReturnX !== null) playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH - playerWidth, portalReturnX + PORTAL_SIZE + 24));
+        playerY = FLOOR_Y;
+        verticalSpeed = 0;
+        jumpCount = 0;
+    }
     previousPlayerY = playerY;
-    verticalSpeed = 0;
-    jumpCount = 0;
     portalCooldownUntil = performance.now() + 900;
     portalTravelInProgress = false;
     secretBossRoomActive = false;
     secretBoss = null;
     currentSecretPortalTarget = null;
     portalReturnX = null;
+    portalReturnState = null;
     secretRoomFloorY = FLOOR_Y;
     world.classList.remove("portal-boss-room-active");
     document.querySelector(".portal-key-room")?.remove();
@@ -3122,7 +4448,7 @@ function moveDown(distance = 36) {
     const now = performance.now();
     const doubleDown = now - lastDownPressAt < 300;
     lastDownPressAt = now;
-    if (inFlippedRoute && flippedRouteKeyCollected && doubleDown && isInGravityZone()) { leaveFlippedRoute(); return; }
+    if (inFlippedRoute && doubleDown) { leaveFlippedRoute(); return; }
     // On the ceiling, Down is the jump input: it dives under the upper-lane
     // obstacles created for the prestige planet.
     if (shipFlipped) { jump(); return; }
@@ -3549,16 +4875,81 @@ function getNormalRouteCount() { return levels.filter((level) => !level.secret &
 function getNormalCompletedLevelCount() { return levels.filter((level, index) => { const bestTime = Number(localStorage.getItem(`orbit-best-${index}`) ?? "0"); return !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1" && bestTime > 0 && bestTime <= goldenTimeLimitMs; }).length; }
 function getCompletedLevelCount() { return levels.filter((_, index) => localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
 function hasClearedPrestigeGate() { return localStorage.getItem("orbit-level-complete-prestige-gate") === "1" || levels.some((level, index) => level.secretId === "prestige-gate" && localStorage.getItem(`orbit-level-complete-${index}`) === "1"); }
-function canClaimPrestige() { const requirement = getPrestigeRequirement(prestigeLevel); return prestigeLevel < prestigeMax && hasClearedPrestigeGate() && getNormalCompletedLevelCount() >= getNormalRouteCount() && asteroidsClaimed >= requirement.normal && specialAsteroids >= requirement.special; }
+function getPrestigeGateAccessError() {
+    const requirement = getPrestigeRequirement(prestigeLevel);
+    const normalComplete = getNormalCompletedLevelCount();
+    if (prestigeLevel >= prestigeMax) return "You have reached the configured prestige limit.";
+    if (normalComplete < getNormalRouteCount()) return `Clear every normal route under ${formatTime(goldenTimeLimitMs)} (${normalComplete}/${getNormalRouteCount()} complete).`;
+    if (asteroidsClaimed < requirement.normal || specialAsteroids < requirement.special) {
+        return `Gate requirements: asteroids ${asteroidsClaimed}/${requirement.normal}, special asteroids ${specialAsteroids}/${requirement.special}.`;
+    }
+    return "";
+}
+function canClaimPrestige() { return !getPrestigeGateAccessError() && hasClearedPrestigeGate(); }
+function getPrestigeDifficultyMultiplier() { return Math.min(2, 1 + 0.05 * Math.max(0, prestigeLevel)); }
+
+function getNextRouteIndex(currentIndex: number) {
+    const current = levels[currentIndex];
+    if (!current || current.localOnly || current.customId) return -1;
+    const routeType = getLevelType(current);
+    if (routeType === "secret") return -1;
+    return levels.findIndex((level, index) => index > currentIndex
+        && !level.localOnly
+        && !level.customId
+        && getLevelType(level) === routeType
+        && Boolean(level.prestige) === Boolean(current.prestige));
+}
+
+function showPrestigeConfirmation() {
+    const screen = document.createElement("main");
+    screen.className = "win-screen prestige-confirmation";
+    screen.innerHTML = `<p class="eyebrow">PRESTIGE / CONFIRM RESET</p><h1>Begin a <em>new run?</em></h1><p class="menu-copy">This can't be undone. Your skins, asteroids, power-ups, and level unlocks will reset. Claimed secret portals and cooldowns will remain.</p>`;
+    const confirm = createMenuButton("Confirm prestige", () => {
+        const error = getPrestigeGateAccessError();
+        if (error || !hasClearedPrestigeGate()) {
+            showLevelMenu();
+            return;
+        }
+        if (tryPrestige()) showMenu();
+        else showLevelMenu();
+    });
+    confirm.disabled = !canClaimPrestige();
+    screen.append(confirm, createTextButton("Cancel", showLevelMenu));
+    document.body.replaceChildren(screen);
+}
+
 function tryPrestige() {
     if (!canClaimPrestige()) return false;
-    const requirement = getPrestigeRequirement(prestigeLevel);
-    asteroidsClaimed -= requirement.normal;
-    specialAsteroids -= requirement.special;
     prestigeLevel++;
-    localStorage.setItem("orbit-claims", String(asteroidsClaimed));
-    localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+    localStorage.setItem("orbit-claims", "0");
+    localStorage.setItem("orbit-special-claims", "0");
     localStorage.setItem("orbit-prestige", String(prestigeLevel));
+    localStorage.setItem("orbit-prestige-world-unlocked", "1");
+    localStorage.setItem("orbit-level-0", "1");
+    levels.forEach((_level, index) => {
+        localStorage.removeItem(`orbit-level-${index}`);
+        localStorage.removeItem(`orbit-level-complete-${index}`);
+        localStorage.removeItem(`orbit-level-claims-${index}`);
+        localStorage.removeItem(`orbit-asteroids-${index}`);
+    });
+    localStorage.setItem("orbit-level-0", "1");
+    [
+        "orbit-boss-defeated",
+        "orbit-jackpot-avatar",
+        "orbit-secret-unlocked",
+        "orbit-level-complete-prestige-gate",
+        "orbit-powerups",
+        "orbit-unlock-skins",
+        "orbit-unlock-avatars",
+        "orbit-unlock-trails",
+        "orbit-skin",
+        "orbit-avatar",
+        "orbit-trail",
+    ].forEach((key) => localStorage.removeItem(key));
+    Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+        .filter((key): key is string => Boolean(key && /^orbit-spin-(skin|trail|avatar)-\d+$/.test(key)))
+        .forEach((key) => localStorage.removeItem(key));
+    refreshProgressStateFromStorage();
     return true;
 }
 function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean }, index?: number) { return localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && isSpinCosmeticUnlocked("skin", index)) || (skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required); }

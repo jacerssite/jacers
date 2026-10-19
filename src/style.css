@@ -122,6 +122,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .player:has(.ship-art-image), .player:has(.ship-css-art) { border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; }
 .player .ship-art, .player .ship-art-image, .player .ship-css-art { position: absolute; inset: -7px; width: 56px; height: 70px; object-fit: contain; pointer-events: none; }
 .ship-art-image { position: relative; display: block; flex: 0 0 auto; object-fit: contain; }
+.ship-art-inline { position: relative; display: block; width: 100%; height: 100%; }
+.ship-art-inline svg { display: block; width: 100%; height: 100%; }
 .ship-css-art { position: relative; display: block; flex: 0 0 auto; overflow: hidden; contain: layout paint size; isolation: isolate; background: var(--ship-color); box-shadow: 0 0 12px color-mix(in srgb, var(--ship-color) 82%, transparent); }
 .ship-css-stellar-guard { clip-path: polygon(50% 0, 87% 22%, 76% 90%, 50% 100%, 24% 90%, 13% 22%); background: radial-gradient(ellipse at 50% 36%, #bff7ff 0 13%, #21465f 14% 20%, transparent 21%), linear-gradient(90deg, #f8ae24, var(--ship-color) 40% 62%, #fff2a8); }
 .ship-css-quantum-dancer { clip-path: polygon(50% 0, 86% 50%, 50% 100%, 14% 50%); background: radial-gradient(circle at 50% 50%, #c6f9ff 0 16%, #263f75 17% 29%, transparent 30%), linear-gradient(135deg, #f0b6ff, var(--ship-color) 42% 58%, #6c248f); }
@@ -228,6 +230,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .customization-layout .settings-panel { width: auto; margin: 0; }
 .customization-layout .ship-preview { position: sticky; top: 18px; min-height: 190px; padding: 12px; }
 .ship-preview .setting-title { margin: 0 0 4px; }
+.ship-preview { display: grid; justify-items: center; gap: 6px; }
 .preview-stage { display: grid; place-items: center; width: 100%; min-height: 92px; margin: 4px 0; border: 1px solid #f6c46e44; background: radial-gradient(circle, #31596a, #101b2b 72%); }
 .preview-stage, .avatar-option { overflow: hidden; isolation: isolate; }
 .preview-stage .ship-art-image, .avatar-option .ship-art-image { overflow: visible; }
@@ -246,15 +249,14 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .trail-preview-particle.trail-effect-ribbon { animation: trail-ribbon .9s ease-in-out infinite alternate; }
 .trail-preview-particle.trail-effect-arc { animation: trail-arc .8s linear infinite; }
 .customization-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.color-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)); gap: 12px; }
+.ship-color-choice { width: 44px; height: 44px; justify-self: center; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--ship-color-choice); cursor: pointer; }
+.ship-color-choice:hover, .ship-color-choice:focus-visible, .ship-color-choice.selected { outline: 3px solid #f6c46e; outline-offset: 3px; }
 .loadout-choice { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 92px; padding: 8px 5px; border: 1px solid #385267; color: #c4d1bd; background: #101b2b; font: .62rem 'DM Mono', monospace; cursor: pointer; }
 .loadout-choice > span { line-height: 1.2; }
 .loadout-choice .rarity-badge { margin-left: 0; }
 .loadout-choice .ship-art-image { width: 34px; height: 34px; }
-.skin-color-swatch { display: block; width: 30px; height: 30px; border: 3px solid #f3f5e9; background: var(--skin-color); box-shadow: 0 0 12px var(--skin-color); }
-.skin-color-swatch.ship-classic { border-radius: 52% 52% 45% 45%; }
-.skin-color-swatch.ship-dart { clip-path: polygon(50% 0, 95% 70%, 66% 62%, 50% 100%, 34% 62%, 5% 70%); }
-.skin-color-swatch.ship-ring { border-radius: 50%; background: transparent; box-shadow: 0 0 0 4px var(--skin-color), 0 0 14px var(--skin-color); }
-.skin-color-swatch.ship-blade { clip-path: polygon(50% 0, 86% 28%, 68% 49%, 96% 100%, 50% 75%, 4% 100%, 32% 49%, 14% 28%); }
+.skin-color-swatch { display: block; width: 30px; height: 30px; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--skin-color); }
 .loadout-trail-mark { display: block; width: 30px; height: 9px; border-radius: 50%; background: var(--trail-color); box-shadow: 0 0 12px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); animation: trail-comet .65s ease-in-out infinite alternate; }
 .loadout-trail-mark.trail-effect-ember { animation: trail-flicker .55s ease-in-out infinite alternate; }
 .loadout-trail-mark.trail-effect-spark { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 8px var(--trail-color), 10px 3px 0 -2px var(--trail-color), 20px 5px 0 -4px var(--trail-color); }
@@ -329,8 +331,6 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .portal-room-boundary { position: absolute; inset: 12px; border: 2px solid #d9b8ff66; box-shadow: inset 0 0 0 2px #6ecbff33; }
 .portal-room-floor { position: absolute; right: 16px; bottom: 24px; left: 16px; height: 3px; background: #f6c46e; box-shadow: 0 0 16px #f6c46e; }
 .portal-room-player { position: absolute; z-index: 8; width: 48px; height: 58px; border: 3px solid #f4f3cf; border-radius: 52% 52% 45% 45%; background: #ed7657; box-shadow: 0 0 0 5px #ed765733, 0 8px 18px #101b2b88; transform: translate(0, 0); }
-.portal-room-player::before { position: absolute; top: 9px; left: 10px; width: 22px; height: 17px; content: ''; border: 2px solid #143746; border-radius: 50%; background: #89d0bf; }
-.portal-room-player::after { position: absolute; bottom: -14px; left: 15px; width: 13px; height: 16px; content: ''; background: #f6c46e; clip-path: polygon(50% 100%, 0 0, 100% 0); }
 .portal-boss-room-active > .player { opacity: 0; }
 .portal-key-room .boss { z-index: 7; height: 120px; animation: none; }
 .portal-key-chamber { position: absolute; z-index: 9; top: 20px; left: 50%; display: grid; justify-items: center; gap: 4px; min-width: 230px; padding: 8px 14px; border: 1px solid #d9f5ff66; border-radius: 4px; color: #f3f5e9; background: #101b2bcc; box-shadow: 0 0 18px #6ecbff55; text-align: center; transform: translateX(-50%); }
@@ -586,7 +586,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-rail-button { display: grid; place-items: center; width: 72px; min-height: 72px; padding: 8px; border: 1px solid #6ecbff99; border-radius: 50%; color: #f3f5e9; background: #143746ee; box-shadow: 0 8px 28px #08121f77; font: 600 .65rem 'DM Mono', monospace; overflow-wrap: anywhere; }
 .account-rail-button::before { display: block; width: 24px; height: 24px; margin-bottom: 3px; border: 2px solid #f6c46e; border-radius: 50%; color: #f6c46e; content: '✦'; font: 1rem/20px 'Space Grotesk', sans-serif; }
 .account-rail-button:hover, .account-rail-button:focus-visible { border-color: #f6c46e; color: #f6c46e; outline: none; transform: scale(1.04); }
-.owner-account-indicator { position: fixed; z-index: 1000; top: 10px; left: 12px; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #f6c46e; border-radius: 50%; color: #f6c46e; background: #101b2bee; box-shadow: 0 0 16px #f6c46e99; font-size: 1rem; pointer-events: none; }
+.owner-account-indicator { position: fixed; z-index: 1000; top: 10px; right: 12px; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #f6c46e; border-radius: 50%; color: #f6c46e; background: #101b2bee; box-shadow: 0 0 16px #f6c46e99; font-size: 1rem; pointer-events: none; }
 .tester-world-tabs { display: flex; justify-content: center; gap: 10px; margin: 8px auto 14px; }
 .tester-world-tabs .text-button { min-width: 150px; padding: 12px; border: 1px solid #385267; background: #101b2b; }
 .tester-world-tabs .text-button.selected { border-color: #f6c46e; color: #f6c46e; box-shadow: inset 0 -2px #f6c46e; }
@@ -641,6 +641,23 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .player { will-change: transform; }
 .projectile, .player-projectile, .boss-projectile { will-change: transform; }
 .player-projectile { transform-origin: center; }
+.tester-settings-tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin: 0 auto 14px; }
+.tester-settings-tabs .text-button { padding: 9px 12px; border: 1px solid #385267; background: #101b2b; }
+.tester-settings-tabs .text-button.selected { border-color: #f6c46e; color: #f6c46e; }
+.tester-settings-category { display: grid; gap: 9px; width: min(850px, 94vw); margin: 0 auto 14px; padding: 14px; border: 1px solid #385267; background: #101b2b88; }
+.tester-player-actions { display: grid; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid #385267; }
+.tester-player-actions > b { color: #f6c46e; font: .7rem 'DM Mono', monospace; }
+.tester-player-actions select, .tester-player-form select, .account-profile-form select, .account-profile-form textarea { width: 100%; min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.tester-player-actions .tester-player-unlocks { display: grid; gap: 6px; }
+.account-profile-form textarea { min-height: 90px; resize: vertical; }
+.account-profile-form input[type="datetime-local"] { color-scheme: dark; }
+.player-message-overlay { position: fixed; z-index: 1200; inset: 0; display: grid; place-items: center; padding: 18px; background: #08121fcc; }
+.player-message-dialog { width: min(480px, 96vw); padding: 24px; border: 1px solid #6ecbff; border-radius: 8px; background: #101b2b; box-shadow: 0 0 32px #6ecbff66; }
+.player-message-dialog h2 { color: #f6c46e; font-family: 'Space Grotesk', sans-serif; }
+.player-message-dialog p { color: #e3e9dc; font: .8rem/1.7 'DM Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.player-message-dialog small { display: block; min-height: 1.5em; color: #99b3a6; font: .65rem 'DM Mono', monospace; }
+.player-message-overlay.message-warning .player-message-dialog { border-color: #ed7657; box-shadow: 0 0 32px #ed765766; }
+.player-message-overlay.message-reward .player-message-dialog { border-color: #f6c46e; box-shadow: 0 0 32px #f6c46e66; }
 
 @media (max-width: 600px) {
 	.account-rail { top: auto; bottom: 12px; left: 12px; transform: none; }
@@ -648,6 +665,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 	.account-rail-button::before { width: 20px; height: 20px; line-height: 16px; }
 	.tester-world-tabs { width: min(560px, 90vw); }
 	.tester-world-tabs .text-button { flex: 1; min-width: 0; }
+	.tester-panel-tabs, .tester-settings-tabs { justify-content: flex-start; overflow-x: auto; }
+	.tester-settings-tabs { flex-wrap: nowrap; }
 	.maker-details { width: 100%; }
 	.tester-custom-level-row { align-items: flex-start; }
 }

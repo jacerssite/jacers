@@ -10,6 +10,7 @@ export const ALLOWED_ABILITIES = new Set([
 
 export const RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
 export const POWERUP_KINDS = ["shield", "boost", "rapid", "cannon", "star"];
+export const USER_ROLES = ["owner", "tester", "player"];
 const defaultRarityOdds = { Common: 52, Uncommon: 27, Rare: 13, Epic: 6, Legendary: 2 };
 const defaultRewardRanges = { Common: [50, 100], Uncommon: [101, 250], Rare: [251, 500], Epic: [501, 750], Legendary: [751, 1000] };
 const defaultSkinChances = { Common: 0, Uncommon: 0, Rare: 0, Epic: 15, Legendary: 35 };
@@ -136,6 +137,7 @@ export function validatePlayerProgress(value) {
   const progress = {};
   for (const [key, item] of entries) {
     if (!/^orbit-[A-Za-z0-9_-]{1,120}$/.test(key) || key === "orbit-global-level-cache"
+      || /password|recovery|hash|token/i.test(key)
       || typeof item !== "string" || Buffer.byteLength(item, "utf8") > 20000) return null;
     totalBytes += Buffer.byteLength(key, "utf8") + Buffer.byteLength(item, "utf8");
     if (totalBytes > 100000) return null;
@@ -150,6 +152,46 @@ export function normalizeUsername(value) {
   return /^[A-Za-z0-9_]{3,20}$/.test(username)
     ? { display: username, normalized: username.toLowerCase() }
     : null;
+}
+
+export function normalizeRecoveryCode(value) {
+  if (typeof value !== "string") return null;
+  const code = value.trim().toUpperCase().replace(/[-\s]/g, "");
+  return /^[A-HJ-NP-Z2-9]{16}$/.test(code) ? code : null;
+}
+
+export function formatRecoveryCode(value) {
+  const code = normalizeRecoveryCode(value);
+  return code ? code.match(/.{4}/g).join("-") : null;
+}
+
+/**
+ * Redemption reward contract: { type: "claims" | "specialClaims", amount: integer }.
+ */
+export function validateCodeReward(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !["claims", "specialClaims"].includes(value.type)
+    || !Number.isSafeInteger(value.amount) || value.amount < 0 || value.amount > 1000000) return null;
+  return { type: value.type, amount: value.amount };
+}
+
+export function validateRouletteTiers(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) return null;
+  const names = new Set();
+  const tiers = [];
+  for (const tier of value) {
+    if (!tier || typeof tier !== "object" || Array.isArray(tier)
+      || typeof tier.name !== "string" || tier.name.trim().length < 1 || tier.name.trim().length > 40
+      || /[<>]/.test(tier.name)
+      || !isBoundedInteger(tier.chance, 0, 100)
+      || !isBoundedInteger(tier.minReward, 0, 1000000)
+      || !isBoundedInteger(tier.maxReward, tier.minReward, 1000000)) return null;
+    const name = tier.name.trim();
+    if (names.has(name.toLowerCase())) return null;
+    names.add(name.toLowerCase());
+    tiers.push({ name, chance: tier.chance, minReward: tier.minReward, maxReward: tier.maxReward });
+  }
+  return tiers.reduce((total, tier) => total + tier.chance, 0) === 100 ? tiers : null;
 }
 
 export function isValidPassword(value) {

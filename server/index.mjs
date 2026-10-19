@@ -14,9 +14,14 @@ import {
   isValidGameConfig,
   isValidRun,
   normalizeUsername,
+  normalizeRecoveryCode,
+  formatRecoveryCode,
   parseGoldenTimeLimit,
   DEFAULT_GAME_CONFIG,
+  USER_ROLES,
+  validateCodeReward,
   validatePlayerProgress,
+  validateRouletteTiers,
   validateWorkshopLevel,
 } from "./game-data.mjs";
 
@@ -27,6 +32,14 @@ const ownerAccounts = [
 ];
 const cookieName = "jacer_session";
 const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
+const recoveryLockMs = 24 * 60 * 60 * 1000;
+const defaultRouletteTiers = [
+  { name: "Common", chance: 52, minReward: 50, maxReward: 100 },
+  { name: "Uncommon", chance: 27, minReward: 101, maxReward: 250 },
+  { name: "Rare", chance: 13, minReward: 251, maxReward: 500 },
+  { name: "Epic", chance: 6, minReward: 501, maxReward: 750 },
+  { name: "Legendary", chance: 2, minReward: 751, maxReward: 1000 },
+];
 const databaseUrl = process.env.DATABASE_MONGODB_URI;
 const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: Boolean(process.env.VERCEL) });
 const mongoClient = databaseUrl && !databaseConfigurationError
@@ -80,6 +93,78 @@ const runSubmissionLimiter = rateLimit({
   message: { error: "Too many run submissions. Wait a minute and try again." },
 });
 let dummyPasswordHash = "";
+let dummyRecoveryHash = "";
+const recoveryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many recovery attempts. Wait a few minutes and try again." },
+});
+const codeRedemptionLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many code attempts. Wait and try again." },
+});
+
+function noStore(res) {
+  res.setHeader("Cache-Control", "no-store, private");
+  res.setHeader("Pragma", "no-cache");
+}
+
+function hashRedemptionCode(code) {
+  return crypto.createHash("sha256").update(code).digest("hex");
+}
+
+function recoveryCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let index = 0; index < 16; index++) code += alphabet[crypto.randomInt(alphabet.length)];
+  return formatRecoveryCode(code);
+}
+
+function temporaryPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let password = "";
+  for (let index = 0; index < 14; index++) password += alphabet[crypto.randomInt(alphabet.length)];
+  return password;
+}
+
+function publicProfileFromProgress(username, role, progress = {}) {
+  const readCount = (key) => {
+    const value = progress[key];
+    return typeof value === "string" && /^\d{1,10}$/.test(value) ? Math.min(Number(value), 100000000) : 0;
+  };
+  const completedRoutes = Object.keys(progress)
+    .filter((key) => key.startsWith("orbit-level-complete-") && progress[key] === "1")
+    .map((key) => key.slice("orbit-level-complete-".length))
+    .filter((name) => name && name.length <= 120)
+    .sort()
+    .slice(0, 500);
+  const equippedValue = (key) => {
+    const value = progress[key];
+    if (typeof value !== "string" || value.length > 60 || /[<>]/.test(value)) return null;
+    return value;
+  };
+  return {
+    username,
+    role,
+    roleBadge: role === "tester" ? "tester" : "player",
+    normalClaims: readCount("orbit-claims"),
+    specialClaims: readCount("orbit-special-claims"),
+    prestige: readCount("orbit-prestige"),
+    completedRoutes,
+    equippedColor: equippedValue("orbit-ship-color"),
+    equippedAvatar: equippedValue("orbit-avatar"),
+    equippedTrail: equippedValue("orbit-trail"),
+  };
+}
+
+function isValidDateString(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
 
 async function getDatabase() {
   if (!mongoClient) throw new Error(databaseConfigurationError ?? "MongoDB is not configured.");
@@ -122,6 +207,25 @@ async function writePlayerProgress(collection, userId, progress, baseProgress = 
     }
   }
   return { progress: null, conflict: true };
+}
+
+async function saveSetting(db, key, value, changedBy = null) {
+  const settings = db.collection("game_settings");
+  const existing = await settings.findOne({ _id: key });
+  if (existing) {
+    await db.collection("setting_history").insertOne({
+      settingKey: key,
+      previousValue: existing.value,
+      nextValue: value,
+      changedAt: new Date(),
+      changedBy,
+    });
+  }
+  await settings.updateOne(
+    { _id: key },
+    { $set: { value, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+    { upsert: true },
+  );
 }
 
 function requireSameOrigin(req, res, next) {
@@ -172,9 +276,11 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1 } },
+    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1 } },
   );
-  return user && !user.banned ? { id: user._id, username: user.username, role: user.role } : null;
+  return user && !user.banned && USER_ROLES.includes(user.role)
+    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword) }
+    : null;
 }
 
 async function requireUser(req, res, next) {
@@ -192,6 +298,17 @@ async function requireOwner(req, res, next) {
     req.user = await getAuthenticatedUser(req);
     if (!req.user) return res.status(401).json({ error: "Log in to continue." });
     if (req.user.role !== "owner") return res.status(403).json({ error: "Owner access is required." });
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function requireStaff(req, res, next) {
+  try {
+    req.user = await getAuthenticatedUser(req);
+    if (!req.user) return res.status(401).json({ error: "Log in to continue." });
+    if (!["owner", "tester"].includes(req.user.role)) return res.status(403).json({ error: "Staff access is required." });
     next();
   } catch (error) {
     next(error);
@@ -222,6 +339,8 @@ async function accountHandler(req, res, next, mode) {
 
     if (mode === "register") {
       const passwordHash = await argon2.hash(credentials.password, passwordHashOptions);
+      const code = recoveryCode();
+      const recoveryCodeCreatedAt = new Date();
       let user;
       const db = await getDatabase();
       try {
@@ -229,6 +348,8 @@ async function accountHandler(req, res, next, mode) {
           username: username.display,
           usernameNormalized: username.normalized,
           passwordHash,
+          recoveryCodeHash: await argon2.hash(normalizeRecoveryCode(code), passwordHashOptions),
+          recoveryCodeCreatedAt,
           role: "player",
           banned: false,
           createdAt: new Date(),
@@ -239,7 +360,11 @@ async function accountHandler(req, res, next, mode) {
         throw error;
       }
       await createSession(user._id, res);
-      return res.status(201).json({ user: { username: user.username, role: user.role } });
+      noStore(res);
+      return res.status(201).json({
+        user: { username: user.username, role: user.role, mustChangePassword: false },
+        recoveryCode: code,
+      });
     }
 
     const db = await getDatabase();
@@ -247,8 +372,15 @@ async function accountHandler(req, res, next, mode) {
     const valid = await argon2.verify(user?.passwordHash ?? dummyPasswordHash, credentials.password);
     if (!valid || !user) return res.status(401).json({ error: "Username or password is incorrect." });
     if (user.banned) return res.status(403).json({ error: "This account has been banned. Contact the owner for help." });
+    await db.collection("users").updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
     await createSession(user._id, res);
-    return res.json({ user: { username: user.username, role: user.role } });
+    return res.json({
+      user: {
+        username: user.username,
+        role: user.role,
+        mustChangePassword: Boolean(user.mustChangePassword),
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -259,10 +391,137 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.post("/api/auth/register", requireSameOrigin, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
 app.post("/api/auth/login", requireSameOrigin, authLimiter, (req, res, next) => accountHandler(req, res, next, "login"));
 
+app.post("/api/auth/recover", requireSameOrigin, recoveryLimiter, async (req, res, next) => {
+  noStore(res);
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = req.body?.newPassword;
+    if (!username || !isValidPassword(password)) {
+      return res.status(400).json({ error: "Provide a valid username and a 10-128 character new password." });
+    }
+    const db = await getDatabase();
+    const attempts = db.collection("account_recovery_attempts");
+    const now = new Date();
+    let lock = await attempts.findOne({ _id: username.normalized });
+    const genericFailure = { error: "Recovery details are incorrect or unavailable." };
+    if (lock?.lockedUntil && lock.lockedUntil > now) return res.status(401).json(genericFailure);
+    const users = db.collection("users");
+    const user = await users.findOne({ usernameNormalized: username.normalized });
+    const normalizedCode = normalizeRecoveryCode(req.body?.recoveryCode);
+    let valid = false;
+    if (user?.recoveryCodeHash) {
+      if (normalizedCode) {
+        try {
+          valid = await argon2.verify(user.recoveryCodeHash, normalizedCode);
+        } catch {
+          valid = false;
+        }
+      } else {
+        await argon2.verify(dummyRecoveryHash, String(req.body?.lastLevel ?? "").slice(0, 80));
+      }
+    } else {
+      await argon2.verify(dummyRecoveryHash, normalizedCode ?? String(req.body?.lastLevel ?? "").slice(0, 80));
+      if (user && !user.recoveryCodeHash && typeof req.body?.lastLevel === "string") {
+        const progress = await db.collection("player_progress").findOne(
+          { _id: user._id },
+          { projection: { "data.orbit-last-level": 1 } },
+        );
+        const expected = user.legacyLastLevel ?? user.lastLevel ?? progress?.data?.["orbit-last-level"];
+        const supplied = crypto.createHash("sha256").update(req.body.lastLevel.trim()).digest();
+        const expectedHash = crypto.createHash("sha256").update(typeof expected === "string" ? expected : "").digest();
+        valid = Boolean(expected) && crypto.timingSafeEqual(supplied, expectedHash);
+      }
+    }
+    if (valid && user && user.role === "player" && !user.banned) {
+      const passwordHash = await argon2.hash(password, passwordHashOptions);
+      const newCode = recoveryCode();
+      const recoveryCodeHash = await argon2.hash(normalizeRecoveryCode(newCode), passwordHashOptions);
+      const recoveryFilter = user.recoveryCodeHash
+        ? { _id: user._id, recoveryCodeHash: user.recoveryCodeHash, role: "player", banned: { $ne: true } }
+        : { _id: user._id, recoveryCodeHash: { $exists: false }, role: "player", banned: { $ne: true } };
+      const recoveryUpdate = {
+        $set: {
+          passwordHash,
+          passwordChangedAt: now,
+          recoveryCodeHash,
+          recoveryCodeCreatedAt: now,
+          mustChangePassword: false,
+        },
+        $unset: { legacyLastLevel: "", lastLevel: "" },
+      };
+      const result = await users.updateOne(recoveryFilter, recoveryUpdate);
+      valid = Boolean(result.matchedCount);
+      if (valid) {
+        await db.collection("user_sessions").deleteMany({ userId: user._id });
+        await attempts.deleteOne({ _id: username.normalized });
+        clearSessionCookie(res);
+        noStore(res);
+        return res.json({ ok: true, recoveryCode: newCode });
+      }
+    }
+    lock = await attempts.findOne({ _id: username.normalized });
+    if (lock?.windowExpiresAt && lock.windowExpiresAt <= now) {
+      const resetResult = await attempts.updateOne(
+        {
+          _id: username.normalized,
+          windowExpiresAt: lock.windowExpiresAt,
+          $or: [{ lockedUntil: { $exists: false } }, { lockedUntil: { $lte: now } }],
+        },
+        {
+          $set: {
+            attempts: 0,
+            windowStartedAt: now,
+            windowExpiresAt: new Date(now.getTime() + recoveryLockMs),
+          },
+          $unset: { lockedUntil: "" },
+        },
+      );
+      if (resetResult.matchedCount) lock = await attempts.findOne({ _id: username.normalized });
+    }
+    const canIncrement = {
+      _id: username.normalized,
+      $or: [{ lockedUntil: { $exists: false } }, { lockedUntil: { $lte: now } }],
+    };
+    const incrementAttempt = {
+      $inc: { attempts: 1 },
+      $set: { updatedAt: now },
+      $setOnInsert: {
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + recoveryLockMs),
+      },
+    };
+    try {
+      await attempts.updateOne(canIncrement, incrementAttempt, { upsert: true });
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      await attempts.updateOne(canIncrement, incrementAttempt);
+    }
+    const currentAttempts = await attempts.findOne({ _id: username.normalized });
+    if (currentAttempts?.attempts >= 5) {
+      const lockedUntil = new Date(now.getTime() + recoveryLockMs);
+      await attempts.updateOne(
+        {
+          _id: username.normalized,
+          attempts: { $gte: 5 },
+          $or: [{ lockedUntil: { $exists: false } }, { lockedUntil: { $lte: now } }],
+        },
+        { $set: { lockedUntil, windowExpiresAt: lockedUntil } },
+      );
+    }
+    return res.status(401).json(genericFailure);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/auth/session", async (req, res, next) => {
   try {
     const user = await getAuthenticatedUser(req);
-    res.json({ user: user ? { username: user.username, role: user.role } : null });
+    res.json({
+      user: user
+        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword }
+        : null,
+    });
   } catch (error) {
     next(error);
   }
@@ -286,7 +545,10 @@ app.get("/api/account/progress", requireUser, async (req, res, next) => {
   try {
     const db = await getDatabase();
     const record = await db.collection("player_progress").findOne({ _id: req.user.id });
-    res.json({ progress: record?.data ?? null, updatedAt: record?.updatedAt?.toISOString() ?? null });
+    res.json({
+      progress: record ? validatePlayerProgress(record.data) : null,
+      updatedAt: record?.updatedAt?.toISOString() ?? null,
+    });
   } catch (error) {
     next(error);
   }
@@ -317,12 +579,13 @@ app.get("/api/account/profile", requireUser, async (req, res, next) => {
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
       { _id: req.user.id },
-      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1 } },
+      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1, mustChangePassword: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Account not found." });
     res.json({
       username: user.username,
       role: user.role,
+      mustChangePassword: Boolean(user.mustChangePassword),
       createdAt: user.createdAt,
       usernameChangedAt: user.usernameChangedAt ?? null,
       nextUsernameChangeAt: user.usernameChangedAt
@@ -368,27 +631,124 @@ app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, re
   }
 });
 
+app.get("/api/players/:id", async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid player id." });
+    const db = await getDatabase();
+    const user = await db.collection("users").findOne(
+      { _id: new ObjectId(req.params.id), role: { $in: ["player", "tester"] }, banned: { $ne: true } },
+      { projection: { username: 1, role: 1 } },
+    );
+    if (!user) return res.status(404).json({ error: "Player not found." });
+    const saved = await db.collection("player_progress").findOne(
+      { _id: user._id },
+      { projection: { data: 1 } },
+    );
+    res.json({ player: publicProfileFromProgress(user.username, user.role, saved?.data ?? {}) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/account/password", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const currentPassword = req.body?.currentPassword;
+    const newPassword = req.body?.newPassword;
+    if (typeof currentPassword !== "string" || !isValidPassword(newPassword)) {
+      return res.status(400).json({ error: "Provide the current password and a valid 10-128 character new password." });
+    }
+    const db = await getDatabase();
+    const users = db.collection("users");
+    const user = await users.findOne({ _id: req.user.id }, { projection: { passwordHash: 1, role: 1 } });
+    if (user?.role === "owner") return res.status(403).json({ error: "Owner passwords are managed through deployment account settings." });
+    if (!user || !await argon2.verify(user.passwordHash ?? dummyPasswordHash, currentPassword)) {
+      return res.status(401).json({ error: "The current password is incorrect." });
+    }
+    const passwordHash = await argon2.hash(newPassword, passwordHashOptions);
+    const result = await users.updateOne(
+      { _id: req.user.id, role: { $ne: "owner" } },
+      { $set: { passwordHash, passwordChangedAt: new Date(), mustChangePassword: false } },
+    );
+    if (!result.matchedCount) return res.status(403).json({ error: "Owner passwords are managed through deployment account settings." });
+    await db.collection("user_sessions").deleteMany({ userId: req.user.id });
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/account/recovery-code", requireSameOrigin, requireUser, async (req, res, next) => {
+  noStore(res);
+  try {
+    const code = recoveryCode();
+    const recoveryCodeCreatedAt = new Date();
+    const recoveryCodeHash = await argon2.hash(normalizeRecoveryCode(code), passwordHashOptions);
+    const db = await getDatabase();
+    const result = await db.collection("users").updateOne(
+      { _id: req.user.id, role: { $ne: "owner" } },
+      { $set: { recoveryCodeHash, recoveryCodeCreatedAt } },
+    );
+    if (!result.matchedCount) return res.status(403).json({ error: "Recovery codes are unavailable for owner accounts." });
+    res.json({ recoveryCode: code });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
   try {
     const db = await getDatabase();
     const users = await db.collection("users")
-      .find({}, { projection: { username: 1, role: 1, banned: 1, createdAt: 1, usernameChangedAt: 1 } })
+      .find({}, { projection: {
+        username: 1,
+        usernameNormalized: 1,
+        role: 1,
+        banned: 1,
+        createdAt: 1,
+        usernameChangedAt: 1,
+        lastLoginAt: 1,
+        passwordChangedAt: 1,
+        wipeVersion: 1,
+        recoveryCodeHash: 1,
+        recoveryCodeCreatedAt: 1,
+      } })
       .sort({ usernameNormalized: 1 })
       .limit(200)
       .toArray();
-    const records = await db.collection("player_progress")
-      .find({ _id: { $in: users.map((user) => user._id) } })
+    const progressRecords = await db.collection("player_progress")
+      .find({ _id: { $in: users.map((user) => user._id) } }, { projection: { data: 1 } })
       .toArray();
-    const progressByUser = new Map(records.map((record) => [record._id.toHexString(), record.data]));
+    const progressByUser = new Map(progressRecords.map((record) => {
+      const validated = validatePlayerProgress(record.data) ?? {};
+      const safeProgress = Object.fromEntries(Object.entries(validated).filter(([key]) =>
+        key !== "orbit-last-level" && !/(password|recovery|hash|token|secret)/i.test(key)));
+      return [record._id.toHexString(), safeProgress];
+    }));
+    const recoveryLocks = await db.collection("account_recovery_attempts")
+      .find({ _id: { $in: users.map((user) => user.usernameNormalized) } }, {
+        projection: { attempts: 1, lockedUntil: 1, windowExpiresAt: 1 },
+      })
+      .toArray();
+    const recoveryByUsername = new Map(recoveryLocks.map((lock) => [lock._id, lock]));
     res.json({
       users: users.map((user) => ({
         id: user._id.toHexString(),
         username: user.username,
         role: user.role,
         banned: Boolean(user.banned),
+        status: user.banned ? "banned" : "active",
         createdAt: user.createdAt,
         usernameChangedAt: user.usernameChangedAt ?? null,
+        lastLoginAt: user.lastLoginAt ?? null,
+        passwordChangedAt: user.passwordChangedAt ?? null,
+        wipeVersion: user.wipeVersion ?? 0,
         progress: progressByUser.get(user._id.toHexString()) ?? {},
+        hasRecoveryCode: Boolean(user.recoveryCodeHash),
+        recoveryCodeCreatedAt: user.recoveryCodeCreatedAt ?? null,
+        recoveryAttempts: recoveryByUsername.get(user.usernameNormalized)?.attempts ?? 0,
+        recoveryLockedUntil: recoveryByUsername.get(user.usernameNormalized)?.lockedUntil ?? null,
+        recoveryLockState: recoveryByUsername.get(user.usernameNormalized)?.lockedUntil > new Date() ? "locked" : "clear",
       })),
     });
   } catch (error) {
@@ -416,6 +776,12 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
       if (typeof req.body.banned !== "boolean") return res.status(400).json({ error: "Banned must be true or false." });
       updates.banned = req.body.banned;
     }
+    if (req.body?.role !== undefined) {
+      if (!USER_ROLES.includes(req.body.role) || req.body.role === "owner") {
+        return res.status(400).json({ error: "Role must be tester or player; owner access cannot be assigned here." });
+      }
+      updates.role = req.body.role;
+    }
     let progress;
     if (req.body?.progress !== undefined) {
       progress = validatePlayerProgress(req.body.progress);
@@ -430,11 +796,227 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
       }
     }
     if (progress !== undefined) {
-      const result = await writePlayerProgress(db.collection("player_progress"), userId, progress, null, true);
+      const progressCollection = db.collection("player_progress");
+      const existingProgress = await progressCollection.findOne({ _id: userId }, { projection: { "data.orbit-last-level": 1 } });
+      if (typeof existingProgress?.data?.["orbit-last-level"] === "string") {
+        progress["orbit-last-level"] = existingProgress.data["orbit-last-level"];
+      }
+      const result = await writePlayerProgress(progressCollection, userId, progress, null, true);
       if (!result.progress) return res.status(409).json({ error: "Player data changed concurrently. Retry saving the profile." });
     }
     if (updates.banned === true) await db.collection("user_sessions").deleteMany({ userId });
+    if (updates.role) await db.collection("user_sessions").deleteMany({ userId });
+    if (updates.role && updates.role !== "player") {
+      await db.collection("leaderboard_entries").deleteMany({ userId });
+    }
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/password", requireSameOrigin, requireOwner, async (req, res, next) => {
+  noStore(res);
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const db = await getDatabase();
+    const users = db.collection("users");
+    const user = await users.findOne({ _id: new ObjectId(req.params.id) }, { projection: { role: 1 } });
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.role === "owner") return res.status(403).json({ error: "Owner accounts cannot be reset here." });
+    const generatedPassword = req.body?.newPassword === undefined
+      ? temporaryPassword()
+      : null;
+    const newPassword = generatedPassword ?? req.body.newPassword;
+    if (!isValidPassword(newPassword)) return res.status(400).json({ error: "Password must be 10-128 characters." });
+    const passwordHash = await argon2.hash(newPassword, passwordHashOptions);
+    const updated = await users.updateOne(
+      { _id: user._id, role: { $ne: "owner" } },
+      { $set: { passwordHash, passwordChangedAt: new Date(), mustChangePassword: true } },
+    );
+    if (!updated.matchedCount) return res.status(403).json({ error: "Owner accounts cannot be reset here." });
+    await db.collection("user_sessions").deleteMany({ userId: user._id });
+    if (generatedPassword) {
+      noStore(res);
+      return res.json({ ok: true, temporaryPassword: generatedPassword });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/recovery-code", requireSameOrigin, requireOwner, async (req, res, next) => {
+  noStore(res);
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const db = await getDatabase();
+    const users = db.collection("users");
+    const user = await users.findOne({ _id: new ObjectId(req.params.id) }, { projection: { role: 1 } });
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.role === "owner") return res.status(403).json({ error: "Owner accounts cannot use recovery codes." });
+    const code = recoveryCode();
+    const recoveryCodeCreatedAt = new Date();
+    const recoveryCodeHash = await argon2.hash(normalizeRecoveryCode(code), passwordHashOptions);
+    const updated = await users.updateOne(
+      { _id: user._id, role: { $ne: "owner" } },
+      { $set: { recoveryCodeHash, recoveryCodeCreatedAt } },
+    );
+    if (!updated.matchedCount) return res.status(403).json({ error: "Owner accounts cannot use recovery codes." });
+    res.json({ recoveryCode: code });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/users/:id/recovery-lock", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const db = await getDatabase();
+    const user = await db.collection("users").findOne({ _id: new ObjectId(req.params.id) }, { projection: { role: 1, usernameNormalized: 1 } });
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.role === "owner") return res.status(403).json({ error: "Owner recovery locks cannot be cleared here." });
+    await db.collection("account_recovery_attempts").deleteOne({ _id: user.usernameNormalized });
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/users/:id/backups", requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const userId = new ObjectId(req.params.id);
+    const user = await (await getDatabase()).collection("users").findOne(
+      { _id: userId },
+      { projection: { role: 1 } },
+    );
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.role === "owner") return res.status(403).json({ error: "Owner profiles cannot be restored here." });
+    const backups = await (await getDatabase()).collection("profile_backups")
+      .find(
+        { userId, createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+        { projection: { categories: 1, createdAt: 1 } },
+      )
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(20)
+      .toArray();
+    res.json({
+      backups: backups.map((backup) => ({
+        id: backup._id.toHexString(),
+        categories: backup.categories,
+        createdAt: backup.createdAt,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/wipe", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const categories = req.body?.categories;
+    const allowedCategories = new Set(["progress", "cosmetics", "leaderboard", "portalsCooldowns"]);
+    if (!Array.isArray(categories) || categories.length < 1
+      || categories.some((category) => !allowedCategories.has(category))
+      || new Set(categories).size !== categories.length) {
+      return res.status(400).json({ error: "Select one or more valid wipe categories." });
+    }
+    const db = await getDatabase();
+    const users = db.collection("users");
+    const userId = new ObjectId(req.params.id);
+    const user = await users.findOne({ _id: userId }, { projection: { role: 1, username: 1 } });
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.role === "owner") return res.status(403).json({ error: "Owner profiles cannot be wiped." });
+    const wipeProgress = categories.some((category) => category !== "leaderboard");
+    const saved = wipeProgress ? await db.collection("player_progress").findOne({ _id: userId }) : null;
+    const currentProgress = saved?.data ?? {};
+    const affectedProgress = {};
+    const remainingProgress = { ...currentProgress };
+    for (const [key, value] of Object.entries(currentProgress)) {
+      const isCosmetic = ["orbit-ship-color", "orbit-avatar", "orbit-trail"].includes(key);
+      const isPortalOrCooldown = /portal|cooldown|orbit-key-|secret-unlocked/i.test(key);
+      const selected = (isCosmetic && categories.includes("cosmetics"))
+        || (isPortalOrCooldown && categories.includes("portalsCooldowns"))
+        || (!isCosmetic && !isPortalOrCooldown && categories.includes("progress"));
+      if (selected) {
+        affectedProgress[key] = value;
+        delete remainingProgress[key];
+      }
+    }
+    const leaderboardEntries = categories.includes("leaderboard")
+      ? await db.collection("leaderboard_entries").find({ userId }).toArray()
+      : undefined;
+    const now = new Date();
+    const backup = {
+      userId,
+      username: user.username,
+      categories,
+      affectedProgress: Object.keys(affectedProgress).length ? affectedProgress : undefined,
+      leaderboardEntries,
+      createdAt: now,
+      createdBy: req.user.id,
+    };
+    const inserted = await db.collection("profile_backups").insertOne(backup);
+    if (wipeProgress) {
+      const saveResult = await writePlayerProgress(db.collection("player_progress"), userId, remainingProgress, null, true);
+      if (!saveResult.progress) return res.status(409).json({ error: "Player progress changed concurrently. Retry the wipe." });
+    }
+    if (categories.includes("leaderboard")) await db.collection("leaderboard_entries").deleteMany({ userId });
+    const result = await users.updateOne(
+      { _id: userId, role: { $ne: "owner" } },
+      { $inc: { wipeVersion: 1 }, $set: { profileWipedAt: now } },
+    );
+    if (!result.matchedCount) return res.status(409).json({ error: "Account role changed. Wipe was not completed." });
+    await db.collection("user_sessions").deleteMany({ userId });
+    const updatedUser = await users.findOne({ _id: userId }, { projection: { wipeVersion: 1 } });
+    res.json({ ok: true, wipeVersion: updatedUser.wipeVersion ?? 1, backupId: inserted.insertedId.toHexString() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
+    const db = await getDatabase();
+    const userId = new ObjectId(req.params.id);
+    const user = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1, wipeVersion: 1 } });
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.role === "owner") return res.status(403).json({ error: "Owner profiles cannot be restored here." });
+    if (!ObjectId.isValid(req.body?.backupId)) return res.status(400).json({ error: "Select a valid backup to restore." });
+    const backupFilter = { _id: new ObjectId(req.body.backupId), userId };
+    const backup = await db.collection("profile_backups").findOne(backupFilter, { sort: { createdAt: -1 } });
+    if (!backup) return res.status(404).json({ error: "No profile backup was found." });
+    if (!(backup.createdAt instanceof Date) || backup.createdAt < new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)) {
+      return res.status(410).json({ error: "Profile backups can only be restored for seven days after the wipe." });
+    }
+    if (!Array.isArray(backup.categories)) return res.status(400).json({ error: "This backup does not contain restorable category metadata." });
+    if (backup.affectedProgress && typeof backup.affectedProgress === "object" && !Array.isArray(backup.affectedProgress)) {
+      const progressCollection = db.collection("player_progress");
+      const current = await progressCollection.findOne({ _id: userId });
+      const merged = { ...(current?.data ?? {}), ...backup.affectedProgress };
+      const result = await writePlayerProgress(progressCollection, userId, merged, null, true);
+      if (!result.progress) return res.status(409).json({ error: "Player progress changed concurrently. Retry restoring the profile." });
+    }
+    if (backup.categories.includes("leaderboard")) {
+      for (const entry of backup.leaderboardEntries ?? []) {
+        await db.collection("leaderboard_entries").updateOne(
+          { userId, levelName: entry.levelName },
+          {
+            $set: {
+              timeMs: entry.timeMs,
+              abilities: entry.abilities,
+              achievedAt: entry.achievedAt,
+            },
+            $setOnInsert: { _id: entry._id, userId, levelName: entry.levelName },
+          },
+          { upsert: true },
+        );
+      }
+    }
+    res.json({ ok: true, wipeVersion: user.wipeVersion ?? 0, restoredBackupId: backup._id.toHexString() });
   } catch (error) {
     next(error);
   }
@@ -443,8 +1025,73 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
 app.get("/api/settings", async (_req, res, next) => {
   try {
     const db = await getDatabase();
-    const setting = await db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" });
-    res.json({ goldenTimeLimitMs: Number(setting?.value ?? 60000) });
+    const [golden, roulette, version] = await Promise.all([
+      db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }),
+      db.collection("game_settings").findOne({ _id: "roulette_tiers" }),
+      db.collection("game_settings").findOne({ _id: "app_version" }),
+    ]);
+    res.json({
+      goldenTimeLimitMs: Number(golden?.value ?? 60000),
+      rouletteTiers: roulette?.value ?? defaultRouletteTiers,
+      version: version?.value ?? "1",
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/version", async (_req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const current = await db.collection("game_settings").findOne({ _id: "app_version" });
+    res.json({ version: current?.value ?? "1", updatedAt: current?.updatedAt ?? null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/settings/history", requireOwner, async (req, res, next) => {
+  try {
+    const query = {};
+    if (req.query.key !== undefined) {
+      if (typeof req.query.key !== "string" || !/^[a-z0-9_]{1,50}$/.test(req.query.key)) {
+        return res.status(400).json({ error: "Invalid setting history key." });
+      }
+      query.settingKey = req.query.key;
+    }
+    const db = await getDatabase();
+    const history = await db.collection("setting_history")
+      .find(query, { projection: { settingKey: 1, previousValue: 1, nextValue: 1, changedAt: 1, changedBy: 1 } })
+      .sort({ changedAt: -1, _id: -1 })
+      .limit(100)
+      .toArray();
+    res.json({ history });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/roulette-tiers", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const tiers = validateRouletteTiers(req.body?.tiers);
+    if (!tiers) return res.status(400).json({ error: "Roulette tiers must be unique, bounded, and total exactly 100%." });
+    const db = await getDatabase();
+    await saveSetting(db, "roulette_tiers", tiers, req.user.id);
+    res.json({ rouletteTiers: tiers });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/version", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const version = req.body?.version;
+    if (typeof version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,39}$/.test(version)) {
+      return res.status(400).json({ error: "Version must be 1-40 letters, numbers, dots, pluses, underscores, or hyphens." });
+    }
+    const db = await getDatabase();
+    await saveSetting(db, "app_version", version, req.user.id);
+    res.json({ version });
   } catch (error) {
     next(error);
   }
@@ -466,11 +1113,7 @@ app.put("/api/game-config", requireSameOrigin, requireOwner, async (req, res, ne
     const { config } = req.body ?? {};
     if (!isValidGameConfig(config)) return res.status(400).json({ error: "Game settings are invalid. Check percentage totals and power-up limits." });
     const db = await getDatabase();
-    await db.collection("game_settings").updateOne(
-      { _id: "game_config" },
-      { $set: { value: config, updatedAt: new Date() } },
-      { upsert: true },
-    );
+    await saveSetting(db, "game_config", config, req.user.id);
     res.json({ config });
   } catch (error) {
     next(error);
@@ -533,34 +1176,67 @@ app.put("/api/settings/golden-time-limit", requireSameOrigin, requireOwner, asyn
     const { timeLimitMs } = req.body ?? {};
     if (!parseGoldenTimeLimit(timeLimitMs)) return res.status(400).json({ error: "Golden clear time must be between 1 second and 60 minutes." });
     const db = await getDatabase();
-    await db.collection("game_settings").updateOne(
-      { _id: "golden_time_limit_ms" },
-      { $set: { value: timeLimitMs, updatedAt: new Date() } },
-      { upsert: true },
-    );
+    await saveSetting(db, "golden_time_limit_ms", timeLimitMs, req.user.id);
     res.json({ goldenTimeLimitMs: timeLimitMs });
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/leaderboard", async (_req, res, next) => {
+app.get("/api/leaderboard", async (req, res, next) => {
   try {
+    const level = typeof req.query.level === "string" ? req.query.level.trim() : "";
+    if (req.query.level !== undefined && (!level || level.length > 80)) {
+      return res.status(400).json({ error: "Level filter must be 1-80 characters." });
+    }
     const db = await getDatabase();
-    const entries = await db.collection("leaderboard_entries")
-      .find()
-      .sort({ timeMs: 1, achievedAt: 1 })
-      .limit(100)
-      .toArray();
-    const userIds = [...new Set(entries.map((entry) => entry.userId.toHexString()))].map((id) => new ObjectId(id));
-    const users = await db.collection("users")
-      .find({ _id: { $in: userIds } }, { projection: { username: 1 } })
-      .toArray();
-    const usernames = new Map(users.map((user) => [user._id.toHexString(), user.username]));
+    const entries = await db.collection("leaderboard_entries").aggregate([
+      { $match: level ? { levelName: level } : {} },
+      { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "profile" } },
+      { $unwind: "$profile" },
+      { $match: { "profile.role": "player", "profile.banned": { $ne: true } } },
+      { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
+      { $limit: 100 },
+      { $project: { _id: 1, userId: 1, username: "$profile.username", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
+    ]).toArray();
     res.json({
       entries: entries.map((entry) => ({
         id: entry._id.toHexString(),
-        username: usernames.get(entry.userId.toHexString()) ?? "Unknown pilot",
+        userId: entry.userId.toHexString(),
+        username: entry.username ?? "Unknown pilot",
+        level: entry.levelName,
+        timeMs: entry.timeMs,
+        abilities: entry.abilities,
+        achievedAt: entry.achievedAt,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/staff/leaderboard", requireStaff, async (req, res, next) => {
+  try {
+    const level = typeof req.query.level === "string" ? req.query.level.trim() : "";
+    if (req.query.level !== undefined && (!level || level.length > 80)) {
+      return res.status(400).json({ error: "Level filter must be 1-80 characters." });
+    }
+    const db = await getDatabase();
+    const entries = await db.collection("leaderboard_entries").aggregate([
+      { $match: level ? { levelName: level } : {} },
+      { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "profile" } },
+      { $unwind: "$profile" },
+      { $match: { "profile.role": { $in: ["player", "tester"] }, "profile.banned": { $ne: true } } },
+      { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
+      { $limit: 100 },
+      { $project: { _id: 1, username: "$profile.username", role: "$profile.role", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
+    ]).toArray();
+    res.json({
+      entries: entries.map((entry) => ({
+        id: entry._id.toHexString(),
+        userId: entry.userId.toHexString(),
+        username: entry.username ?? "Unknown pilot",
+        role: entry.role,
         level: entry.levelName,
         timeMs: entry.timeMs,
         abilities: entry.abilities,
@@ -576,6 +1252,7 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
   try {
     const run = req.body;
     if (!isValidRun(run)) return res.status(400).json({ error: "The run details are invalid." });
+    if (req.user.role !== "player") return res.json({ improved: false, ignored: true, entry: null });
     const levelName = run.level.trim();
     const db = await getDatabase();
     const entries = db.collection("leaderboard_entries");
@@ -661,6 +1338,365 @@ app.delete("/api/leaderboard/:id", requireSameOrigin, requireOwner, async (req, 
   }
 });
 
+app.get("/api/messages", requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const [messages, deliveries] = await Promise.all([
+      db.collection("owner_messages")
+        .find({
+          $or: [
+            { userId: req.user.id },
+            { userId: null, createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+          ],
+        })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(100)
+        .toArray(),
+      db.collection("message_deliveries").find({ userId: req.user.id }).toArray(),
+    ]);
+    const acknowledged = new Set(deliveries.map((delivery) => delivery.messageId.toHexString()));
+    res.json({
+      messages: messages.map((message) => ({
+        id: message._id.toHexString(),
+        title: message.title,
+        body: message.body,
+        type: message.type ?? "info",
+        createdAt: message.createdAt,
+        acknowledged: acknowledged.has(message._id.toHexString()),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/messages/:id/ack", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const db = await getDatabase();
+    const messageId = new ObjectId(req.params.id);
+    const message = await db.collection("owner_messages").findOne({
+      _id: messageId,
+      $or: [{ userId: req.user.id }, { userId: null }],
+    }, { projection: { _id: 1 } });
+    if (!message) return res.status(404).json({ error: "Message not found." });
+    await db.collection("message_deliveries").updateOne(
+      { messageId, userId: req.user.id },
+      { $setOnInsert: { acknowledgedAt: new Date() } },
+      { upsert: true },
+    );
+    res.status(204).end();
+  } catch (error) {
+    if (error?.code === 11000) return res.status(204).end();
+    next(error);
+  }
+});
+
+app.get("/api/admin/messages", requireOwner, async (_req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const messages = await db.collection("owner_messages")
+      .find({}, { projection: { title: 1, body: 1, type: 1, userId: 1, createdAt: 1, createdBy: 1 } })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(100)
+      .toArray();
+    res.json({ messages: messages.map((message) => ({ ...message, id: message._id.toHexString() })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/messages/:id/deliveries", requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const db = await getDatabase();
+    const messageId = new ObjectId(req.params.id);
+    const deliveries = await db.collection("message_deliveries")
+      .find({ messageId }, { projection: { userId: 1, acknowledgedAt: 1 } })
+      .sort({ acknowledgedAt: -1 })
+      .limit(500)
+      .toArray();
+    const users = await db.collection("users")
+      .find({ _id: { $in: deliveries.map((delivery) => delivery.userId) } }, { projection: { username: 1 } })
+      .toArray();
+    const usernames = new Map(users.map((user) => [user._id.toHexString(), user.username]));
+    res.json({
+      deliveries: deliveries.map((delivery) => ({
+        userId: delivery.userId.toHexString(),
+        username: usernames.get(delivery.userId.toHexString()) ?? "Unknown pilot",
+        acknowledgedAt: delivery.acknowledgedAt,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/messages", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const { title, body } = req.body ?? {};
+    const type = req.body?.type ?? "info";
+    if (typeof title !== "string" || !title.trim() || title.trim().length > 100
+      || typeof body !== "string" || !body.trim() || body.trim().length > 300
+      || !["info", "warning", "reward"].includes(type)) {
+      return res.status(400).json({ error: "Message title and body must be within the allowed lengths." });
+    }
+    const db = await getDatabase();
+    let userId = null;
+    if (req.body?.userId !== undefined && req.body.userId !== null) {
+      if (!ObjectId.isValid(req.body.userId)) return res.status(400).json({ error: "Invalid recipient." });
+      userId = new ObjectId(req.body.userId);
+      const recipient = await db.collection("users").findOne({ _id: userId }, { projection: { _id: 1 } });
+      if (!recipient) return res.status(404).json({ error: "Recipient not found." });
+    }
+    const createdAt = new Date();
+    const result = await db.collection("owner_messages").insertOne({
+      title: title.trim(),
+      body: body.trim(),
+      type,
+      userId,
+      createdAt,
+      createdBy: req.user.id,
+    });
+    res.status(201).json({ message: { id: result.insertedId.toHexString(), title: title.trim(), body: body.trim(), type, userId: userId?.toHexString() ?? null, createdAt } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const { title, body } = req.body ?? {};
+    const type = req.body?.type ?? "info";
+    if (typeof title !== "string" || !title.trim() || title.trim().length > 100
+      || typeof body !== "string" || !body.trim() || body.trim().length > 300
+      || !["info", "warning", "reward"].includes(type)) {
+      return res.status(400).json({ error: "Message title and body must be within the allowed lengths." });
+    }
+    const db = await getDatabase();
+    const result = await db.collection("owner_messages").updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { title: title.trim(), body: body.trim(), type, updatedAt: new Date(), updatedBy: req.user.id } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Message not found." });
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const db = await getDatabase();
+    const messageId = new ObjectId(req.params.id);
+    const result = await db.collection("owner_messages").deleteOne({ _id: messageId });
+    if (!result.deletedCount) return res.status(404).json({ error: "Message not found." });
+    await db.collection("message_deliveries").deleteMany({ messageId });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/codes", requireOwner, async (_req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const codes = await db.collection("redemption_codes")
+      .find({}, { projection: { codeHash: 0 } })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(200)
+      .toArray();
+    res.json({ codes: codes.map((code) => ({ ...code, id: code._id.toHexString() })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/codes/:id/redemptions", requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid code." });
+    const db = await getDatabase();
+    const codeId = new ObjectId(req.params.id);
+    const redemptions = await db.collection("code_redemption_logs")
+      .find({ codeId }, { projection: { userId: 1, redeemedAt: 1, reward: 1 } })
+      .sort({ redeemedAt: -1, _id: -1 })
+      .limit(500)
+      .toArray();
+    const users = await db.collection("users")
+      .find({ _id: { $in: redemptions.map((entry) => entry.userId) } }, { projection: { username: 1 } })
+      .toArray();
+    const usernames = new Map(users.map((user) => [user._id.toHexString(), user.username]));
+    res.json({
+      redemptions: redemptions.map((entry) => ({
+        userId: entry.userId.toHexString(),
+        username: usernames.get(entry.userId.toHexString()) ?? "Unknown pilot",
+        redeemedAt: entry.redeemedAt,
+        reward: entry.reward,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/codes", requireSameOrigin, requireOwner, async (req, res, next) => {
+  noStore(res);
+  try {
+    const code = typeof req.body?.code === "string"
+      ? req.body.code.trim().toUpperCase()
+      : crypto.randomBytes(12).toString("hex").toUpperCase();
+    const maxUses = req.body?.maxUses ?? 1;
+    const perPlayerLimit = req.body?.perPlayerLimit ?? 1;
+    const reward = validateCodeReward(req.body?.reward ?? { type: "claims", amount: 0 });
+    if (!/^[A-Z0-9-]{8,40}$/.test(code)
+      || !Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 1000000
+      || !Number.isSafeInteger(perPlayerLimit) || perPlayerLimit < 1 || perPlayerLimit > 1000
+      || !reward
+      || (req.body?.expiresAt !== undefined && !isValidDateString(req.body.expiresAt))) {
+      return res.status(400).json({ error: "Code settings are invalid." });
+    }
+    const db = await getDatabase();
+    const document = {
+      codeHash: hashRedemptionCode(code),
+      maxUses,
+      perPlayerLimit,
+      reward,
+      uses: 0,
+      enabled: true,
+      expiresAt: req.body?.expiresAt ? new Date(req.body.expiresAt) : null,
+      createdAt: new Date(),
+      createdBy: req.user.id,
+    };
+    const result = await db.collection("redemption_codes").insertOne(document);
+    res.status(201).json({
+      code: { id: result.insertedId.toHexString(), maxUses, perPlayerLimit, reward, expiresAt: document.expiresAt },
+      redemptionCode: code,
+    });
+  } catch (error) {
+    if (error?.code === 11000) return res.status(409).json({ error: "That code already exists." });
+    next(error);
+  }
+});
+
+app.delete("/api/admin/codes/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid code." });
+    const db = await getDatabase();
+    const result = await db.collection("redemption_codes").updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { enabled: false, disabledAt: new Date() } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Code not found." });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireUser, async (req, res, next) => {
+  try {
+    const code = typeof req.body?.code === "string" ? req.body.code.trim().toUpperCase() : "";
+    if (!/^[A-Z0-9-]{8,40}$/.test(code)) return res.status(400).json({ error: "Enter a valid redemption code." });
+    const db = await getDatabase();
+    const codes = db.collection("redemption_codes");
+    const redemptions = db.collection("code_redemptions");
+    const session = mongoClient.startSession();
+    try {
+      const redemptionResult = await session.withTransaction(async () => {
+        const now = new Date();
+        const codeRecord = await codes.findOne(
+          { codeHash: hashRedemptionCode(code) },
+          { session },
+        );
+        if (!codeRecord) throw Object.assign(new Error("Code is invalid or unavailable."), { statusCode: 404 });
+        if (codeRecord.enabled === false) throw Object.assign(new Error("This code has been disabled."), { statusCode: 410 });
+        if (codeRecord.expiresAt && codeRecord.expiresAt <= now) {
+          throw Object.assign(new Error("This code has expired."), { statusCode: 410 });
+        }
+
+        const maxUses = Number.isSafeInteger(codeRecord.maxUses) ? codeRecord.maxUses : 1;
+        const perPlayerLimit = Number.isSafeInteger(codeRecord.perPlayerLimit) ? codeRecord.perPlayerLimit : 1;
+        const prior = await redemptions.findOne(
+          { codeId: codeRecord._id, userId: req.user.id },
+          { session },
+        );
+        if (prior && prior.uses >= perPlayerLimit) {
+          throw Object.assign(new Error("This code has already reached your per-player use limit."), { statusCode: 409 });
+        }
+        if (prior) {
+          const playerIncrement = await redemptions.updateOne(
+            { _id: prior._id, uses: { $lt: perPlayerLimit } },
+            { $inc: { uses: 1 }, $set: { lastRedeemedAt: now } },
+            { session },
+          );
+          if (!playerIncrement.matchedCount) {
+            throw Object.assign(new Error("This code has already reached your per-player use limit."), { statusCode: 409 });
+          }
+        } else {
+          await redemptions.insertOne({
+            codeId: codeRecord._id,
+            userId: req.user.id,
+            uses: 1,
+            redeemedAt: now,
+          }, { session });
+        }
+
+        const totalIncrement = await codes.updateOne(
+          {
+            _id: codeRecord._id,
+            enabled: { $ne: false },
+            $and: [
+              { $or: [{ uses: { $lt: maxUses } }, { uses: { $exists: false } }] },
+              { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }, { expiresAt: { $exists: false } }] },
+            ],
+          },
+          { $inc: { uses: 1 } },
+          { session },
+        );
+        if (!totalIncrement.matchedCount) {
+          const currentCode = await codes.findOne(
+            { _id: codeRecord._id },
+            { projection: { enabled: 1, expiresAt: 1 }, session },
+          );
+          if (currentCode?.enabled === false) {
+            throw Object.assign(new Error("This code has been disabled."), { statusCode: 410 });
+          }
+          if (currentCode?.expiresAt && currentCode.expiresAt <= now) {
+            throw Object.assign(new Error("This code has expired."), { statusCode: 410 });
+          }
+          throw Object.assign(new Error("This code has reached its total use limit."), { statusCode: 409 });
+        }
+
+        const reward = validateCodeReward(codeRecord.reward)
+          ?? (Number.isSafeInteger(codeRecord.reward) && codeRecord.reward >= 0
+            ? { type: "claims", amount: codeRecord.reward }
+            : { type: "claims", amount: 0 });
+        await db.collection("code_redemption_logs").insertOne({
+          codeId: codeRecord._id,
+          userId: req.user.id,
+          redeemedAt: now,
+          reward,
+        }, { session });
+        return {
+          reward,
+          remainingUses: Math.max(0, maxUses - ((codeRecord.uses ?? 0) + 1)),
+        };
+      });
+      res.json({ ok: true, ...redemptionResult });
+    } catch (error) {
+      if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message });
+      if (error?.code === 11000) return res.status(409).json({ error: "This code has already reached your per-player use limit." });
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));
 app.use(express.static(path.join(dirname, "..", "dist"), { index: false, maxAge: process.env.NODE_ENV === "production" ? "1h" : 0 }));
 app.use((req, res, next) => {
@@ -688,14 +1724,31 @@ async function initializeDatabaseOnce() {
   const sessions = db.collection("user_sessions");
   const entries = db.collection("leaderboard_entries");
   const settings = db.collection("game_settings");
+  const recoveryAttempts = db.collection("account_recovery_attempts");
+
+  try {
+    await recoveryAttempts.dropIndex("windowExpiresAt_1");
+  } catch (error) {
+    if (error?.code !== 27) throw error;
+  }
 
   await Promise.all([
     users.createIndex({ usernameNormalized: 1 }, { unique: true }),
     sessions.createIndex({ tokenHash: 1 }, { unique: true }),
     sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     entries.createIndex({ userId: 1, levelName: 1 }, { unique: true }),
-    entries.createIndex({ timeMs: 1, achievedAt: 1 }),
+    entries.createIndex({ levelName: 1, timeMs: 1, achievedAt: 1, _id: 1 }),
+    recoveryAttempts.createIndex({ lockedUntil: 1 }),
+    db.collection("profile_backups").createIndex({ userId: 1, createdAt: -1 }),
+    db.collection("redemption_codes").createIndex({ codeHash: 1 }, { unique: true }),
+    db.collection("code_redemptions").createIndex({ codeId: 1, userId: 1 }, { unique: true }),
+    db.collection("code_redemption_logs").createIndex({ codeId: 1, redeemedAt: -1 }),
+    db.collection("code_redemption_logs").createIndex({ userId: 1, redeemedAt: -1 }),
+    db.collection("owner_messages").createIndex({ userId: 1, createdAt: -1 }),
+    db.collection("message_deliveries").createIndex({ messageId: 1, userId: 1 }, { unique: true }),
+    db.collection("setting_history").createIndex({ settingKey: 1, changedAt: -1 }),
   ]);
+  await users.updateMany({ role: { $exists: false } }, { $set: { role: "player" } });
   await settings.updateOne(
     { _id: "golden_time_limit_ms" },
     { $setOnInsert: { value: 60000, createdAt: new Date() } },
@@ -706,8 +1759,19 @@ async function initializeDatabaseOnce() {
     { $setOnInsert: { value: DEFAULT_GAME_CONFIG, createdAt: new Date() } },
     { upsert: true },
   );
+  await settings.updateOne(
+    { _id: "roulette_tiers" },
+    { $setOnInsert: { value: defaultRouletteTiers, createdAt: new Date() } },
+    { upsert: true },
+  );
+  await settings.updateOne(
+    { _id: "app_version" },
+    { $setOnInsert: { value: "1", createdAt: new Date() } },
+    { upsert: true },
+  );
 
   dummyPasswordHash = await argon2.hash("constant-time account lookup", passwordHashOptions);
+  dummyRecoveryHash = await argon2.hash("constant-time recovery lookup", passwordHashOptions);
   for (const account of ownerAccounts) {
     const username = normalizeUsername(account.username);
     const passwordHash = await argon2.hash(account.password, passwordHashOptions);
@@ -717,6 +1781,7 @@ async function initializeDatabaseOnce() {
         usernameNormalized: username.normalized,
         passwordHash,
         role: "owner",
+        mustChangePassword: false,
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },
