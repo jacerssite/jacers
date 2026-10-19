@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getMongoDatabaseConfigurationError } from "./database-config.mjs";
+import { getMongoDatabaseConfigurationError, getMongoDatabaseConnectionString } from "./database-config.mjs";
+import { dropLegacyRecoveryIndex } from "./database-setup.mjs";
 import {
   isValidPassword,
   isValidGameConfig,
@@ -89,8 +90,32 @@ test("MongoDB connection configuration accepts hosted URIs and rejects local Ver
   assert.equal(getMongoDatabaseConfigurationError("mongodb://localhost:27017/jacer"), null);
   assert.equal(getMongoDatabaseConfigurationError("mongodb://localhost:27017/jacer", { vercel: true })?.includes("MongoDB Atlas"), true);
   assert.equal(getMongoDatabaseConfigurationError("postgresql://db.example.com/jacer")?.includes("mongodb://"), true);
-  assert.equal(getMongoDatabaseConfigurationError("not a uri")?.includes("valid MongoDB"), true);
+  assert.equal(getMongoDatabaseConfigurationError("not a uri")?.includes("must be valid"), true);
   assert.equal(getMongoDatabaseConfigurationError(undefined)?.includes("DATABASE_MONGODB_URI"), true);
+});
+
+test("Vercel's native MongoDB URI works without changing existing database precedence", () => {
+  const existing = "mongodb://existing.example/players";
+  const native = "mongodb+srv://native.example/players";
+  const legacy = "mongodb://legacy.example/players";
+  assert.equal(getMongoDatabaseConnectionString({ MONGODB_URI: `  ${native}  ` }), native);
+  assert.equal(getMongoDatabaseConnectionString({ DATABASE_MONGODB_URI: existing, MONGODB_URI: native, DATABASE_URL: legacy }), existing);
+  assert.equal(getMongoDatabaseConnectionString({ DATABASE_MONGODB_URI: "  ", MONGODB_URI: native, DATABASE_URL: legacy }), native);
+  assert.equal(getMongoDatabaseConnectionString({ DATABASE_URL: legacy }), legacy);
+  assert.equal(getMongoDatabaseConnectionString({}), undefined);
+  // Do not silently switch databases when a configured override is invalid.
+  assert.equal(getMongoDatabaseConnectionString({ DATABASE_MONGODB_URI: "invalid", MONGODB_URI: native }), "invalid");
+});
+
+test("legacy recovery index cleanup allows fresh databases but surfaces other failures", async () => {
+  let requestedIndex;
+  await dropLegacyRecoveryIndex({ dropIndex: async (name) => { requestedIndex = name; } });
+  assert.equal(requestedIndex, "windowExpiresAt_1");
+  for (const code of [26, 27]) {
+    await dropLegacyRecoveryIndex({ dropIndex: async () => { throw Object.assign(new Error("missing"), { code }); } });
+  }
+  const denied = Object.assign(new Error("not authorized"), { code: 13 });
+  await assert.rejects(dropLegacyRecoveryIndex({ dropIndex: async () => { throw denied; } }), (error) => error === denied);
 });
 
 test("run validation accepts bounded run details and known abilities only", () => {

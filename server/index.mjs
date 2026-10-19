@@ -6,8 +6,10 @@ import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { MongoClient, ObjectId } from "mongodb";
+import { attachDatabasePool } from "@vercel/functions";
 import argon2 from "argon2";
-import { getMongoDatabaseConfigurationError } from "./database-config.mjs";
+import { getMongoDatabaseConfigurationError, getMongoDatabaseConnectionString } from "./database-config.mjs";
+import { dropLegacyRecoveryIndex } from "./database-setup.mjs";
 import {
   ALLOWED_ABILITIES,
   isValidPassword,
@@ -41,14 +43,15 @@ const defaultRouletteTiers = [
   { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
   { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
 ];
-// DATABASE_URL is commonly supplied by deployment integrations. Keep the explicit
-// MongoDB name as the documented primary setting, while accepting the standard
-// fallback so an otherwise valid online service can start.
-const databaseUrl = process.env.DATABASE_MONGODB_URI?.trim() || process.env.DATABASE_URL?.trim();
-const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: Boolean(process.env.VERCEL) });
+const isVercel = Boolean(process.env.VERCEL);
+const databaseUrl = getMongoDatabaseConnectionString();
+const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: isVercel });
 const mongoClient = databaseUrl && !databaseConfigurationError
-  ? new MongoClient(databaseUrl, { maxPoolSize: process.env.VERCEL ? 5 : 10 })
+  ? new MongoClient(databaseUrl, isVercel
+    ? { maxPoolSize: 5, maxIdleTimeMS: 5000, serverSelectionTimeoutMS: 12000 }
+    : { maxPoolSize: 10 })
   : null;
+if (isVercel && mongoClient) attachDatabasePool(mongoClient);
 let mongoClientPromise;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const passwordHashOptions = {
@@ -1896,11 +1899,7 @@ async function initializeDatabaseOnce() {
   const settings = db.collection("game_settings");
   const recoveryAttempts = db.collection("account_recovery_attempts");
 
-  try {
-    await recoveryAttempts.dropIndex("windowExpiresAt_1");
-  } catch (error) {
-    if (error?.code !== 27) throw error;
-  }
+  await dropLegacyRecoveryIndex(recoveryAttempts);
 
   await Promise.all([
     users.createIndex({ usernameNormalized: 1 }, { unique: true }),

@@ -7,7 +7,7 @@ The online leaderboard and accounts use a Node.js API and MongoDB. User password
 ### Local development
 
 1. Install Node.js 20.19 or newer and create a MongoDB Atlas cluster (or use another reachable MongoDB server).
-2. Copy `.env.example` to `.env`, then set `DATABASE_MONGODB_URI`, `OWNER_PASSWORD`, and `ADDITIONAL_OWNER_PASSWORD` in the ignored `.env` file. Use the connection URI from MongoDB Atlas; keep all credentials private.
+2. Copy `.env.example` to `.env`, then set `MONGODB_URI`, `OWNER_PASSWORD`, and `ADDITIONAL_OWNER_PASSWORD` in the ignored `.env` file. Use the connection URI from MongoDB Atlas; keep all credentials private. The existing `DATABASE_MONGODB_URI` setting is also supported and takes precedence.
 3. Run `npm install`.
 4. In one terminal run `npm run server`; in another run `npm run dev`. Vite proxies `/api` requests to the API on port 3001.
 
@@ -27,7 +27,9 @@ Online presence is shown publicly on the leaderboard and in the owner-only Playe
 
 Import the repository into Vercel and use the project defaults. Vercel runs `npm run build`, publishes `dist`, routes `/api/*` requests through the shared serverless function in `api/router.mjs`, and rewrites other non-file frontend routes to `index.html`. The router restores each original API path before passing the request to Express. It initializes MongoDB indexes, default settings, and owner accounts when it first receives a request in a warm instance.
 
-Add `DATABASE_MONGODB_URI`, `OWNER_PASSWORD`, and `ADDITIONAL_OWNER_PASSWORD` as private Vercel environment variables for Production (and Preview if those deployments should have working accounts). Use the URI provided by your MongoDB Atlas integration, and ensure the integration exposes it under the exact name `DATABASE_MONGODB_URI`. Add Vercel's deployment IP access as appropriate in Atlas Network Access; do not use `localhost` or `127.0.0.1`. The function reuses a MongoDB client in warm instances. Vercel sets `NODE_ENV=production`, which enables secure session cookies. After setting or changing environment variables, redeploy the project.
+Connect the MongoDB Atlas resource to this Vercel project in the Marketplace integration, including the Production environment. The native integration supplies `MONGODB_URI` automatically; set `OWNER_PASSWORD` and `ADDITIONAL_OWNER_PASSWORD` as private environment variables for Production as well (and Preview if those deployments should have working accounts). Existing `DATABASE_MONGODB_URI` takes precedence over `MONGODB_URI`, followed by the legacy `DATABASE_URL`; make sure any existing explicit setting points to the intended database. Do not use `localhost` or `127.0.0.1` on Vercel. The function reuses a MongoDB client and lets Vercel manage idle connections. Vercel sets `NODE_ENV=production`, which enables secure session cookies. After connecting the integration or changing environment variables, redeploy the project.
+
+The URI's database name determines where accounts are stored; adding or changing it can make existing players appear to be missing. If the API still returns 503, check the Vercel Function logs and confirm the resource is connected to the correct environment and the cluster is available. The Atlas native integration normally configures network access for Vercel deployments; check the integration and Atlas Network Access if connections still time out. Do not paste database credentials into logs or support messages.
 
 The MongoDB collections start empty. If you previously had live player/account data in PostgreSQL, that data must be migrated separately; changing the database URI does not copy PostgreSQL records into MongoDB.
 
