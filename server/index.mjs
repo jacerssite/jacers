@@ -188,9 +188,9 @@ async function getDatabase() {
   return (await mongoClientPromise).db();
 }
 
-async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false) {
+async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined) {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const existing = await collection.findOne({ _id: userId });
+    const existing = await collection.findOne({ _id: userId }, session ? { session } : undefined);
     const mergedProgress = replace ? { ...progress } : { ...(existing?.data ?? {}) };
     if (!replace) {
       const baseline = baseProgress ?? {};
@@ -210,7 +210,7 @@ async function writePlayerProgress(collection, userId, progress, baseProgress = 
       const result = await collection.updateOne(
         { _id: userId, ...revisionFilter },
         { $set: { data: validatedProgress, updatedAt: new Date() }, $inc: { revision: 1 } },
-        { upsert: !existing },
+        { upsert: !existing, ...(session ? { session } : {}) },
       );
       if (result.matchedCount || result.upsertedCount) return { progress: validatedProgress, conflict: false };
     } catch (error) {
@@ -651,7 +651,7 @@ app.get("/api/account/profile", requireUser, async (req, res, next) => {
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
       { _id: req.user.id },
-      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1, mustChangePassword: 1 } },
+      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1, mustChangePassword: 1, recoveryCodeHash: 1, recoveryCodeCreatedAt: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Account not found." });
     res.json({
@@ -660,6 +660,8 @@ app.get("/api/account/profile", requireUser, async (req, res, next) => {
       mustChangePassword: Boolean(user.mustChangePassword),
       createdAt: user.createdAt,
       usernameChangedAt: user.usernameChangedAt ?? null,
+      hasRecoveryCode: Boolean(user.recoveryCodeHash),
+      recoveryCodeCreatedAt: user.recoveryCodeCreatedAt ?? null,
       nextUsernameChangeAt: user.usernameChangedAt
         ? new Date(user.usernameChangedAt.getTime() + 7 * 24 * 60 * 60 * 1000)
         : null,
@@ -778,11 +780,21 @@ app.post("/api/account/password", requireSameOrigin, requireUser, async (req, re
 app.post("/api/account/recovery-code", requireSameOrigin, requireUser, async (req, res, next) => {
   noStore(res);
   try {
+    const currentPassword = req.body?.currentPassword;
+    if (typeof currentPassword !== "string") {
+      return res.status(400).json({ error: "Enter your current password to make a recovery code." });
+    }
+    const db = await getDatabase();
+    const users = db.collection("users");
+    const user = await users.findOne({ _id: req.user.id }, { projection: { passwordHash: 1, role: 1 } });
+    if (user?.role === "owner") return res.status(403).json({ error: "Recovery codes are unavailable for owner accounts." });
+    if (!user || !await argon2.verify(user.passwordHash ?? dummyPasswordHash, currentPassword)) {
+      return res.status(401).json({ error: "The current password is incorrect." });
+    }
     const code = recoveryCode();
     const recoveryCodeCreatedAt = new Date();
     const recoveryCodeHash = await argon2.hash(normalizeRecoveryCode(code), passwordHashOptions);
-    const db = await getDatabase();
-    const result = await db.collection("users").updateOne(
+    const result = await users.updateOne(
       { _id: req.user.id, role: { $ne: "owner" } },
       { $set: { recoveryCodeHash, recoveryCodeCreatedAt } },
     );
@@ -1152,7 +1164,7 @@ app.get("/api/settings", async (_req, res, next) => {
       db.collection("game_settings").findOne({ _id: "update_log" }),
     ]);
     res.json({
-      goldenTimeLimitMs: Number(golden?.value ?? 60000),
+      goldenTimeLimitMs: parseGoldenTimeLimit(golden?.value) ? golden.value : 60000,
       rouletteTiers: validateRouletteTiers(roulette?.value) ?? defaultRouletteTiers,
       version: version?.value ?? "1",
       updateLog: validateUpdateLog(updateLog?.value) ?? [],
@@ -1235,7 +1247,7 @@ app.get("/api/game-config", async (_req, res, next) => {
   try {
     const db = await getDatabase();
     const setting = await db.collection("game_settings").findOne({ _id: "game_config" });
-    const config = setting?.value ?? DEFAULT_GAME_CONFIG;
+    const config = isValidGameConfig(setting?.value) ? setting.value : DEFAULT_GAME_CONFIG;
     res.json({ config });
   } catch (error) {
     next(error);
@@ -1258,7 +1270,11 @@ app.get("/api/levels", async (_req, res, next) => {
   try {
     const db = await getDatabase();
     const documents = await db.collection("workshop_levels").find().sort({ _id: 1 }).toArray();
-    res.json({ levels: documents.map(({ _id, data }) => ({ ...data, customId: _id.toHexString() })) });
+    const levels = documents.flatMap(({ _id, data }) => {
+      const level = validateWorkshopLevel(data);
+      return level ? [{ ...level, customId: _id.toHexString() }] : [];
+    });
+    res.json({ levels });
   } catch (error) {
     next(error);
   }
@@ -1736,6 +1752,7 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
     const db = await getDatabase();
     const codes = db.collection("redemption_codes");
     const redemptions = db.collection("code_redemptions");
+    const progressCollection = db.collection("player_progress");
     const session = mongoClient.startSession();
     try {
       const redemptionResult = await session.withTransaction(async () => {
@@ -1807,6 +1824,22 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
           ?? (Number.isSafeInteger(codeRecord.reward) && codeRecord.reward >= 0
             ? { type: "claims", amount: codeRecord.reward }
             : { type: "claims", amount: 0 });
+        const savedProgress = await progressCollection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(savedProgress?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const rewardKey = reward.type === "claims" ? "orbit-claims" : "orbit-special-claims";
+        const currentValue = progress[rewardKey];
+        const currentAmount = typeof currentValue === "string" && /^\d{1,10}$/.test(currentValue)
+          ? Math.min(Number(currentValue), 100000000)
+          : 0;
+        const nextProgress = {
+          ...progress,
+          [rewardKey]: String(Math.min(100000000, currentAmount + reward.amount)),
+        };
+        const progressResult = await writePlayerProgress(progressCollection, req.user.id, nextProgress, null, true, session);
+        if (!progressResult.progress) {
+          throw Object.assign(new Error("Player progress changed while redeeming the code. Try again."), { statusCode: 409 });
+        }
         await db.collection("code_redemption_logs").insertOne({
           codeId: codeRecord._id,
           userId: req.user.id,

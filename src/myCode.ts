@@ -1040,9 +1040,14 @@ function showSettings() {
                 body: JSON.stringify({ code: codeInput.value.trim().toUpperCase() }),
             });
             applyCodeReward(result.reward);
-            codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} added.`;
             codeInput.value = "";
-            void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync code reward:", error));
+            try {
+                await syncAccountProgress("save", true);
+                codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} added to your account.`;
+            } catch (error) {
+                console.error("Could not refresh the redeemed code reward:", error);
+                codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} saved online. This device will refresh it when the service reconnects.`;
+            }
         } catch (error) {
             codeStatus.textContent = error instanceof Error ? error.message : "Could not redeem this code.";
         } finally {
@@ -1156,10 +1161,10 @@ function showSettings() {
 
 function applyCodeReward(reward: { type: "claims" | "specialClaims"; amount: number }) {
     if (reward.type === "claims") {
-        asteroidsClaimed += reward.amount;
+        asteroidsClaimed = Math.min(100000000, asteroidsClaimed + reward.amount);
         localStorage.setItem("orbit-claims", String(asteroidsClaimed));
     } else {
-        specialAsteroids += reward.amount;
+        specialAsteroids = Math.min(100000000, specialAsteroids + reward.amount);
         localStorage.setItem("orbit-special-claims", String(specialAsteroids));
     }
 }
