@@ -102,6 +102,8 @@ let unflippedRouteSnapshot: UnflippedRouteSnapshot | null = null;
 let portalReturnState: { x: number; y: number; verticalSpeed: number; jumpCount: number; shipFlipped: boolean; trailActive: boolean; trailPositions: { x: number; y: number }[]; trailDirection: number } | null = null;
 let currentOnlineUser: OnlineUser | null = null;
 let ownerBadgeObserver: MutationObserver | null = null;
+let roleQuickPanel: HTMLElement | null = null;
+let roleQuickPanelStartedAt = 0;
 let accountNoticeTimer = 0;
 let presenceHeartbeatTimer = 0;
 let presenceHeartbeatInFlight = false;
@@ -740,14 +742,177 @@ function setMusicScene(scene: "menu" | "normal" | "prestige" | "secret" | "boss"
 function updateOwnerAccountIndicator() {
     const existing = document.querySelector<HTMLElement>(".owner-account-indicator");
     if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
-        const indicator = existing ?? document.createElement("span");
-        indicator.className = "owner-account-indicator";
+        const indicator = existing instanceof HTMLButtonElement ? existing : document.createElement("button");
+        if (existing && existing !== indicator) existing.remove();
+        indicator.className = `owner-account-indicator ${currentOnlineUser.role === "owner" ? "owner-role" : "tester-role"}`;
+        indicator.type = "button";
         indicator.textContent = getRoleBadge(currentOnlineUser.role);
-        indicator.setAttribute("role", "img");
-        indicator.setAttribute("aria-label", `${currentOnlineUser.role} account active: ${currentOnlineUser.username}`);
-        indicator.title = `${currentOnlineUser.role === "owner" ? "Owner" : "Tester"} account active: ${currentOnlineUser.username}`;
-        if (!existing) document.body.prepend(indicator);
-    } else existing?.remove();
+        indicator.setAttribute("aria-label", `Open ${currentOnlineUser.role} quick panel for ${currentOnlineUser.username}`);
+        indicator.title = `${currentOnlineUser.role === "owner" ? "Owner" : "Tester"} quick panel — ${currentOnlineUser.username}`;
+        indicator.onclick = () => gameActive ? openRoleQuickPanel() : void showTesterPanel();
+        if (!existing || existing !== indicator) document.body.prepend(indicator);
+    } else {
+        roleQuickPanel?.remove();
+        roleQuickPanel = null;
+        existing?.remove();
+    }
+}
+
+function updateCurrencyHud() {
+    const currency = document.querySelector<HTMLElement>(".asteroid-currency");
+    if (currency) currency.textContent = `NORMAL ${asteroidsClaimed} / SPECIAL ${specialAsteroids}`;
+}
+
+function closeRoleQuickPanel() {
+    roleQuickPanel?.remove();
+    roleQuickPanel = null;
+    if (!gameActive || !roleQuickPanelStartedAt) return;
+    const pausedFor = Math.max(0, performance.now() - roleQuickPanelStartedAt);
+    if (gameStarted) levelStartedAt += pausedFor;
+    if (rapidUntil > roleQuickPanelStartedAt) rapidUntil += pausedFor;
+    if (rapidCannonUntil > roleQuickPanelStartedAt) rapidCannonUntil += pausedFor;
+    if (portalCooldownUntil > roleQuickPanelStartedAt) portalCooldownUntil += pausedFor;
+    roleQuickPanelStartedAt = 0;
+    lastFrameTimestamp = 0;
+    pressedKeys.clear();
+    shootingHeld = false;
+    startGameLoop();
+}
+
+function openRoleQuickPanel() {
+    if (!currentOnlineUser || (currentOnlineUser.role !== "owner" && currentOnlineUser.role !== "tester")) return;
+    if (roleQuickPanel) return;
+    if (portalTravelInProgress) {
+        statusLabel.textContent = "Finish the portal transition before opening quick tools.";
+        return;
+    }
+    roleQuickPanelStartedAt = performance.now();
+    cancelAnimationFrame(animationFrame);
+    pressedKeys.clear();
+    shootingHeld = false;
+    const isOwner = currentOnlineUser.role === "owner";
+    const overlay = document.createElement("div");
+    overlay.className = `role-quick-overlay ${isOwner ? "owner-quick-overlay" : "tester-quick-overlay"}`;
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-labelledby", "role-quick-title");
+    const panel = document.createElement("section");
+    panel.className = "role-quick-panel";
+    const heading = document.createElement("h2");
+    heading.id = "role-quick-title";
+    heading.textContent = `${isOwner ? "Owner" : "Tester"} quick tools`;
+    const description = document.createElement("p");
+    description.textContent = "Paused in this level. These shortcuts change your own test profile; shared rules are managed in the full control center.";
+    const status = document.createElement("small");
+    status.className = "role-quick-status";
+    status.setAttribute("role", "status");
+    const form = document.createElement("form");
+    form.className = "role-quick-form";
+    const field = (labelText: string, value: number, max = 100000000) => {
+        const label = document.createElement("label");
+        label.append(document.createTextNode(labelText));
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.max = String(max);
+        input.step = "1";
+        input.value = String(value);
+        label.append(input);
+        form.append(label);
+        return input;
+    };
+    const claims = field("Normal asteroids", asteroidsClaimed);
+    const special = field("Special asteroids", specialAsteroids);
+    const inventory = getInventory();
+    const powerupInputs = (Object.keys(powerupLabels) as PowerupKind[]).map((kind) => [kind, field(powerupLabels[kind], inventory[kind], 100000)] as const);
+    const apply = document.createElement("button");
+    apply.type = "submit";
+    apply.className = "menu-button";
+    apply.textContent = "Apply resources";
+    form.append(apply);
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const read = (input: HTMLInputElement, max: number) => Math.max(0, Math.min(max, Math.floor(Number(input.value) || 0)));
+        asteroidsClaimed = read(claims, 100000000);
+        specialAsteroids = read(special, 100000000);
+        localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+        localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+        const nextInventory = { ...inventory };
+        powerupInputs.forEach(([kind, input]) => { nextInventory[kind] = read(input, 100000); });
+        saveInventory(nextInventory);
+        updateCurrencyHud();
+        updatePowerupHud();
+        status.textContent = "Your resources were updated on this device.";
+        if (currentOnlineUser) void syncAccountProgress("save", true).catch((error: unknown) => { status.textContent = `Saved locally; account sync failed: ${error instanceof Error ? error.message : "online service error"}`; });
+    });
+    const levelActions = document.createElement("div");
+    levelActions.className = "role-quick-actions";
+    const actionButton = (text: string, action: () => void, confirmText = "") => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "text-button";
+        button.textContent = text;
+        button.addEventListener("click", () => {
+            if (confirmText && !window.confirm(confirmText)) return;
+            action();
+        });
+        levelActions.append(button);
+        return button;
+    };
+    actionButton("Collect all current asteroids", () => {
+        let collected = 0;
+        const claimed = getClaimedAsteroids(currentLevel);
+        levelAsteroids.forEach((asteroid, index) => {
+            if (asteroid.claimed) return;
+            asteroid.claimed = true;
+            claimed.add(index);
+            collected++;
+            if (asteroid.special) specialAsteroids++;
+            else asteroidsClaimed++;
+        });
+        saveClaimedAsteroids(currentLevel, claimed);
+        localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+        localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+        document.querySelectorAll<HTMLElement>(".asteroid").forEach((item) => item.classList.add("claimed"));
+        claimLabel.textContent = `${levelAsteroids.length} / ${levelAsteroids.length}`;
+        updateCurrencyHud();
+        status.textContent = collected ? `Collected ${collected} asteroid${collected === 1 ? "" : "s"}.` : "All current asteroids were already collected.";
+    }, "Collect every asteroid in this level?");
+    actionButton("Grant current route keys", () => {
+        const targets = levels[currentLevel].secretPortals ?? [];
+        targets.forEach((portal) => markSecretPortalClaimed(portal.secretId));
+        if (levels[currentLevel].secretId) localStorage.setItem(`orbit-key-${levels[currentLevel].secretId}`, "1");
+        status.textContent = targets.length ? "Keys for this route are unlocked." : "This route has no secret key target.";
+    });
+    actionButton("Clear current enemies", () => {
+        levelEnemies.forEach((enemy) => { enemy.defeated = true; });
+        levelMiniBosses.forEach((miniBoss) => { miniBoss.defeated = true; });
+        if (boss) boss.defeated = true;
+        document.querySelectorAll<HTMLElement>(".enemy, .mini-boss, .boss").forEach((item) => item.classList.add("defeated"));
+        status.textContent = "Current enemies and bosses marked defeated.";
+    }, "Clear all enemies and bosses in this level?");
+    const footer = document.createElement("div");
+    footer.className = "role-quick-footer";
+    const full = actionButton(isOwner ? "Open owner control center" : "Open tester panel", () => {
+        closeRoleQuickPanel();
+        gameActive = false;
+        cancelAnimationFrame(animationFrame);
+        void showTesterPanel();
+    });
+    full.classList.add("role-quick-full");
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "text-button";
+    close.textContent = "Return to level";
+    close.addEventListener("click", closeRoleQuickPanel);
+    footer.append(close);
+    panel.append(heading, description, form, levelActions, status, footer);
+    overlay.append(panel);
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) closeRoleQuickPanel(); });
+    overlay.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); closeRoleQuickPanel(); } });
+    document.body.append(overlay);
+    roleQuickPanel = overlay;
+    close.focus();
 }
 
 function showMenu() {
@@ -756,6 +921,8 @@ function showMenu() {
         return;
     }
     gameActive = false;
+    roleQuickPanel = null;
+    roleQuickPanelStartedAt = 0;
     setMusicScene("menu");
     cancelAnimationFrame(animationFrame);
     pressedKeys.clear();
@@ -777,6 +944,8 @@ function showMenu() {
 
 function showLevelMenu() {
     gameActive = false;
+    roleQuickPanel = null;
+    roleQuickPanelStartedAt = 0;
     setMusicScene(activePlanet === "prestige" ? "prestige" : "normal");
     cancelAnimationFrame(animationFrame);
     pressedKeys.clear();
@@ -2582,10 +2751,10 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         panel.append(...elements);
         return panel;
     };
+    const chancesRewards = settingPanel("rewards", [rewardSettings, rouletteSettings]);
     const sections: ControlSection[] = [
-        { id: "rewards", title: "World rewards", group: "Game settings", description: "Tune spawn chances and rewards separately for each world.", panel: settingPanel("rewards", [rewardSettings]) },
+        { id: "rewards", title: "Chances & rewards", group: "Game settings", description: "Tune world drops, rarity chances, roulette prizes, and wheel buy-ins from one place.", panel: chancesRewards },
         { id: "abilities", title: "Power-ups", group: "Game settings", description: "Set power-up strength and duration for both worlds.", panel: settingPanel("abilities", [effectSettings]) },
-        { id: "roulette", title: "Roulette", group: "Game settings", description: "Configure wheel buy-ins and prize chances; save this section separately.", panel: settingPanel("roulette", [rouletteSettings]) },
         { id: "profile", title: "Resources", group: "Your test profile", description: "Adjust the progress and inventory on this device, not other players' accounts.", panel: settingPanel("profile", pilotFields) },
         { id: "cosmetics", title: "Cosmetics", group: "Your test profile", description: "Manage cosmetic unlocks for this device.", panel: settingPanel("cosmetics", [customizationTitle, unlocks, unlockEverySkin]) },
         { id: "levels", title: "Levels & prestige", group: "Your test profile", description: "Quick unlock buttons apply immediately. Save checkbox changes when you're ready.", panel: settingPanel("levels", [levelTitle, levelActions, prestigeGateLabel, levelChoices, tryPrestige]) },
@@ -2648,7 +2817,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     menu.append(pageHeader, consoleLayout, exit);
     document.body.replaceChildren(menu);
     const previousSection = localStorage.getItem("orbit-owner-panel-tab");
-    const legacySections: Record<string, string> = { General: "profile", Economy: "rewards", Abilities: "abilities", Cosmetics: "cosmetics", Levels: "levels", Prestige: "profile", Workshop: "workshop" };
+    const legacySections: Record<string, string> = { General: "profile", Economy: "rewards", Abilities: "abilities", Cosmetics: "cosmetics", Levels: "levels", Prestige: "profile", Workshop: "workshop", roulette: "rewards" };
     const initialSection = previousSection ? legacySections[previousSection] ?? previousSection : "rewards";
     selectSection(sections.some((section) => section.id === initialSection) ? initialSection : "rewards");
 }

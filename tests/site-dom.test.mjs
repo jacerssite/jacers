@@ -412,6 +412,51 @@ test("owner indicator remains stable after page updates", async () => {
   }
 });
 
+test("owner star opens paused in-game quick tools and applies personal test resources", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  const { dom, document, window } = await createPage({ "/api/auth/session": { user }, "/api/account/progress": { progress: {} } });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Launch mission");
+    document.querySelector(".level-button:not([disabled])").click();
+    await waitFor(() => document.querySelector(".game-frame"), "Mission did not start");
+    await waitFor(() => document.querySelector(".owner-account-indicator"), "Owner quick button was not restored in-game");
+    window.confirm = () => true;
+    document.querySelector(".owner-account-indicator").click();
+    await waitFor(() => document.querySelector(".role-quick-overlay"), "Owner quick panel did not open");
+    assert.equal(document.querySelector(".owner-quick-overlay"), document.querySelector(".role-quick-overlay"));
+    const inputs = document.querySelectorAll(".role-quick-form input");
+    inputs[0].value = "123";
+    inputs[1].value = "45";
+    clickButton(document, "Apply resources");
+    assert.equal(window.localStorage.getItem("orbit-claims"), "123");
+    assert.equal(window.localStorage.getItem("orbit-special-claims"), "45");
+    clickButton(document, "Return to level");
+    assert.equal(document.querySelector(".role-quick-overlay"), null);
+    assert.ok(document.querySelector(".game-frame"));
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("tester bubble opens an isolated quick panel with tester styling", async () => {
+  const user = { username: "Tester_1", role: "tester", appearOffline: false };
+  const { dom, document } = await createPage({ "/api/auth/session": { user }, "/api/account/progress": { progress: {} } });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Tester_1"]'), "Tester session was not restored");
+    clickButton(document, "Launch mission");
+    document.querySelector(".level-button:not([disabled])").click();
+    await waitFor(() => document.querySelector(".game-frame"), "Mission did not start");
+    await waitFor(() => document.querySelector(".tester-role"), "Tester quick button was not restored in-game");
+    document.querySelector(".tester-role").click();
+    await waitFor(() => document.querySelector(".tester-quick-overlay"), "Tester quick panel did not open");
+    assert.match(document.querySelector(".role-quick-panel h2").textContent, /Tester/);
+    clickButton(document, "Return to level");
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("control center keeps sections separate and preserves drafts while switching worlds and management tools", async () => {
   const user = { username: "Owner_1", role: "owner", appearOffline: false };
   let savedConfig;
@@ -441,7 +486,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(window.getComputedStyle(profile).display, "none");
     assert.equal(document.querySelector('[data-section="rewards"]').getAttribute("aria-current"), "page");
     assert.ok(rewards.querySelector('[data-rainbow-star-chance]'));
-    assert.equal(rewards.querySelector(".roulette-settings-editor"), null);
+    assert.ok(rewards.querySelector(".roulette-settings-editor"));
 
     clickButton(document, "Resources");
     assert.equal(window.getComputedStyle(rewards).display, "none");
@@ -457,7 +502,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(sanctuaryInputs[1].checked, sanctuaryInputs[0].checked);
     clickButton(document, "Unlock normal levels");
     assert.equal(claims.value, "17");
-    clickButton(document, "World rewards");
+    clickButton(document, "Chances & rewards");
     const star = rewards.querySelector('[data-rainbow-star-chance]');
     star.value = "11";
     star.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -473,7 +518,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(savedConfig.prestige.rainbowStarChance, 27);
     assert.equal(window.localStorage.getItem("orbit-claims"), "17");
 
-    clickButton(document, "Roulette");
+    clickButton(document, "Chances & rewards");
     const tier = document.querySelector('.roulette-tier-card[data-buy-in="5"]');
     const asteroidChance = tier.querySelector('[data-roulette-field="chance.claims"]');
     const colorChance = tier.querySelector('[data-roulette-field="chance.color"]');
