@@ -21,11 +21,12 @@ import {
   formatRecoveryCode,
   parseGoldenTimeLimit,
   DEFAULT_GAME_CONFIG,
+  PROFILE_TITLE_MILESTONES,
   USER_ROLES,
   validateCodeReward,
-  getEarnedProfileTitle,
   validatePlayerProgress,
   validateRouletteTiers,
+  validateProfileTitles,
   validateUpdateLog,
   validateWorkshopLevel,
 } from "./game-data.mjs";
@@ -140,7 +141,7 @@ function temporaryPassword() {
   return password;
 }
 
-function publicProfileFromProgress(username, role, progress = {}) {
+function publicProfileFromProgress(username, role, progress = {}, profileTitles = PROFILE_TITLE_MILESTONES) {
   const readCount = (key) => {
     const value = progress[key];
     return typeof value === "string" && /^\d{1,10}$/.test(value) ? Math.min(Number(value), 100000000) : 0;
@@ -158,7 +159,7 @@ function publicProfileFromProgress(username, role, progress = {}) {
   };
   const completedRouteCount = completedRoutes.length;
   const selectedTitle = equippedValue("orbit-title");
-  const title = getEarnedProfileTitle(completedRouteCount, selectedTitle);
+  const title = profileTitles.find((candidate) => candidate.id === selectedTitle && completedRouteCount >= candidate.routes)?.name ?? "";
   const equippedIndex = (key) => {
     const value = equippedValue(key);
     const index = value === null ? 0 : Number(value);
@@ -178,6 +179,11 @@ function publicProfileFromProgress(username, role, progress = {}) {
     trail: equippedIndex("orbit-trail"),
     title,
   };
+}
+
+async function getProfileTitles(db) {
+  const setting = await db.collection("game_settings").findOne({ _id: "profile_titles" });
+  return validateProfileTitles(setting?.value) ?? PROFILE_TITLE_MILESTONES;
 }
 
 function isValidDateString(value) {
@@ -760,11 +766,14 @@ app.get("/api/players/:id", async (req, res, next) => {
       { _id: user._id },
       { projection: { data: 1 } },
     );
-    const activeUserIds = user.appearOffline ? new Set() : await getActiveUserIds(db, [user._id]);
+    const [activeUserIds, profileTitles] = await Promise.all([
+      user.appearOffline ? Promise.resolve(new Set()) : getActiveUserIds(db, [user._id]),
+      getProfileTitles(db),
+    ]);
     res.json({
       player: {
         id: user._id.toHexString(),
-        ...publicProfileFromProgress(user.username, user.role, saved?.data ?? {}),
+        ...publicProfileFromProgress(user.username, user.role, saved?.data ?? {}, profileTitles),
         isOnline: activeUserIds.has(user._id.toHexString()),
       },
     });
@@ -1182,17 +1191,19 @@ app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async 
 app.get("/api/settings", async (_req, res, next) => {
   try {
     const db = await getDatabase();
-    const [golden, roulette, version, updateLog] = await Promise.all([
+    const [golden, roulette, version, updateLog, profileTitles] = await Promise.all([
       db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }),
       db.collection("game_settings").findOne({ _id: "roulette_tiers" }),
       db.collection("game_settings").findOne({ _id: "app_version" }),
       db.collection("game_settings").findOne({ _id: "update_log" }),
+      db.collection("game_settings").findOne({ _id: "profile_titles" }),
     ]);
     res.json({
       goldenTimeLimitMs: parseGoldenTimeLimit(golden?.value) ? golden.value : 60000,
       rouletteTiers: validateRouletteTiers(roulette?.value) ?? defaultRouletteTiers,
       version: version?.value ?? "1",
       updateLog: validateUpdateLog(updateLog?.value) ?? [],
+      profileTitles: validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES,
     });
   } catch (error) {
     next(error);
@@ -1249,6 +1260,18 @@ app.put("/api/settings/update-log", requireSameOrigin, requireOwner, async (req,
     const db = await getDatabase();
     await saveSetting(db, "update_log", entries, req.user.id);
     res.json({ updateLog: entries });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/profile-titles", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const profileTitles = validateProfileTitles(req.body?.profileTitles);
+    if (!profileTitles) return res.status(400).json({ error: "Titles need unique lowercase IDs, names, and route requirements." });
+    const db = await getDatabase();
+    await saveSetting(db, "profile_titles", profileTitles, req.user.id);
+    res.json({ profileTitles });
   } catch (error) {
     next(error);
   }

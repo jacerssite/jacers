@@ -1,7 +1,7 @@
 import type { Level, ManagedUser, PowerupKind } from "./types";
 import { apiRequest } from "./api";
 import { levels } from "./levels";
-import { powerupLabels, powerupPrices } from "./game-config";
+import { PROFILE_TITLES, powerupLabels, powerupPrices } from "./game-config";
 import { createTextButton } from "./ui";
 
 let managedPresenceTimer = 0;
@@ -24,6 +24,13 @@ export async function loadManagedUsers(container: HTMLElement) {
     container.append(heading, description, refresh, status);
     try {
         const { users } = await apiRequest<{ users: ManagedUser[] }>("/admin/users");
+        let profileTitles = PROFILE_TITLES;
+        try {
+            const settings = await apiRequest<{ profileTitles?: typeof PROFILE_TITLES }>("/settings");
+            if (Array.isArray(settings.profileTitles) && settings.profileTitles.length) profileTitles = settings.profileTitles;
+        } catch (error) {
+            console.error("Could not load profile titles for player management:", error);
+        }
         if (!container.isConnected) return;
         status.textContent = users.length ? `${users.length} account${users.length === 1 ? "" : "s"} loaded (up to 200).` : "No player accounts found.";
         users.forEach((user) => {
@@ -154,6 +161,24 @@ export async function loadManagedUsers(container: HTMLElement) {
             });
             progression.append(skillFields);
 
+            const titleLabel = document.createElement("label");
+            titleLabel.append(document.createTextNode("Pilot title"));
+            const titleSelect = document.createElement("select");
+            titleSelect.setAttribute("aria-label", `Pilot title for ${user.username}`);
+            const noTitle = document.createElement("option");
+            noTitle.value = "";
+            noTitle.textContent = "No title";
+            titleSelect.append(noTitle);
+            profileTitles.forEach((title) => {
+                const option = document.createElement("option");
+                option.value = title.id;
+                option.textContent = `${title.name} / ${title.routes} routes`;
+                option.selected = user.progress["orbit-title"] === title.id;
+                titleSelect.append(option);
+            });
+            titleLabel.append(titleSelect);
+            progression.append(titleLabel);
+
             const cosmeticUnlocks = document.createElement("div");
             cosmeticUnlocks.className = "tester-player-unlocks";
             (["skins", "trails", "avatars"] as const).forEach((kind) => {
@@ -252,6 +277,8 @@ export async function loadManagedUsers(container: HTMLElement) {
                         updatedInventory[input.dataset.powerup as PowerupKind] = value;
                     });
                     updatedProgress["orbit-powerups"] = JSON.stringify(updatedInventory);
+                    if (titleSelect.value) updatedProgress["orbit-title"] = titleSelect.value;
+                    else delete updatedProgress["orbit-title"];
                     cosmeticUnlocks.querySelectorAll<HTMLInputElement>("input[data-cosmetic-unlock]").forEach((input) => {
                         const key = `orbit-unlock-${input.dataset.cosmeticUnlock}`;
                         if (input.checked) updatedProgress[key] = "1";

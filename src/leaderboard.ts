@@ -27,15 +27,13 @@ export function createLeaderboard(context: LeaderboardContext) {
         const accountButton = createTextButton("Sign in / Create account", () => showAccount());
         const levelPicker = document.createElement("select");
         levelPicker.className = "leaderboard-level-picker";
-        const allLevels = document.createElement("option");
-        allLevels.value = "";
-        allLevels.textContent = "All levels";
-        levelPicker.append(allLevels);
-        levels.filter((level) => !level.localOnly).forEach((level) => {
+        const publicLevels = levels.filter((level) => !level.localOnly);
+        publicLevels.forEach((level, index) => {
             const option = document.createElement("option");
             option.value = level.name;
             option.textContent = level.name;
             levelPicker.append(option);
+            if (index === 0) levelPicker.value = level.name;
         });
         const list = document.createElement("section");
         list.className = "leaderboard-list";

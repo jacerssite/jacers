@@ -31,7 +31,7 @@ export function createCustomization(context: CustomizationContext) {
         const flipToggleRow = document.createElement("label");
         flipToggleRow.className = "setting-row";
         const showFlip = localStorage.getItem("orbit-show-planetary-flip") === "1";
-        flipToggleRow.innerHTML = `<span><b>Show prestige planetary flip</b><small>View prestige-exclusive avatars, skins, and trails.</small></span>`;
+        flipToggleRow.innerHTML = `<span><b>Show prestige planetary flip</b><small>Preview prestige skins and trails. All normal and prestige avatars stay together below.</small></span>`;
         const flipToggle = document.createElement("input");
         flipToggle.type = "checkbox";
         flipToggle.checked = showFlip;
@@ -51,12 +51,16 @@ export function createCustomization(context: CustomizationContext) {
         const trailsWithIndex = showFlip
             ? trails.map((t, i) => ({ ...t, originalIndex: i })).filter(t => t.prestige)
             : trails.map((t, i) => ({ ...t, originalIndex: i })).filter(t => !t.prestige);
-        const avatarsWithIndex = showFlip
-            ? avatars.map((a, i) => ({ ...a, originalIndex: i })).filter(a => a.prestige)
-            : avatars.map((a, i) => ({ ...a, originalIndex: i })).filter(a => !a.prestige);
+        // Keep the complete avatar catalog in one collection. Prestige avatars
+        // can be won from the roulette wheel just like the normal collection,
+        // so hiding them behind the planetary-flip preview made rewards look
+        // missing even though they were already unlocked on the account.
+        const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i }));
         
         const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity) => HTMLButtonElement) => {
-            const heading = document.createElement("p"); heading.className = "setting-title"; heading.textContent = title; target.append(heading);
+            if (title) {
+                const heading = document.createElement("p"); heading.className = "setting-title"; heading.textContent = title; target.append(heading);
+            }
             const ordered = collection.map((item, index) => ({ item, index, rarity: getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
             rarityOrder.forEach((rarity) => {
                 const groupItems = ordered.filter((entry) => entry.rarity === rarity);
@@ -72,7 +76,7 @@ export function createCustomization(context: CustomizationContext) {
         const appearance = document.createElement("section");
         appearance.className = "appearance-loadout-section";
         appearance.innerHTML = `<h2>Appearance</h2><p>Colors tint every ship body. Pair one with any unlocked skin to build your character.</p>`;
-        appendRarityGroups(appearance, "Ship color", colorOptions, "color-grid", (option) => {
+        appendRarityGroups(appearance, "Colors & skins", colorOptions, "color-grid", (option) => {
             const button = document.createElement("button");
             const unlocked = isShipColorUnlocked(option, skins, isSkinUnlocked, (index) => isSpinCosmeticUnlocked("color", index));
             const selected = selectedShipColor.toLowerCase() === option.color.toLowerCase();
@@ -89,7 +93,10 @@ export function createCustomization(context: CustomizationContext) {
             });
             return button;
         });
-        appendRarityGroups(appearance, "Skins", skinsWithIndex, "customization-grid", (skin, _index, rarity) => {
+        // Skin cards live in the same appearance section as colors. A selected
+        // skin carries its canonical color, so there is one combined loadout
+        // instead of two competing customization inventories.
+        appendRarityGroups(appearance, "", skinsWithIndex, "customization-grid", (skin, _index, rarity) => {
             const button = document.createElement("button"); button.className = `loadout-choice ${selectedSkin === skin.originalIndex ? "selected" : ""}`; button.disabled = !isSkinUnlocked(skin, skin.originalIndex);
             const swatch = skin.image
                 ? createShipArtMarkup(skin.image, `${skin.name} skin`, skin.color)

@@ -10,7 +10,7 @@ export type LevelKey = { id: string; x: number; y: number; collected: boolean; r
 export type Boss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean };
 export type MiniBoss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean };
 export type SkinStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean };
-export type TrailStyle = { name: string; color: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; secret?: boolean; boss?: boolean; golden?: boolean; prestige?: number };
+export type TrailStyle = { name: string; color: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; secret?: boolean; boss?: boolean; golden?: boolean; jackpot?: boolean; prestige?: number };
 export type PrestigeShipArt = "stellar-guard" | "quantum-dancer" | "cosmic-queen" | "void-knight" | "eclipse-oracle" | "infinity-pilot" | "stellar-legend";
 export type AvatarStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; cssArt?: PrestigeShipArt; defaultSkin: number; prestige?: number; golden?: boolean; jackpot?: boolean };
 export type FlippedRoute = { walls: number[]; enemies: number[]; spikes: number[]; gravity: number[]; powerups?: { index: number; kind: PowerupKind }[]; key?: number };
@@ -28,7 +28,7 @@ export type UnflippedRouteSnapshot = {
     boss: Boss | null;
     playerX: number;
 };
-export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
+export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; prestigeRequirement?: number; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
 export type ControlAction = "left" | "right" | "jump" | "down" | "shoot";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
@@ -76,9 +76,10 @@ export type RouletteTier = {
 export type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
 export type UpdateLogEntry = { date: string; title: string; body: string };
 export type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
-export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[] };
+export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[] };
 export type WorldGameConfig = {
     rainbowStarChance: number;
+    portalSpawnChance: number;
     rarityOdds: Record<Rarity, number>;
     rewardRanges: Record<Rarity, readonly [number, number]>;
     skinChances: Record<Rarity, number>;
@@ -93,6 +94,11 @@ export type GameConfig = {
         rapid: { durationSeconds: number };
         cannon: { durationSeconds: number };
         star: { durationSeconds: number };
+    };
+    powerupRules: {
+        oneActiveAtATime: boolean;
+        rainbowStarInvincible: boolean;
+        rainbowStarDefeatsEnemies: boolean;
     };
 };
 

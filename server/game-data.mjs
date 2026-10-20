@@ -18,6 +18,21 @@ export const PROFILE_TITLE_MILESTONES = [
   { id: "stellar-navigator", name: "Stellar Navigator", routes: 20 },
   { id: "cosmic-legend", name: "Cosmic Legend", routes: 40 },
 ];
+export function validateProfileTitles(value) {
+  if (!Array.isArray(value) || value.length > 100) return null;
+  const ids = new Set();
+  const titles = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(entry.id)
+      || ids.has(entry.id)
+      || typeof entry.name !== "string" || !entry.name.trim() || entry.name.trim().length > 50 || /[<>]/.test(entry.name)
+      || !Number.isSafeInteger(entry.routes) || entry.routes < 0 || entry.routes > 100000) return null;
+    ids.add(entry.id);
+    titles.push({ id: entry.id, name: entry.name.trim(), routes: entry.routes });
+  }
+  return titles;
+}
 const defaultRarityOdds = { Common: 52, Uncommon: 27, Rare: 13, Epic: 6, Legendary: 2 };
 const defaultRewardRanges = { Common: [50, 100], Uncommon: [101, 250], Rare: [251, 500], Epic: [501, 750], Legendary: [751, 1000] };
 const defaultSkinChances = { Common: 0, Uncommon: 0, Rare: 0, Epic: 15, Legendary: 35 };
@@ -26,6 +41,7 @@ const defaultSpawnChances = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 3 
 export const DEFAULT_GAME_CONFIG = {
   normal: {
     rainbowStarChance: 3,
+    portalSpawnChance: 100,
     rarityOdds: defaultRarityOdds,
     rewardRanges: defaultRewardRanges,
     skinChances: defaultSkinChances,
@@ -33,6 +49,7 @@ export const DEFAULT_GAME_CONFIG = {
   },
   prestige: {
     rainbowStarChance: 3,
+    portalSpawnChance: 100,
     rarityOdds: defaultRarityOdds,
     rewardRanges: defaultRewardRanges,
     skinChances: defaultSkinChances,
@@ -44,6 +61,11 @@ export const DEFAULT_GAME_CONFIG = {
     rapid: { durationSeconds: 10 },
     cannon: { durationSeconds: 0 },
     star: { durationSeconds: 15 },
+  },
+  powerupRules: {
+    oneActiveAtATime: false,
+    rainbowStarInvincible: true,
+    rainbowStarDefeatsEnemies: true,
   },
 };
 
@@ -62,6 +84,7 @@ function isWorldConfig(value) {
   const skinChances = value.skinChances;
   const spawnChances = value.powerupSpawnChances;
   return isPercent(value.rainbowStarChance)
+    && isPercent(value.portalSpawnChance)
     && rarityOdds && RARITIES.every((rarity) => isPercent(rarityOdds[rarity]))
     && RARITIES.reduce((total, rarity) => total + rarityOdds[rarity], 0) === 100
     && rewardRanges && RARITIES.every((rarity) => Array.isArray(rewardRanges[rarity])
@@ -84,7 +107,11 @@ export function isValidGameConfig(value) {
     && effects.boost.movementMultiplier <= 4
     && isBoundedInteger(effects.rapid?.durationSeconds, 1, 300)
     && isBoundedInteger(effects.cannon?.durationSeconds, 0, 300)
-    && isBoundedInteger(effects.star?.durationSeconds, 1, 300);
+    && isBoundedInteger(effects.star?.durationSeconds, 1, 300)
+    && value.powerupRules
+    && typeof value.powerupRules.oneActiveAtATime === "boolean"
+    && typeof value.powerupRules.rainbowStarInvincible === "boolean"
+    && typeof value.powerupRules.rainbowStarDefeatsEnemies === "boolean";
 }
 
 function parseTileList(value, length) {

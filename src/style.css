@@ -407,6 +407,29 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .settings-panel { width: min(560px, 90vw); margin: 0 0 24px; padding: 20px; border: 1px solid #385267; background: #143746cc; text-align: left; }
 .settings-screen { align-content: start; }
 .settings-screen h1 { margin-top: 8vh; }
+.player-settings-screen { display: flex; flex-direction: column; align-items: center; padding: 48px 24px 64px; text-align: left; }
+.player-settings-screen h1 { margin-top: 0; font-size: clamp(2.6rem, 6vw, 4.7rem); }
+.player-settings-header { align-items: flex-start; }
+.player-settings-header .menu-copy { max-width: 660px; }
+.player-settings-screen > .text-button { width: min(1120px, 100%); margin-top: 20px; padding: 8px 0; text-align: left; }
+.player-settings-console { min-height: 560px; }
+.player-settings-panels { margin-top: 20px; }
+.player-settings-screen [hidden] { display: none !important; }
+.player-settings-category { display: grid; gap: 16px; width: 100%; }
+.player-settings-category > .setting-row { min-height: 74px; margin: 0; padding: 16px; border: 1px solid #385267; background: #10283899; }
+.player-settings-category > .setting-row:hover, .player-settings-category > .setting-row:focus-within { border-color: #6ecbff; background: #143746cc; }
+.player-settings-category .music-volume-row input[type="range"] { width: min(240px, 42%); height: 8px; accent-color: #f6c46e; }
+.player-settings-category .settings-code-section, .player-settings-category .settings-times-section { margin: 0; padding: 16px; border: 1px solid #385267; background: #10283899; }
+.player-settings-category h2 { margin: 0; color: #f6c46e; font-size: 1.05rem; }
+.player-settings-category p { color: #a9c1b9; font-size: .75rem; line-height: 1.55; }
+.player-settings-category .custom-controls-settings { margin: 0; padding: 16px; background: #10283899; }
+.settings-times-section { display: grid; gap: 14px; }
+.settings-times-section > h2 { padding-bottom: 12px; border-bottom: 1px solid #385267; }
+.time-group { display: grid; gap: 8px; }
+.time-group h3 { margin: 0; color: #c4d1bd; font: .7rem 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .8px; }
+.time-list { display: grid; gap: 6px; }
+.time-item { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid #385267; color: #c4d1bd; background: #101b2b; font: .65rem 'DM Mono', monospace; }
+.time-item strong { color: #f6c46e; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #385267; cursor: pointer; }
 .setting-row b, .skin-option span { display: block; color: #f3f5e9; font-size: .9rem; }
 .setting-row small { display: block; margin-top: 5px; color: #99b3a6; font: .66rem 'DM Mono', monospace; }
@@ -520,6 +543,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .roulette-odds-note { margin: 10px 0 0; color: #99b3a6; font: .6rem/1.5 'DM Mono', monospace; }
 .rarity-odds-heading { margin-top: 4px; }
 .asteroid-wheel b { color: #fff; font-size: .8rem; }
+.custom-spin-label input, .color-preference-label select { min-width: 180px; padding: 7px 9px; border: 1px solid #547185; color: #f3f5e9; background: #101b2b; font: .65rem 'DM Mono', monospace; }
 .spin-result { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: #08121fcc; animation: result-fade-in .25s ease-out; }
 .spin-result-card { display: grid; justify-items: center; gap: 12px; width: min(420px, 90vw); padding: 28px 24px; border: 1px solid #f6c46e; background: #143746; box-shadow: 0 0 45px #f58bff66; }
 .spin-result-card h2 { margin: 0; color: #f3f5e9; font-size: clamp(1.6rem, 5vw, 2.5rem); }
@@ -531,6 +555,20 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .credits-updates time { color: #99b3a6; font: .58rem 'DM Mono', monospace; }
 .credits-updates h3 { margin: 5px 0; color: #f3f5e9; font-size: .95rem; }
 .credits-updates p { margin: 0; color: #c4d1bd; font: .7rem/1.5 'DM Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.credits-update-picker { display: grid; gap: 6px; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
+.credits-update-picker select { width: 100%; padding: 9px 10px; border: 1px solid #547185; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.account-progress { display: grid; gap: 10px; margin: 18px 0; }
+.account-progress-row { display: grid; gap: 7px; width: 100%; padding: 11px 12px; border: 1px solid #385267; color: #c4d1bd; background: #10283899; text-align: left; cursor: pointer; }
+.account-progress-row:hover, .account-progress-row:focus-visible { border-color: #f6c46e; outline: none; }
+.account-progress-row > span { display: flex; justify-content: space-between; gap: 10px; font: .68rem 'DM Mono', monospace; }
+.account-progress-row progress { width: 100%; height: 7px; accent-color: #f6c46e; }
+.progress-detail { color: #9fb8ae; font: .62rem/1.5 'DM Mono', monospace; }
+.cooldown-reset-card { width: min(680px, 90vw); margin: 0 auto 20px; grid-template-columns: 1fr auto; align-items: center; }
+.cooldown-reset-card small { grid-column: 1 / -1; }
+.title-management-list { display: grid; gap: 10px; }
+.title-management-row { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(150px, 1.5fr) 110px auto; gap: 8px; align-items: center; }
+.title-management-row input, .title-management-list select { min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.title-management-list > .text-button { justify-self: start; }
 .update-log-editor-list { display: grid; gap: 10px; }
 .account-profile-form.update-log-editor { width: 100%; max-width: 760px; }
 .update-log-editor-entry { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid #385267; background: #101b2b; }
@@ -637,6 +675,20 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-screen > .text-button { padding: 6px 12px; }
 .account-dashboard { display: grid; gap: 12px; width: min(720px, 94vw); margin: 12px 0 20px; padding: 18px; border: 1px solid #385267; background: #143746cc; text-align: left; }
 .account-dashboard h2 { margin: 8px 0 0; color: #f6c46e; font-size: 1rem; }
+.account-settings-dashboard { grid-template-columns: minmax(170px, 205px) minmax(0, 1fr); width: min(980px, 94vw); gap: 0; padding: 0; overflow: hidden; }
+.account-settings-dashboard .tester-sidebar { min-height: 540px; }
+.account-settings-content { min-width: 0; padding: clamp(20px, 3vw, 30px); }
+.account-settings-header { padding-bottom: 18px; border-bottom: 1px solid #385267; }
+.account-settings-header .eyebrow { margin-bottom: 7px; color: #f6c46e; font-size: .6rem; }
+.account-settings-header h2 { margin: 0; color: #f3f5e9; font-size: clamp(1.35rem, 3vw, 1.9rem); }
+.account-settings-header > p:last-child { margin: 8px 0 0; color: #a9c1b9; font-size: .78rem; line-height: 1.5; }
+.account-settings-panels { margin-top: 18px; }
+.account-settings-dashboard [hidden] { display: none !important; }
+.account-settings-category { display: grid; gap: 12px; min-width: 0; }
+.account-settings-category > h2 { margin: 0; padding-bottom: 9px; border-bottom: 1px solid #385267; }
+.account-settings-category > p { color: #c4d1bd; font: .68rem/1.5 'DM Mono', monospace; }
+.account-settings-category .account-profile-form { width: 100%; max-width: none; padding: 14px; border: 1px solid #385267; background: #10283899; }
+.account-settings-category .account-security-section { margin: 0; padding: 14px; border: 1px solid #385267; background: #10283899; }
 .pilot-title-badge { display: inline-block; margin-left: 8px; padding: 4px 8px; border: 1px solid #f6c46e88; color: #f6c46e; background: #101b2b; font: 600 .58rem 'DM Mono', monospace; vertical-align: middle; }
 .profile-presence { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 0; color: #adb7b0; font: 700 .62rem 'DM Mono', monospace; }
 .profile-presence::before { width: 8px; height: 8px; border-radius: 50%; background: #89929a; content: ""; }
@@ -852,12 +904,17 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
   .tester-screen { padding: 35px 16px 50px; }
   .tester-console-header { align-items: flex-start; flex-direction: column; gap: 14px; }
   .tester-console { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .account-settings-dashboard { grid-template-columns: minmax(0, 1fr); }
+  .account-settings-dashboard .tester-sidebar { min-height: 0; }
   .tester-sidebar { flex-direction: row; align-items: center; gap: 5px; overflow-x: auto; padding: 11px; border-right: 0; border-bottom: 1px solid #385267; }
   .tester-sidebar-heading, .tester-sidebar-heading:first-child { flex: none; margin: 0 4px 0 8px; white-space: nowrap; }
   .tester-section-button { flex: none; white-space: nowrap; }
   .tester-console-content { padding: 20px 16px; }
   .tester-console-content .tester-world-tabs .text-button { flex: 1; }
   .tester-save-footer .menu-button { width: 100%; }
+  .title-management-row { grid-template-columns: 1fr 1fr; }
+  .title-management-row button { grid-column: 1 / -1; justify-self: start; }
+  .cooldown-reset-card { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 520px) {

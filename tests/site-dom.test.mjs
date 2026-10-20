@@ -122,7 +122,7 @@ test("malformed local saves do not stop the game from opening", async () => {
 test("slow startup does not replace an account form a player is filling in", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  const { dom, document } = await createPage({
+  const { dom, document, window } = await createPage({
     "/api/settings": async () => { await gate; return { goldenTimeLimitMs: 60000, rouletteTiers: [], updateLog: [] }; },
   });
   try {
@@ -247,6 +247,30 @@ test("account visibility setting saves the requested offline status", async () =
     assert.equal(choice, true);
     assert.equal(privacy.checked, true);
     assert.match(document.querySelector(".presence-setting-status").textContent, /appear offline/i);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("account settings are organized into persistent player tabs", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    clickButton(document, "Pilot_7");
+    const overview = document.querySelector('[data-control-section="overview"]');
+    const profile = document.querySelector('[data-control-section="profile"]');
+    assert.equal(overview.hidden, false);
+    assert.equal(profile.hidden, true);
+    clickButton(document, "Profile");
+    assert.equal(overview.hidden, true);
+    assert.equal(profile.hidden, false);
+    assert.equal(window.localStorage.getItem("orbit-account-tab"), "profile");
+    clickButton(document, "Security");
+    assert.equal(document.querySelector('[data-control-section="security"]').hidden, false);
   } finally {
     dom.window.close();
   }
@@ -473,6 +497,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     "/api/admin/messages": { messages: [] },
   });
   try {
+    window.confirm = () => true;
     const style = document.createElement("style");
     style.textContent = siteStyles;
     document.head.append(style);
@@ -486,7 +511,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(window.getComputedStyle(profile).display, "none");
     assert.equal(document.querySelector('[data-section="rewards"]').getAttribute("aria-current"), "page");
     assert.ok(rewards.querySelector('[data-rainbow-star-chance]'));
-    assert.ok(rewards.querySelector(".roulette-settings-editor"));
+    assert.equal(rewards.querySelector(".roulette-settings-editor"), null);
 
     clickButton(document, "Resources");
     assert.equal(window.getComputedStyle(rewards).display, "none");
@@ -502,7 +527,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(sanctuaryInputs[1].checked, sanctuaryInputs[0].checked);
     clickButton(document, "Unlock normal levels");
     assert.equal(claims.value, "17");
-    clickButton(document, "Chances & rewards");
+    clickButton(document, "World chances & rewards");
     const star = rewards.querySelector('[data-rainbow-star-chance]');
     star.value = "11";
     star.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -518,7 +543,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(savedConfig.prestige.rainbowStarChance, 27);
     assert.equal(window.localStorage.getItem("orbit-claims"), "17");
 
-    clickButton(document, "Chances & rewards");
+    clickButton(document, "Roulette & spinning");
     const tier = document.querySelector('.roulette-tier-card[data-buy-in="5"]');
     const asteroidChance = tier.querySelector('[data-roulette-field="chance.claims"]');
     const colorChance = tier.querySelector('[data-roulette-field="chance.color"]');
@@ -569,6 +594,7 @@ test("update log preserves pasted formatting, supports indentation, and publishe
     },
   });
   try {
+    window.confirm = () => true;
     const style = document.createElement("style");
     style.textContent = siteStyles;
     document.head.append(style);

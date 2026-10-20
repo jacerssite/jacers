@@ -281,6 +281,7 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
             });
             editorActions.append(indent, outdent, tabOption);
             const remove = createTextButton("Remove", () => {
+                if (!window.confirm(`Remove update ${index + 1} from the draft? You must publish to make this permanent.`)) return;
                 draft = readEntries().filter((_, entryIndex) => entryIndex !== index);
                 drawEntries();
             });

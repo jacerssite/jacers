@@ -16,6 +16,7 @@ export const RARITY_ORDER: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Le
 export const DEFAULT_SKIN_CHANCES: Record<Rarity, number> = { Common: 0, Uncommon: 0, Rare: 0, Epic: 15, Legendary: 35 };
 export const DEFAULT_WORLD_CONFIG: WorldGameConfig = {
     rainbowStarChance: 3,
+    portalSpawnChance: 100,
     rarityOdds: { ...SPECIAL_ASTEROID_ODDS },
     rewardRanges: { ...SPECIAL_ASTEROID_REWARD_RANGES },
     skinChances: { ...DEFAULT_SKIN_CHANCES },
@@ -30,6 +31,11 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
         rapid: { durationSeconds: 10 },
         cannon: { durationSeconds: 0 },
         star: { durationSeconds: 15 },
+    },
+    powerupRules: {
+        oneActiveAtATime: false,
+        rainbowStarInvincible: true,
+        rainbowStarDefeatsEnemies: true,
     },
 };
 export const DEFAULT_ROULETTE_TIERS: RouletteTier[] = [

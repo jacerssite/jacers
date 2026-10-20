@@ -53,7 +53,7 @@ export const trails: TrailStyle[] = [
     { name: "Void Flame", color: "#8b7dff", required: 46, effect: "ember", boss: true },
     { name: "Comet Line", color: "#f29d68", required: 86, effect: "comet" },
     { name: "Prism Arc", color: "#8de7ff", required: 98, effect: "arc" },
-    { name: "Jackpot Spark", color: "#ffe36e", required: 0, effect: "spark", secret: true },
+    { name: "Jackpot Spark", color: "#ffe36e", required: 0, effect: "spark", secret: true, jackpot: true },
     { name: "Golden Trail", color: "#fff0a1", required: 0, effect: "arc", golden: true },
     // Prestige-exclusive trails from special rolls
     { name: "Stellar Beam", color: "#ffcc33", required: 0, effect: "arc", prestige: 1 },
