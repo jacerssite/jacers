@@ -588,6 +588,11 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .credits-updates p { margin: 0; color: #c4d1bd; font: .7rem/1.5 'DM Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .credits-update-picker { display: grid; gap: 6px; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
 .credits-update-picker select { width: 100%; padding: 9px 10px; border: 1px solid #547185; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.credits-update-edit { justify-self: start; margin-top: 12px; padding: 7px 10px; border: 1px solid #f6c46e; color: #f6c46e; background: #101b2b; }
+.credits-update-live-editor { display: grid; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #385267; }
+.credits-update-live-editor input, .credits-update-live-editor textarea { width: 100%; min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.credits-update-live-editor textarea { min-height: 150px; resize: vertical; white-space: pre-wrap; }
+.credits-update-live-editor small { min-height: 1.4em; color: #99b3a6; font: .62rem/1.5 'DM Mono', monospace; }
 .account-progress { display: grid; gap: 10px; margin: 18px 0; }
 .account-progress-row { display: grid; gap: 7px; width: 100%; padding: 11px 12px; border: 1px solid #385267; color: #c4d1bd; background: #10283899; text-align: left; cursor: pointer; }
 .account-progress-row:hover, .account-progress-row:focus-visible { border-color: #f6c46e; outline: none; }

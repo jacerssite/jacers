@@ -115,10 +115,24 @@ let presenceHeartbeatInFlight = false;
 let accountNoticeOpen = false;
 let goldenTimeLimitMs = 60000;
 type MusicScene = "menu" | "normal" | "prestige" | "secret" | "boss";
+type MusicTrackId = "original" | "out-in-space" | "space-adventure" | "out-there" | "crazy-space" | "spacelife-14";
+type MusicTrack = { id: MusicTrackId; name: string; source?: string; credit: string };
+const MUSIC_TRACKS: readonly MusicTrack[] = [
+    { id: "original", name: "Original", credit: "Procedural Space Ambience — generated in-browser by Jacer" },
+    { id: "out-in-space", name: "Out in Space", source: "/music/out-in-space.ogg", credit: "Out in Space by Agecaf — CC0 / OpenGameArt" },
+    { id: "space-adventure", name: "Space Adventure", source: "/music/space-adventure.ogg", credit: "Space Adventure by MintoDog — CC0 / OpenGameArt" },
+    { id: "out-there", name: "Out There", source: "/music/out-there.ogg", credit: "Space Music: Out There by yd — CC0 / OpenGameArt" },
+    { id: "crazy-space", name: "Crazy Space", source: "/music/crazy-space.ogg", credit: "Crazy Space by rubberduck — CC0 / OpenGameArt" },
+    { id: "spacelife-14", name: "Spacelife 14", source: "/music/spacelife-14.ogg", credit: "Spacelife #14 by yd — CC0 / OpenGameArt" },
+];
+const storedMusicTrack = localStorage.getItem("orbit-music-track") as MusicTrackId | null;
+let selectedMusicTrackId: MusicTrackId = MUSIC_TRACKS.some((track) => track.id === storedMusicTrack) ? storedMusicTrack! : "original";
 let musicContext: AudioContext | null = null;
 let musicFilter: BiquadFilterNode | null = null;
 let musicGain: GainNode | null = null;
 let musicOscillators: OscillatorNode[] = [];
+let externalMusicAudio: HTMLAudioElement | null = null;
+let externalMusicSource: MediaElementAudioSourceNode | null = null;
 let musicSequenceTimer: number | null = null;
 let musicStep = 0;
 let musicScene: MusicScene = "menu";
@@ -732,6 +746,62 @@ function showAccountNotice(message: { id: string; title: string; body: string; t
     document.documentElement.append(overlay);
 }
 
+function stopProceduralMusic() {
+    musicOscillators.forEach((oscillator) => {
+        try { oscillator.stop(); } catch { /* already stopped */ }
+    });
+    musicOscillators = [];
+    stopMusicSequence();
+}
+
+function startProceduralMusic() {
+    if (!musicContext || musicOscillators.length) return;
+    [65.41, 98, 130.81].forEach((frequency, index) => {
+        const oscillator = musicContext!.createOscillator();
+        const voice = musicContext!.createGain();
+        oscillator.type = index === 1 ? "triangle" : "sine";
+        oscillator.frequency.value = frequency;
+        voice.gain.value = index === 0 ? 0.24 : 0.08;
+        oscillator.connect(voice);
+        voice.connect(musicFilter!);
+        oscillator.start();
+        musicOscillators.push(oscillator);
+    });
+}
+
+function stopExternalMusic(resetPosition = true) {
+    externalMusicAudio?.pause();
+    if (resetPosition && externalMusicAudio) externalMusicAudio.currentTime = 0;
+    externalMusicSource?.disconnect();
+    externalMusicSource = null;
+    if (resetPosition) externalMusicAudio = null;
+}
+
+function configureExternalMusic() {
+    const track = MUSIC_TRACKS.find((candidate) => candidate.id === selectedMusicTrackId);
+    if (!musicContext || !musicFilter || !track?.source) return null;
+    const sourceUrl = new URL(track.source, window.location.href).href;
+    if (!externalMusicAudio || externalMusicAudio.src !== sourceUrl) {
+        stopExternalMusic();
+        externalMusicAudio = new Audio(track.source);
+        externalMusicAudio.loop = true;
+        externalMusicAudio.preload = "auto";
+    }
+    if (!externalMusicSource) {
+        externalMusicSource = musicContext.createMediaElementSource(externalMusicAudio);
+        externalMusicSource.connect(musicFilter);
+    }
+    return externalMusicAudio;
+}
+
+function startExternalMusic() {
+    const audio = configureExternalMusic();
+    if (!audio || musicMuted) return;
+    void audio.play().catch((error: unknown) => {
+        console.warn("Could not start selected music track until the next user interaction:", error);
+    });
+}
+
 function unlockMusic() {
     if (musicUnlocked || musicMuted) return;
     if (typeof AudioContext === "undefined") return;
@@ -746,20 +816,12 @@ function unlockMusic() {
         musicGain.gain.value = 0;
         musicFilter.connect(musicGain);
         musicGain.connect(musicContext.destination);
-        [65.41, 98, 130.81].forEach((frequency, index) => {
-            const oscillator = musicContext!.createOscillator();
-            const voice = musicContext!.createGain();
-            oscillator.type = index === 1 ? "triangle" : "sine";
-            oscillator.frequency.value = frequency;
-            voice.gain.value = index === 0 ? 0.24 : 0.08;
-            oscillator.connect(voice);
-            voice.connect(musicFilter!);
-            oscillator.start();
-            musicOscillators.push(oscillator);
-        });
+        if (selectedMusicTrackId === "original") startProceduralMusic();
+        else configureExternalMusic();
         void musicContext.resume().then(() => {
             fadeMusicTo(musicMuted ? 0 : getMusicOutputGain());
-            scheduleMusicStep(80);
+            if (selectedMusicTrackId === "original") scheduleMusicStep(80);
+            else startExternalMusic();
         }).catch((error: unknown) => {
             console.error("Could not resume background music:", error);
         });
@@ -793,7 +855,7 @@ function stopMusicSequence() {
 }
 
 function scheduleMusicStep(delay = MUSIC_STEP_MS) {
-    if (!musicUnlocked || musicMuted || !musicContext || musicSequenceTimer !== null) return;
+    if (selectedMusicTrackId !== "original" || !musicUnlocked || musicMuted || !musicContext || musicSequenceTimer !== null) return;
     musicSequenceTimer = window.setTimeout(() => {
         musicSequenceTimer = null;
         playMusicStep();
@@ -804,7 +866,7 @@ function scheduleMusicStep(delay = MUSIC_STEP_MS) {
 function playMusicStep() {
     const context = musicContext;
     const filter = musicFilter;
-    if (!musicUnlocked || musicMuted || !context || !filter) return;
+    if (selectedMusicTrackId !== "original" || !musicUnlocked || musicMuted || !context || !filter) return;
     const pattern = MUSIC_PATTERNS[musicScene];
     const interval = pattern[musicStep % pattern.length];
     const octave = musicStep % 16 >= 8 ? 1 : 0;
@@ -862,16 +924,34 @@ function setMusicVolume(volume: number) {
     if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : getMusicOutputGain());
 }
 
+function setMusicTrack(trackId: MusicTrackId) {
+    if (!MUSIC_TRACKS.some((track) => track.id === trackId)) return;
+    selectedMusicTrackId = trackId;
+    localStorage.setItem("orbit-music-track", trackId);
+    stopMusicSequence();
+    stopProceduralMusic();
+    stopExternalMusic();
+    if (!musicUnlocked || musicMuted) return;
+    if (selectedMusicTrackId === "original") {
+        startProceduralMusic();
+        scheduleMusicStep(80);
+    } else {
+        startExternalMusic();
+    }
+}
+
 function setMusicMuted(muted: boolean) {
     musicMuted = muted;
     localStorage.setItem("orbit-music-muted", String(muted));
     if (muted) {
         stopMusicSequence();
+        externalMusicAudio?.pause();
         fadeMusicTo(0);
     } else if (!musicUnlocked) unlockMusic();
     else {
         fadeMusicTo(getMusicOutputGain());
-        scheduleMusicStep(80);
+        if (selectedMusicTrackId === "original") scheduleMusicStep(80);
+        else startExternalMusic();
     }
 }
 
@@ -1231,6 +1311,20 @@ function showSettings() {
     musicToggle.checked = !musicMuted;
     musicToggle.addEventListener("change", () => setMusicMuted(!musicToggle.checked));
     musicToggleRow.append(musicToggle);
+    const musicTrackRow = document.createElement("label");
+    musicTrackRow.className = "setting-row music-track-row";
+    musicTrackRow.innerHTML = `<span><b>Music selection</b><small>Choose a calm space track. Your choice is saved on this device.</small></span>`;
+    const musicTrackSelect = document.createElement("select");
+    musicTrackSelect.setAttribute("aria-label", "Music selection");
+    MUSIC_TRACKS.forEach((track) => {
+        const option = document.createElement("option");
+        option.value = track.id;
+        option.textContent = track.name;
+        option.selected = track.id === selectedMusicTrackId;
+        musicTrackSelect.append(option);
+    });
+    musicTrackSelect.addEventListener("change", () => setMusicTrack(musicTrackSelect.value as MusicTrackId));
+    musicTrackRow.append(musicTrackSelect);
     const musicVolumeRow = document.createElement("label");
     musicVolumeRow.className = "setting-row music-volume-row";
     musicVolumeRow.innerHTML = `<span><b>Music volume</b><small>Saved on this device and applied live.</small></span>`;
@@ -1405,7 +1499,7 @@ function showSettings() {
     audioPanel.className = "player-settings-category";
     audioPanel.dataset.controlSection = "audio";
     audioPanel.hidden = true;
-    audioPanel.append(musicToggleRow, musicVolumeRow);
+    audioPanel.append(musicToggleRow, musicTrackRow, musicVolumeRow);
 
     const progressPanel = document.createElement("section");
     progressPanel.className = "player-settings-category";
@@ -1543,7 +1637,7 @@ function createProgressArea() {
 
 function showCredits() {
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
-    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Procedural Space Ambience / generated in-browser by Jacer / no external track or license.</p>`;
+    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
     const updates = document.createElement("section");
     updates.className = "credits-updates";
     const heading = document.createElement("h2");
@@ -1554,7 +1648,8 @@ function showCredits() {
         empty.textContent = "No updates have been posted yet.";
         updates.append(empty);
     } else {
-        const sortedUpdates = [...updateLogEntries].sort((first, second) => second.date.localeCompare(first.date));
+        let sortedUpdates = [...updateLogEntries].sort((first, second) => second.date.localeCompare(first.date));
+        const canEditUpdates = currentOnlineUser?.role === "owner";
         const selectorLabel = document.createElement("label");
         selectorLabel.className = "credits-update-picker";
         selectorLabel.append(document.createTextNode("Browse update history"));
@@ -1577,6 +1672,93 @@ function showCredits() {
             const body = document.createElement("p");
             body.textContent = entry.body;
             updateArticle.replaceChildren(date, title, body);
+            if (canEditUpdates) {
+                const edit = createTextButton("Edit entry in real time", () => beginInlineUpdateEdit(entry, date, title, body));
+                edit.className = "credits-update-edit";
+                edit.setAttribute("aria-label", `Edit ${entry.title} in real time`);
+                updateArticle.append(edit);
+            }
+        };
+        const beginInlineUpdateEdit = (entry: UpdateLogEntry, date: HTMLTimeElement, title: HTMLElement, body: HTMLElement) => {
+            const editor = document.createElement("form");
+            editor.className = "credits-update-live-editor";
+            const dateInput = document.createElement("input");
+            dateInput.type = "date";
+            dateInput.value = entry.date;
+            dateInput.required = true;
+            dateInput.setAttribute("aria-label", "Update date");
+            const titleInput = document.createElement("input");
+            titleInput.type = "text";
+            titleInput.value = entry.title;
+            titleInput.maxLength = 80;
+            titleInput.required = true;
+            titleInput.placeholder = "Update title";
+            titleInput.setAttribute("aria-label", "Update title");
+            const bodyInput = document.createElement("textarea");
+            bodyInput.value = entry.body;
+            bodyInput.maxLength = 20_000;
+            bodyInput.rows = 8;
+            bodyInput.required = true;
+            bodyInput.placeholder = "Update details";
+            bodyInput.setAttribute("aria-label", "Update details");
+            const liveStatus = document.createElement("small");
+            liveStatus.textContent = "Changes appear above immediately. Save when ready.";
+            const syncPreview = () => {
+                date.textContent = dateInput.value || "Choose a date";
+                date.dateTime = dateInput.value;
+                title.textContent = titleInput.value || "Untitled update";
+                body.textContent = bodyInput.value;
+                liveStatus.textContent = `${bodyInput.value.length.toLocaleString()} / 20,000 characters. Changes appear above immediately.`;
+            };
+            [dateInput, titleInput, bodyInput].forEach((input) => input.addEventListener("input", syncPreview));
+            const save = document.createElement("button");
+            save.type = "submit";
+            save.className = "menu-button";
+            save.textContent = "Save entry";
+            const cancel = createTextButton("Cancel edit", () => drawUpdate(entry));
+            editor.append(dateInput, titleInput, bodyInput, liveStatus, save, cancel);
+            updateArticle.append(editor);
+            titleInput.focus();
+            editor.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (!dateInput.value || !titleInput.value.trim() || !bodyInput.value.trim()) {
+                    liveStatus.textContent = "Date, title, and update details are required.";
+                    return;
+                }
+                const entryIndex = updateLogEntries.indexOf(entry);
+                if (entryIndex < 0) {
+                    liveStatus.textContent = "This entry is stale. Refresh the update log and try again.";
+                    return;
+                }
+                save.disabled = true;
+                cancel.disabled = true;
+                liveStatus.textContent = "Saving update entry...";
+                try {
+                    const nextEntries = updateLogEntries.map((candidate, index) => index === entryIndex
+                        ? { date: dateInput.value, title: titleInput.value.trim(), body: bodyInput.value }
+                        : { ...candidate });
+                    const result = await apiRequest<{ updateLog: UpdateLogEntry[] }>("/settings/update-log", {
+                        method: "PUT",
+                        body: JSON.stringify({ entries: nextEntries }),
+                    });
+                    updateLogEntries = result.updateLog;
+                    sortedUpdates = [...updateLogEntries].sort((first, second) => second.date.localeCompare(first.date));
+                    const updatedEntry = sortedUpdates.find((candidate) => candidate.date === dateInput.value && candidate.title === titleInput.value.trim() && candidate.body === bodyInput.value) ?? sortedUpdates[0];
+                    selector.replaceChildren();
+                    sortedUpdates.forEach((candidate, index) => {
+                        const option = document.createElement("option");
+                        option.value = String(index);
+                        option.textContent = `${candidate.date} — ${candidate.title}`;
+                        option.selected = candidate === updatedEntry;
+                        selector.append(option);
+                    });
+                    drawUpdate(updatedEntry);
+                } catch (error) {
+                    liveStatus.textContent = error instanceof Error ? error.message : "Could not save this update entry.";
+                    save.disabled = false;
+                    cancel.disabled = false;
+                }
+            });
         };
         selector.addEventListener("change", () => drawUpdate(sortedUpdates[Number(selector.value)] ?? sortedUpdates[0]));
         updates.append(selectorLabel, updateArticle);
