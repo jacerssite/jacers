@@ -344,7 +344,15 @@ export function createLevelMaker(context: LevelMakerContext) {
             const level = collectLevel();
             if (!level) return;
             const draftSnapshot = currentDraft();
-            const previewIndex = levels.push(level) - 1;
+            // A playtest is an exact preview of the editor grid. Do not carry
+            // hidden portal/boss metadata from a built-in source route into it.
+            const previewLevel = structuredClone(level);
+            delete previewLevel.secretPortals;
+            delete previewLevel.secretKey;
+            delete previewLevel.secretId;
+            delete previewLevel.secret;
+            if (previewLevel.bossIndex === undefined) previewLevel.boss = false;
+            const previewIndex = levels.push(previewLevel) - 1;
             startPreview(previewIndex, () => showLevelMaker(draftSnapshot));
         });
         const save = createMenuButton(editingBuiltIn ? "Save built-in changes" : draft?.customId ? "Save level changes" : "Publish shared level", async () => {

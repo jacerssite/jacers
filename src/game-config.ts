@@ -42,6 +42,7 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
     enemyRules: {
         attackIntervalFrames: 90,
         prestigeAttackMultiplier: 0.72,
+        prestigeAttackMultipliers: [0.72, 0.72, 0.72],
         secretAttackMultiplier: 0.84,
         rapidAttackMultiplier: 0.58,
         projectileSpeed: 2.6,
@@ -50,9 +51,9 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
     },
 };
 export const DEFAULT_ROULETTE_TIERS: RouletteTier[] = [
-    { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
-    { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
-    { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
+    { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 0 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
+    { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 0 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
+    { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18, title: 0 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
 ];
 export const PROFILE_TITLES: ProfileTitle[] = [
     { id: "cadet", name: "Cadet", routes: 1 },

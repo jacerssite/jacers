@@ -1,4 +1,4 @@
-import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle } from "./types";
+import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward } from "./types";
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity, createRarityBadge } from "./cosmetics";
 import { levels } from "./levels";
@@ -37,6 +37,7 @@ let rouletteWheelPockets: RouletteWheelPocket[] = [];
 const testerSettingsDraft = new Map<string, string>();
 let levelMakerPreviewReturn: (() => void) | null = null;
 let isLevelMakerPreview = false;
+let levelMakerPreviewLevelIndex = -1;
 let playerX = 120;
 let playerY = 300;
 let verticalSpeed = 0;
@@ -218,9 +219,11 @@ const showLevelMaker = createLevelMaker({
     },
     startPreview: (index, returnToEditor) => {
         isLevelMakerPreview = true;
+        levelMakerPreviewLevelIndex = index;
         levelMakerPreviewReturn = () => {
             levels.splice(index, 1);
             isLevelMakerPreview = false;
+            levelMakerPreviewLevelIndex = -1;
             levelMakerPreviewReturn = null;
             returnToEditor();
         };
@@ -1348,6 +1351,8 @@ function showSettings() {
     codeInput.type = "text";
     codeInput.autocomplete = "off";
     codeInput.maxLength = 40;
+    codeInput.pattern = "[A-Za-z0-9!?@#$%&*+=._~()\\-]{8,40}";
+    codeInput.title = "Use 8-40 letters, numbers, or ! ? @ # $ % & * + = . _ ~ ( ) -";
     codeInput.required = true;
     codeLabel.append(codeInput);
     const codeStatus = document.createElement("small");
@@ -1379,7 +1384,7 @@ function showSettings() {
             accountRedemptionInFlight = true;
             redemptionStarted = true;
             codeStatus.textContent = "Checking code...";
-            const result = await apiRequest<{ reward: { type: "claims" | "specialClaims"; amount: number } }>("/codes/redeem", {
+            const result = await apiRequest<{ reward: CodeReward }>("/codes/redeem", {
                 method: "POST",
                 body: JSON.stringify({ code: codeInput.value.trim().toUpperCase() }),
             });
@@ -1390,14 +1395,14 @@ function showSettings() {
                 applySyncedProgress(sentProgress, progress);
                 lastSyncedAccountProgress = serializeAccountProgress(progress);
                 loadedAccountProgressFor = redemptionIdentity;
-                codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} added to your account.`;
+                codeStatus.textContent = `Success: ${describeCodeReward(result.reward)} added to your account.`;
             } catch (error) {
                 if (accountIdentity(currentOnlineUser) === redemptionIdentity) {
                     loadedAccountProgressFor = null;
                     lastSyncedAccountProgress = "";
                 }
                 console.error("Could not refresh the redeemed code reward:", error);
-                codeStatus.textContent = `Success: ${result.reward.amount} ${result.reward.type === "claims" ? "asteroids" : "special asteroids"} saved online. Cloud saving is paused; sign in again to refresh this device.`;
+                codeStatus.textContent = `Success: ${describeCodeReward(result.reward)} saved online. Cloud saving is paused; sign in again to refresh this device.`;
             }
         } catch (error) {
             const definiteRejection = error instanceof ApiError && error.status >= 400 && error.status < 500;
@@ -1562,7 +1567,13 @@ function showSettings() {
     const consoleLayout = document.createElement("div");
     consoleLayout.className = "tester-console player-settings-console";
     consoleLayout.append(navigation.nav, content);
-    menu.append(pageHeader, consoleLayout, createTextButton("Back", showMenu), createPageCounter());
+    const settingsActions = document.createElement("div");
+    settingsActions.className = "settings-actions";
+    settingsActions.append(
+        createMenuButton("Restart current level", () => startGame(currentLevel)),
+        createTextButton("Back", showMenu),
+    );
+    menu.append(pageHeader, consoleLayout, settingsActions, createPageCounter());
     document.body.replaceChildren(menu);
 
     const previousSection = localStorage.getItem("orbit-player-settings-tab");
@@ -1897,10 +1908,10 @@ function showAccount(initialMessage = "") {
                 leaderboardRow.append(leaderboardInput);
             }
             const allTitlesGranted = (currentOnlineUser.role === "owner" || currentOnlineUser.role === "tester") && localStorage.getItem("orbit-all-titles") === "1";
-            const earnedTitles = allTitlesGranted ? profileTitles : profileTitles.filter((title) => getCompletedLevelCount() >= title.routes);
+            const earnedTitles = allTitlesGranted ? profileTitles : profileTitles.filter(isProfileTitleUnlocked);
             const titleRow = document.createElement("label");
             titleRow.className = "account-title-setting";
-            titleRow.innerHTML = `<span><b>Pilot title</b><small>Earn titles by completing routes. Your chosen title appears on your public profile.</small></span>`;
+            titleRow.innerHTML = `<span><b>Pilot title</b><small>Earn titles through their listed requirements. Your chosen title appears on your public profile.</small></span>`;
             const titleSelect = document.createElement("select");
             titleSelect.setAttribute("aria-label", "Pilot title");
             const noTitle = document.createElement("option");
@@ -2538,6 +2549,11 @@ function getAvailableRouletteCosmetics(type: "color" | "trail" | "avatar") {
     return avatars.map((item, index) => ({ item, index })).filter(({ item, index }) => !isAvatarUnlocked(item) && !isSpinCosmeticUnlocked("avatar", index));
 }
 
+function getAvailableRouletteTitles() {
+    return profileTitles.filter((title) => (title.requirement?.type ?? "routes") === "roulette"
+        && localStorage.getItem(`orbit-title-unlock-${title.id}`) !== "1");
+}
+
 function areRouletteCosmeticsComplete() {
     return !getAvailableRouletteCosmetics("color").length
         && !getAvailableRouletteCosmetics("trail").length
@@ -2579,22 +2595,23 @@ function matchesRouletteColorPreference(color: string, preference: "green" | "bl
 }
 
 function getRouletteSegments(tier: RouletteTier, spend: number = tier.buyIn, colorPreference: "green" | "blue" | "yellow" = "green") {
-    const labels: Record<"claims" | "specialClaims" | "color" | "trail" | "avatar", string> = {
+    const labels: Record<keyof RouletteTier["chances"], string> = {
         claims: "Asteroids",
         specialClaims: "Special",
         color: "Color",
         trail: "Trail",
         avatar: "Avatar",
+        title: "Profile title",
     };
     return (Object.keys(tier.chances) as (keyof RouletteTier["chances"])[])
-        .filter((type) => tier.chances[type] > 0 && (type === "claims" || type === "specialClaims" || getAvailableRouletteCosmetics(type).length > 0))
+        .filter((type) => (tier.chances[type] ?? 0) > 0 && (type === "claims" || type === "specialClaims" || type === "title" ? (type === "title" ? getAvailableRouletteTitles().length > 0 : true) : getAvailableRouletteCosmetics(type).length > 0))
         .map((type) => ({
             type,
             label: labels[type],
             // Spending above a tier's normal buy-in scales the desired
             // cosmetic categories while keeping the owner-configured base
             // percentages intact.
-            weight: tier.chances[type] * (spend > tier.buyIn && (type === "color" || type === "trail" || type === "avatar") ? Math.min(12, spend / tier.buyIn) : 1)
+            weight: (tier.chances[type] ?? 0) * (spend > tier.buyIn && (type === "color" || type === "trail" || type === "avatar" || type === "title") ? Math.min(12, spend / tier.buyIn) : 1)
                 * (type === "color" ? colorPreference === "yellow" ? 1.25 : colorPreference === "blue" ? 1.12 : 1.05 : 1),
             startAngle: 0,
             endAngle: 0,
@@ -2640,6 +2657,14 @@ function getRouletteReward(type: keyof RouletteTier["chances"], tier: RouletteTi
         unlockSpinCosmetic(type, chosen.index);
         return { title: `${chosen.item.name} trail`, description: "New trail unlocked. Equip it from Customization.", rarity: getCosmeticRarity(chosen.item), collectionComplete: false };
     }
+    if (type === "title") {
+        const candidates = getAvailableRouletteTitles();
+        if (!candidates.length) return getRouletteReward("claims", tier, colorPreference);
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        localStorage.setItem(`orbit-title-unlock-${chosen.id}`, "1");
+        if (!localStorage.getItem("orbit-title")) localStorage.setItem("orbit-title", chosen.id);
+        return { title: `${chosen.name} title`, description: "New profile title unlocked. Equip it from Account settings.", collectionComplete: false };
+    }
     const candidates = getAvailableRouletteCosmetics("avatar");
     if (!candidates.length) return getRouletteReward("claims", tier);
     const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier, colorPreference);
@@ -2671,6 +2696,7 @@ function showDropRates() {
         color: "Ship color",
         trail: "Trail",
         avatar: "Avatar",
+        title: "Profile title",
     };
     const rewardTypes = Object.keys(rewardLabels) as (keyof RouletteTier["chances"])[];
     [...rouletteTiers].sort((first, second) => first.buyIn - second.buyIn).forEach((tier) => {
@@ -2684,7 +2710,7 @@ function showDropRates() {
             const label = document.createElement("dt");
             label.textContent = rewardLabels[type];
             const value = document.createElement("dd");
-            value.textContent = `${tier.chances[type].toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+            value.textContent = `${(tier.chances[type] ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
             row.append(label, value);
             if (type === "claims" || type === "specialClaims") {
                 const [minimum, maximum] = tier.rewards[type];
@@ -2701,23 +2727,6 @@ function showDropRates() {
     oddsNote.className = "roulette-odds-note";
     oddsNote.textContent = "These are the configured odds. If a cosmetic collection is complete, its reward type is excluded and the remaining odds are normalized.";
     rouletteOdds.append(rouletteOddsGrid, oddsNote);
-    const rarityHeading = document.createElement("h2");
-    rarityHeading.className = "rarity-odds-heading";
-    rarityHeading.textContent = "Asteroid rarity guide";
-    const odds = document.createElement("section");
-    odds.className = "rarity-odds";
-    const rarityOdds = getConfiguredRarityOdds();
-    const rewardRanges = getConfiguredRewardRanges();
-    const skinChances = getConfiguredSkinChances();
-    RARITY_ORDER.forEach((rarity) => {
-        const item = document.createElement("article");
-        item.className = `rarity-odds-card rarity-${rarity.toLowerCase()}`;
-        const [minimum, maximum] = rewardRanges[rarity];
-        const rewardText = `${minimum.toLocaleString()}-${maximum.toLocaleString()} asteroids / ${skinChances[rarity]}% skin chance`;
-        item.innerHTML = `${createRarityBadge(rarity)}<strong>${rarityOdds[rarity]}%</strong><small>${rewardText}</small>`;
-        odds.append(item);
-    });
-    
     const catalog = document.createElement("section");
     catalog.className = "rarity-catalog";
     const collections: { title: string; items: { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }[] }[] = [
@@ -2732,7 +2741,7 @@ function showDropRates() {
         group.innerHTML = `<h2>${collection.title}</h2><div>${orderedItems.map((item) => `<span>${item.name}${createRarityBadge(getCosmeticRarity(item))}</span>`).join("")}</div>`;
         catalog.append(group);
     });
-    menu.append(rouletteOdds, rarityHeading, odds, catalog, createTextButton("Back to main menu", showMenu), createPageCounter());
+    menu.append(rouletteOdds, catalog, createTextButton("Back to main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
 }
 
@@ -2903,7 +2912,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const heading = document.createElement("h2");
         heading.textContent = "Profile titles";
         const description = document.createElement("p");
-        description.textContent = "Create titles with route requirements. Titles are earned when a pilot reaches the requirement, then can be selected in Account settings.";
+        description.textContent = "Create titles with routes, Golden Body, prestige, or roulette requirements. Titles are earned when a pilot reaches the requirement, then can be selected in Account settings.";
         const list = document.createElement("div");
         list.className = "title-management-list";
         const status = document.createElement("small");
@@ -2912,6 +2921,10 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             id: row.querySelector<HTMLInputElement>("[data-title-id]")!.value,
             name: row.querySelector<HTMLInputElement>("[data-title-name]")!.value,
             routes: Number(row.querySelector<HTMLInputElement>("[data-title-routes]")!.value),
+            requirement: {
+                type: row.querySelector<HTMLSelectElement>("[data-title-requirement]")!.value as "routes" | "golden" | "prestige" | "roulette",
+                amount: Number(row.querySelector<HTMLInputElement>("[data-title-requirement-amount]")!.value),
+            },
         }));
         profileTitles.forEach((title, index) => {
             const row = document.createElement("div");
@@ -2938,23 +2951,36 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             routes.required = true;
             routes.dataset.titleRoutes = String(index);
             routes.setAttribute("aria-label", `Title ${index + 1} route requirement`);
+            const requirement = document.createElement("select");
+            requirement.dataset.titleRequirement = String(index);
+            requirement.setAttribute("aria-label", `Title ${index + 1} requirement type`);
+            [["routes", "Routes cleared"], ["golden", "Golden Body routes"], ["prestige", "Prestige level"], ["roulette", "Roulette prize"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; requirement.append(option); });
+            requirement.value = title.requirement?.type ?? "routes";
+            const requirementAmount = document.createElement("input");
+            requirementAmount.type = "number";
+            requirementAmount.min = "0";
+            requirementAmount.max = "100000";
+            requirementAmount.step = "1";
+            requirementAmount.value = String(title.requirement?.amount ?? title.routes);
+            requirementAmount.dataset.titleRequirementAmount = String(index);
+            requirementAmount.setAttribute("aria-label", `Title ${index + 1} requirement amount`);
             const remove = createTextButton("Remove", () => {
                 if (!window.confirm(`Remove the ${title.name} title from the shared catalog?`)) return;
                 profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
                 drawTitleManagement();
             });
-            row.append(id, name, routes, remove);
+            row.append(id, name, routes, requirement, requirementAmount, remove);
             list.append(row);
         });
         const add = createTextButton("Add title", () => {
             const draft = readDraftTitles();
-            profileTitles = [{ id: `title-${draft.length + 1}`, name: "New title", routes: 1 }, ...draft];
+            profileTitles = [{ id: `title-${draft.length + 1}`, name: "New title", routes: 1, requirement: { type: "routes", amount: 1 } }, ...draft];
             drawTitleManagement();
         });
         const save = createTextButton("Save titles for everyone", async () => {
             const nextTitles: ProfileTitle[] = readDraftTitles();
             if (!isUsableProfileTitles(nextTitles)) {
-                status.textContent = "Use unique lowercase IDs, non-empty names, and whole-number route requirements.";
+                status.textContent = "Use unique lowercase IDs, non-empty names, and whole-number requirement values.";
                 return;
             }
             save.disabled = true;
@@ -2980,7 +3006,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         profileTitles.forEach((title) => {
             const option = document.createElement("option");
             option.value = title.id;
-            option.textContent = `${title.name} / ${title.routes} routes`;
+            const requirement = title.requirement?.type === "golden" ? `${title.requirement.amount} Golden Body routes` : title.requirement?.type === "prestige" ? `prestige ${title.requirement.amount}` : title.requirement?.type === "roulette" ? "roulette prize" : `${title.requirement?.amount ?? title.routes} routes`;
+            option.textContent = `${title.name} / ${requirement}`;
             grant.append(option);
         });
         const grantButton = createTextButton("Equip selected title on my account", () => {
@@ -3133,7 +3160,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     rouletteHeading.textContent = "Roulette buy-in and prize chances";
     const rouletteDescription = document.createElement("p");
     rouletteDescription.className = "menu-copy";
-    rouletteDescription.textContent = "Adjust each tier's prize chances and asteroid rewards. Chances in each tier must add up to 100%.";
+    rouletteDescription.textContent = "Adjust each tier's prize chances and asteroid rewards. Titles marked as roulette prizes join the wheel. Chances in each tier must add up to 100%.";
     const rouletteEditor = createRouletteFields(rouletteTiers);
     const rouletteStatus = document.createElement("small");
     rouletteStatus.setAttribute("role", "status");
@@ -3237,7 +3264,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const enemySettings = document.createElement("section");
     enemySettings.className = "tester-reward-settings tester-enemy-settings";
     enemySettings.innerHTML = `<p class="setting-title">Enemy behavior</p><p class="menu-copy">Tune attack cadence and projectile speed. A higher interval means enemies fire less often; multipliers apply to prestige, secret, and Rapid Fire states.</p>`;
-    const addEnemyInput = (title: string, key: keyof GameConfig["enemyRules"], value: number, min: number, max: number, step = 1) => {
+    const addEnemyInput = (title: string, key: string, value: number, min: number, max: number, step = 1) => {
         const label = document.createElement("label");
         label.append(document.createTextNode(title));
         const input = document.createElement("input");
@@ -3252,7 +3279,23 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         enemySettings.append(label);
     };
     addEnemyInput("Base attack interval (frames)", "attackIntervalFrames", gameConfig.enemyRules.attackIntervalFrames, 15, 600);
-    addEnemyInput("Prestige attack speed multiplier", "prestigeAttackMultiplier", gameConfig.enemyRules.prestigeAttackMultiplier, 0.25, 2, 0.01);
+    addEnemyInput("Default prestige attack speed multiplier", "prestigeAttackMultiplier", gameConfig.enemyRules.prestigeAttackMultiplier, 0.25, 2, 0.01);
+    const prestigeMultipliers = gameConfig.enemyRules.prestigeAttackMultipliers?.length
+        ? [...gameConfig.enemyRules.prestigeAttackMultipliers]
+        : [gameConfig.enemyRules.prestigeAttackMultiplier];
+    const prestigeDifficultyCount = Math.max(1, Math.min(100, Math.max(prestigeMax, prestigeMultipliers.length)));
+    const prestigeDifficultyTitle = document.createElement("p");
+    prestigeDifficultyTitle.className = "setting-title";
+    prestigeDifficultyTitle.textContent = "Prestige difficulty by level";
+    enemySettings.append(prestigeDifficultyTitle);
+    const prestigeDifficultyHelp = document.createElement("p");
+    prestigeDifficultyHelp.className = "menu-copy";
+    prestigeDifficultyHelp.textContent = "Set the attack-speed multiplier for each prestige. Lower values make enemies fire faster; higher values give pilots more time.";
+    enemySettings.append(prestigeDifficultyHelp);
+    for (let index = 0; index < prestigeDifficultyCount; index += 1) {
+        const fallback = prestigeMultipliers[index] ?? prestigeMultipliers[prestigeMultipliers.length - 1] ?? gameConfig.enemyRules.prestigeAttackMultiplier;
+        addEnemyInput(`Prestige ${index + 1} attack speed multiplier`, `prestigeAttack.${index + 1}`, fallback, 0.25, 2, 0.01);
+    }
     addEnemyInput("Secret attack speed multiplier", "secretAttackMultiplier", gameConfig.enemyRules.secretAttackMultiplier, 0.25, 2, 0.01);
     addEnemyInput("Rapid Fire attack speed multiplier", "rapidAttackMultiplier", gameConfig.enemyRules.rapidAttackMultiplier, 0.25, 1, 0.01);
     addEnemyInput("Enemy projectile speed", "projectileSpeed", gameConfig.enemyRules.projectileSpeed, 0.5, 12, 0.1);
@@ -3568,12 +3611,21 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             nextConfig.powerupRules.maxUsesPerLevel[kind] = readTesterSetting(`rule.maxUses.${kind}`, nextConfig.powerupRules.maxUsesPerLevel[kind]);
         });
         const enemyRules = nextConfig.enemyRules;
-        (Object.keys(enemyRules) as (keyof GameConfig["enemyRules"])[]).forEach((key) => {
+        (['attackIntervalFrames', 'prestigeAttackMultiplier', 'secretAttackMultiplier', 'rapidAttackMultiplier', 'projectileSpeed', 'miniBossProjectileSpeed', 'bossProjectileSpeed'] as const).forEach((key) => {
             const value = readTesterSetting(`enemy.${key}`, enemyRules[key]);
             enemyRules[key] = value;
         });
+        const currentPrestigeMultipliers = enemyRules.prestigeAttackMultipliers?.length
+            ? enemyRules.prestigeAttackMultipliers
+            : [enemyRules.prestigeAttackMultiplier];
+        const prestigeMultiplierCount = Math.max(1, Math.min(100, Math.max(prestigeMax, currentPrestigeMultipliers.length)));
+        enemyRules.prestigeAttackMultipliers = Array.from({ length: prestigeMultiplierCount }, (_, index) => {
+            const fallback = currentPrestigeMultipliers[index] ?? currentPrestigeMultipliers[currentPrestigeMultipliers.length - 1] ?? enemyRules.prestigeAttackMultiplier;
+            return readTesterSetting(`enemy.prestigeAttack.${index + 1}`, fallback);
+        });
         const enemyRuleValid = Number.isInteger(enemyRules.attackIntervalFrames) && enemyRules.attackIntervalFrames >= 15 && enemyRules.attackIntervalFrames <= 600
             && [enemyRules.prestigeAttackMultiplier, enemyRules.secretAttackMultiplier].every((value) => Number.isFinite(value) && value >= 0.25 && value <= 2)
+            && enemyRules.prestigeAttackMultipliers.every((value) => Number.isFinite(value) && value >= 0.25 && value <= 2)
             && Number.isFinite(enemyRules.rapidAttackMultiplier) && enemyRules.rapidAttackMultiplier >= 0.25 && enemyRules.rapidAttackMultiplier <= 1
             && [enemyRules.projectileSpeed, enemyRules.miniBossProjectileSpeed, enemyRules.bossProjectileSpeed].every((value) => Number.isFinite(value) && value >= 0.5 && value <= 16);
         if (!enemyRuleValid) {
@@ -3654,10 +3706,10 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     };
     if (isOwner) sections.push(
         { id: "players", title: "Player accounts", group: "Owner management", description: "Review accounts, progress, roles, and access.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement)) },
-        { id: "codes", title: "Reward codes", group: "Owner management", description: "Create and manage redeemable asteroid rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement)) },
+        { id: "codes", title: "Reward codes", group: "Owner management", description: "Create and manage redeemable asteroid, power-up, cosmetic, and title rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement, profileTitles)) },
         { id: "messages", title: "Messages", group: "Owner management", description: "Send announcements and review message history.", panel: messageManagement, onOpen: () => loadOnce("messages", messageManagement, () => renderAdminMessageTools(messageManagement)) },
         { id: "updates", title: "Update log", group: "Owner management", description: "Publish the changes shown to players in Credits.", panel: updateLogManagement, onOpen: () => loadOnce("updates", updateLogManagement, () => renderAdminUpdateLog(updateLogManagement, updateLogEntries, (entries) => { updateLogEntries = entries; })) },
-        { id: "titles", title: "Profile titles", group: "Owner management", description: "Create shared titles, set their route requirements, and equip one on your account.", panel: titleManagement },
+        { id: "titles", title: "Profile titles", group: "Owner management", description: "Create shared titles with route, Golden Body, prestige, or roulette requirements.", panel: titleManagement },
     );
     const content = document.createElement("div");
     content.className = "tester-console-content";
@@ -3792,6 +3844,9 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
         && (Object.keys(powerupLabels) as PowerupKind[]).every((kind) => Number.isInteger(rules.maxPickupsPerLevel[kind]) && rules.maxPickupsPerLevel[kind] >= 0 && rules.maxPickupsPerLevel[kind] <= 20)
         && Number.isInteger(enemies.attackIntervalFrames) && enemies.attackIntervalFrames >= 15 && enemies.attackIntervalFrames <= 600
         && [enemies.prestigeAttackMultiplier, enemies.secretAttackMultiplier].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.25 && value <= 2)
+        && (enemies.prestigeAttackMultipliers === undefined
+            || (Array.isArray(enemies.prestigeAttackMultipliers) && enemies.prestigeAttackMultipliers.length >= 1 && enemies.prestigeAttackMultipliers.length <= 100
+                && enemies.prestigeAttackMultipliers.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.25 && value <= 2)))
         && typeof enemies.rapidAttackMultiplier === "number" && Number.isFinite(enemies.rapidAttackMultiplier) && enemies.rapidAttackMultiplier >= 0.25 && enemies.rapidAttackMultiplier <= 1
         && [enemies.projectileSpeed, enemies.miniBossProjectileSpeed, enemies.bossProjectileSpeed].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.5 && value <= 16);
 }
@@ -3802,9 +3857,11 @@ function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
     return value.every((title) => {
         if (!title || typeof title !== "object") return false;
         const candidate = title as Partial<ProfileTitle>;
+        const requirement = candidate.requirement;
         if (typeof candidate.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(candidate.id) || ids.has(candidate.id)
             || typeof candidate.name !== "string" || !candidate.name.trim() || candidate.name.trim().length > 50 || /[<>]/.test(candidate.name)
-            || typeof candidate.routes !== "number" || !Number.isSafeInteger(candidate.routes) || candidate.routes < 0 || candidate.routes > 100000) return false;
+            || typeof candidate.routes !== "number" || !Number.isSafeInteger(candidate.routes) || candidate.routes < 0 || candidate.routes > 100000
+            || requirement !== undefined && (typeof requirement !== "object" || !["routes", "golden", "prestige", "roulette"].includes(requirement.type) || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000)) return false;
         ids.add(candidate.id);
         return true;
     });
@@ -3812,7 +3869,7 @@ function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
 
 function isUsableRouletteTiers(value: unknown): value is RouletteTier[] {
     if (!Array.isArray(value) || value.length !== 3) return false;
-    const keys = ["claims", "specialClaims", "color", "trail", "avatar"] as const;
+    const keys = ["claims", "specialClaims", "color", "trail", "avatar", "title"] as const;
     return value.every((tier, index) => {
         if (!tier || typeof tier !== "object") return false;
         const candidate = tier as Partial<RouletteTier>;
@@ -3820,8 +3877,8 @@ function isUsableRouletteTiers(value: unknown): value is RouletteTier[] {
         const rewards = candidate.rewards;
         if (!chances || !rewards) return false;
         return candidate.buyIn === [5, 10, 25][index]
-            && keys.every((key) => Number.isSafeInteger(chances[key]) && chances[key] >= 0 && chances[key] <= 100)
-            && keys.reduce((total, key) => total + chances[key], 0) === 100
+            && keys.every((key) => Number.isSafeInteger(chances[key] ?? (key === "title" ? 0 : undefined)) && (chances[key] ?? 0) >= 0 && (chances[key] ?? 0) <= 100)
+            && keys.reduce((total, key) => total + (chances[key] ?? 0), 0) === 100
             && Boolean(rewards)
             && (["claims", "specialClaims"] as const).every((key) => Array.isArray(rewards[key])
                 && rewards[key].length === 2
@@ -3833,20 +3890,18 @@ function isUsableRouletteTiers(value: unknown): value is RouletteTier[] {
     });
 }
 
+function describeCodeReward(reward: CodeReward) {
+    if (reward.type === "claims") return `+${reward.amount} asteroids`;
+    if (reward.type === "specialClaims") return `+${reward.amount} special asteroids`;
+    if (reward.type === "powerup") return `+${reward.amount} ${powerupLabels[reward.kind]} power-up${reward.amount === 1 ? "" : "s"}`;
+    if (reward.type === "title") return `the ${profileTitles.find((title) => title.id === reward.titleId)?.name ?? reward.titleId} title`;
+    const cosmetic = reward as Extract<CodeReward, { type: "skin" | "trail" | "avatar" }>;
+    const collection = cosmetic.type === "skin" ? skins : cosmetic.type === "trail" ? trails : avatars;
+    return `${collection[cosmetic.index]?.name ?? cosmetic.type} ${cosmetic.type} unlocked`;
+}
+
 function getConfiguredRainbowStarChance(prestige = activePlanet === "prestige") {
     return getWorldConfig(prestige).rainbowStarChance;
-}
-
-function getConfiguredRarityOdds(prestige = activePlanet === "prestige") {
-    return getWorldConfig(prestige).rarityOdds;
-}
-
-function getConfiguredRewardRanges(prestige = activePlanet === "prestige") {
-    return getWorldConfig(prestige).rewardRanges;
-}
-
-function getConfiguredSkinChances(prestige = activePlanet === "prestige") {
-    return getWorldConfig(prestige).skinChances;
 }
 
 function getLevelObstacleIndices(level: Level) {
@@ -3865,7 +3920,7 @@ function getLevelEnemyIndices(level: Level) {
  * renders as an accidentally empty stretch. Workshop previews stay untouched
  * so creators can still start from a true blank base plate. */
 function fillLevelGaps(levelLength: number, obstacleIndices: number[], occupiedIndices: number[]) {
-    if (isLevelMakerPreview) return [...new Set(obstacleIndices)].sort((first, second) => first - second);
+    if (isLevelMakerPreview || levelMakerPreviewLevelIndex === currentLevel) return [...new Set(obstacleIndices)].sort((first, second) => first - second);
     const occupied = new Set(occupiedIndices.filter((index) => Number.isInteger(index) && index > 0 && index < levelLength));
     const filled = new Set(obstacleIndices.filter((index) => Number.isInteger(index) && index > 0 && index < levelLength));
     const anchors = [...occupied, ...filled].sort((first, second) => first - second);
@@ -3897,7 +3952,7 @@ function createLevelPowerups(level: Level, positions: { index: number; kind: Pow
     // Workshop routes are authored tile-by-tile. Do not add shared random
     // pickups to a blank base plate or to a playtest preview; only the
     // power-ups explicitly placed in the editor should appear there.
-    if (level.customId || isLevelMakerPreview) {
+    if (level.customId || isLevelMakerPreview || levelMakerPreviewLevelIndex === currentLevel) {
         return positions.map((powerup) => ({ x: 140 + powerup.index * TILE_WIDTH, y: 170, kind: powerup.kind, collected: false }));
     }
     const available = Array.from({ length: Math.max(0, level.length - 3) }, (_, offset) => offset + 2)
@@ -3954,7 +4009,9 @@ function buildLevel(levelIndex: number) {
         }))
         : [];
     levelObstacles = [...groundObstacles, ...airborneObstacles];
-    levelHazards = [...level.spikes.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 380, width: 76, height: 20, kind: "spikes" as const })), ...level.gravity.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 110, width: 115, height: 250, kind: "gravity" as const }))];
+    // Keep the spike hitbox over the playable floor (not below the ship's
+    // collision box) so spikes damage normal, secret, and prestige worlds.
+    levelHazards = [...level.spikes.map((index) => ({ x: 140 + index * TILE_WIDTH, y: FLOOR_Y + 30, width: 76, height: 30, kind: "spikes" as const })), ...level.gravity.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 110, width: 115, height: 250, kind: "gravity" as const }))];
     levelEnemies = enemyIndices.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 285, defeated: false }));
     const blockedPowerupTiles = [...obstacleIndices, ...enemyIndices, ...level.spikes, ...level.gravity];
     levelPowerups = createLevelPowerups(level, [...(level.powerups ?? [])], blockedPowerupTiles);
@@ -4289,11 +4346,12 @@ function showWinScreen() {
         document.body.replaceChildren(screen);
         return;
     }
+    const level = levels[currentLevel];
     localStorage.setItem(`orbit-level-claims-${currentLevel}`, String(levelAsteroids.length));
     localStorage.setItem(`orbit-level-complete-${currentLevel}`, "1");
     const previousBest = Number(localStorage.getItem(`orbit-best-${currentLevel}`) ?? "0");
     if (!previousBest || elapsedMilliseconds < previousBest) localStorage.setItem(`orbit-best-${currentLevel}`, String(elapsedMilliseconds));
-    const level = levels[currentLevel];
+    if (!level.secret && !level.prestige && elapsedMilliseconds <= goldenTimeLimitMs) localStorage.setItem(`orbit-golden-level-${currentLevel}`, "1");
     if (level.secret && level.secretId) localStorage.setItem(`orbit-secret-cooldown-${level.secretId}`, String(Date.now()));
     const nextLevel = getNextRouteIndex(currentLevel);
     if (nextLevel >= 0) localStorage.setItem(`orbit-level-${nextLevel}`, "1");
@@ -4312,9 +4370,24 @@ function showWinScreen() {
     const runStatus = document.createElement("p");
     runStatus.className = "menu-copy online-service-status";
     runStatus.setAttribute("role", "status");
-    runStatus.textContent = `Abilities used: ${usedAbilities.size ? [...usedAbilities].map(formatAbilityName).join(", ") : "None"}. Saving online score...`;
-    if (!level.secret) screen.append(runStatus);
-    void submitLeaderboardRun(runStatus, levels[currentLevel].name, Math.round(elapsedMilliseconds), [...usedAbilities]);
+    const runTime = Math.round(elapsedMilliseconds);
+    const runAbilities = [...usedAbilities];
+    const ownerCanChoose = currentOnlineUser?.role === "owner";
+    runStatus.textContent = ownerCanChoose
+        ? `Abilities used: ${runAbilities.length ? runAbilities.map(formatAbilityName).join(", ") : "None"}. This owner run is private until you choose to submit it.`
+        : `Abilities used: ${runAbilities.length ? runAbilities.map(formatAbilityName).join(", ") : "None"}. Saving online score...`;
+    if (!level.secret || ownerCanChoose) screen.append(runStatus);
+    if (ownerCanChoose) {
+        const submitOwnerRun = createMenuButton("Submit this run publicly", () => {
+            submitOwnerRun.disabled = true;
+            submitOwnerRun.textContent = "Submitting run...";
+            void submitLeaderboardRun(runStatus, levels[currentLevel].name, runTime, runAbilities, true);
+        });
+        submitOwnerRun.setAttribute("aria-label", "Submit this owner run to the public leaderboard");
+        screen.append(submitOwnerRun);
+    } else {
+        void submitLeaderboardRun(runStatus, levels[currentLevel].name, runTime, runAbilities);
+    }
     if (level.secret) {
         if (prestigeGateCleared) {
             const prestige = createMenuButton("Prestige", showPrestigeConfirmation);
@@ -4330,7 +4403,7 @@ function showWinScreen() {
     document.body.replaceChildren(screen);
 }
 
-async function submitLeaderboardRun(status: HTMLElement, levelName: string, timeMs: number, abilities: string[]) {
+async function submitLeaderboardRun(status: HTMLElement, levelName: string, timeMs: number, abilities: string[], submitOwner = false) {
     try {
         const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
         setOnlineUser(session.user);
@@ -4338,18 +4411,22 @@ async function submitLeaderboardRun(status: HTMLElement, levelName: string, time
             status.textContent = "Sign in or create an account to submit this run to the online leaderboard.";
             return;
         }
-        if (session.user.leaderboardOptIn === false) {
+        if (session.user.role === "owner" && !submitOwner) {
+            status.textContent = "Owner runs stay private unless you choose Submit this run publicly.";
+            return;
+        }
+        if (session.user.role === "player" && session.user.leaderboardOptIn === false) {
             status.textContent = "Leaderboard submission is turned off in your account settings. This run was not submitted.";
             return;
         }
         const result = await apiRequest<{ entry: OnlineLeaderboardEntry | null; improved: boolean; ignored?: boolean; reason?: string }>("/runs", {
             method: "POST",
-            body: JSON.stringify({ level: levelName, timeMs, abilities }),
+            body: JSON.stringify({ level: levelName, timeMs, abilities, ...(submitOwner ? { submitOwner: true } : {}) }),
         });
         if (result.ignored) {
             status.textContent = result.reason === "opted-out"
                 ? "Leaderboard submission is turned off in your account settings. This run was not submitted."
-                : "Owner and tester runs are not included on the public leaderboard.";
+                : "Owner and tester runs stay private unless the owner chooses to submit the run.";
             return;
         }
         if (!result.entry) throw new Error("The leaderboard did not return a saved run.");
@@ -4395,7 +4472,7 @@ function createGameShell() {
     header.append(hud);
     world.id = "game-world"; world.innerHTML = ""; world.style.width = `${levels[currentLevel].length * TILE_WIDTH + 1080}px`; world.classList.remove("flipped-route", "normal-area", "prestige-area", "reduced-effects"); world.classList.add(isFlippedPlanetLevel() ? "prestige-area" : "normal-area"); world.classList.toggle("reduced-effects", reducedEffects); world.setAttribute("aria-label", "Jacer game area");
     statusLabel.className = "status"; statusLabel.textContent = levels[currentLevel].briefing;
-    const game = document.createElement("section"); game.className = "game-frame"; game.append(world, statusLabel);
+    const game = document.createElement("section"); game.className = "game-frame"; game.append(world);
     game.addEventListener("pointermove", updateMouseAim);
     game.addEventListener("pointerdown", (event) => {
         if ((event.target as HTMLElement).closest(".controls, button")) return;
@@ -4403,7 +4480,10 @@ function createGameShell() {
         shoot();
     });
     ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => game.addEventListener(eventName, () => { shootingHeld = false; }));
-    document.body.append(header, game);
+    const gameFooter = document.createElement("div");
+    gameFooter.className = "game-footer";
+    gameFooter.append(statusLabel);
+    document.body.append(header, game, gameFooter);
 }
 
 function createPlayer() {
@@ -4627,12 +4707,12 @@ function exitSecretBossRoom() {
 
 function createControls() {
     const controls = document.createElement("nav"); controls.className = "controls"; controls.setAttribute("aria-label", "Game controls");
-    controls.append(createButton("left", "←", moveLeft), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createButton("right", "→", moveRight), createHoldButton("shoot", "✦", shoot), createButton("exit", "Exit", showLevelMenu));
+    controls.append(createButton("left", "←", moveLeft), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createButton("right", "→", moveRight), createHoldButton("shoot", "✦", shoot), createButton("restart", "↻", () => startGame(currentLevel)), createButton("exit", "Exit", showLevelMenu));
     const hint = document.createElement("small");
     hint.className = "controls-key-hint";
     hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · R restart`;
     controls.append(hint);
-    document.querySelector(".game-frame")?.append(controls);
+    document.querySelector(".game-footer")?.append(controls);
 }
 
 function createPowerupHud() {
@@ -4651,7 +4731,7 @@ function createPowerupHud() {
     return bar;
 }
 
-function createButton(className: string, text: string, action: () => void) { const button = document.createElement("button"); button.className = `control-button ${className}`; button.type = "button"; button.textContent = text; button.setAttribute("aria-label", className === "exit" ? "Exit to mission select" : className === "jump" ? "Jump" : className === "shoot" ? `Fire cannon (${formatControlBinding("shoot")})` : `Move ${className}`); button.addEventListener("click", () => action()); return button; }
+function createButton(className: string, text: string, action: () => void) { const button = document.createElement("button"); button.className = `control-button ${className}`; button.type = "button"; button.textContent = text; button.setAttribute("aria-label", className === "exit" ? "Back to mission select" : className === "restart" ? "Restart current level" : className === "jump" ? "Jump" : className === "shoot" ? `Fire cannon (${formatControlBinding("shoot")})` : `Move ${className}`); button.addEventListener("click", () => action()); return button; }
 function createHoldButton(className: string, text: string, action: () => void) { const button = createButton(className, text, action); button.addEventListener("pointerdown", () => { shootingHeld = true; }); ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => button.addEventListener(eventName, () => { shootingHeld = false; })); return button; }
 function handleKeyDown(event: KeyboardEvent) {
     const targetElement = event.target instanceof HTMLElement ? event.target : null;
@@ -4746,6 +4826,15 @@ function jump() {
     gameStarted = true; updatePlayerPosition();
 }
 
+function getPrestigeAttackMultiplier() {
+    const configured = gameConfig.enemyRules.prestigeAttackMultipliers;
+    const prestigeIndex = Math.max(0, prestigeLevel - 1);
+    const configuredValue = configured?.[Math.min(prestigeIndex, Math.max(0, (configured?.length ?? 1) - 1))];
+    return typeof configuredValue === "number" && Number.isFinite(configuredValue)
+        ? configuredValue
+        : gameConfig.enemyRules.prestigeAttackMultiplier;
+}
+
 function startGameLoop(timestamp = performance.now()) {
     if (!gameActive) return;
     animationFrame = requestAnimationFrame(startGameLoop);
@@ -4783,7 +4872,7 @@ function startGameLoop(timestamp = performance.now()) {
     if (shootingHeld || controlKeysFor("shoot").some((key) => pressedKeys.has(key))) shoot();
     const enemyRules = gameConfig.enemyRules;
     const enemyDifficulty = levels[currentLevel].prestige
-        ? enemyRules.prestigeAttackMultiplier
+        ? getPrestigeAttackMultiplier()
         : levels[currentLevel].secret ? enemyRules.secretAttackMultiplier : 1;
     const rapidAttackMultiplier = rapidTimer > 0 ? enemyRules.rapidAttackMultiplier : 1;
     const projectileInterval = reducedEffects
@@ -5193,6 +5282,14 @@ function getNormalRouteCount() { return levels.filter((level) => !level.secret &
 function getNormalRouteCompletionCount() { return levels.filter((level, index) => !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
 function getNormalCompletedLevelCount() { return levels.filter((level, index) => { const bestTime = Number(localStorage.getItem(`orbit-best-${index}`) ?? "0"); return !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1" && bestTime > 0 && bestTime <= goldenTimeLimitMs; }).length; }
 function getCompletedLevelCount() { return levels.filter((_, index) => localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
+function isProfileTitleUnlocked(title: ProfileTitle) {
+    if (localStorage.getItem("orbit-all-titles") === "1") return true;
+    const requirement = title.requirement ?? { type: "routes" as const, amount: title.routes };
+    if (requirement.type === "golden") return getNormalCompletedLevelCount() >= requirement.amount;
+    if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
+    if (requirement.type === "roulette") return localStorage.getItem(`orbit-title-unlock-${title.id}`) === "1";
+    return getCompletedLevelCount() >= requirement.amount;
+}
 function hasClearedPrestigeGate() { return localStorage.getItem("orbit-level-complete-prestige-gate") === "1" || levels.some((level, index) => level.secretId === "prestige-gate" && localStorage.getItem(`orbit-level-complete-${index}`) === "1"); }
 function getPrestigeGateAccessError() {
     const normalComplete = getNormalRouteCompletionCount();
@@ -5262,7 +5359,7 @@ function tryPrestige() {
         "orbit-trail",
     ].forEach((key) => localStorage.removeItem(key));
     Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-        .filter((key): key is string => Boolean(key && /^orbit-spin-(skin|trail|avatar)-\d+$/.test(key)))
+        .filter((key): key is string => Boolean(key && (/^orbit-spin-(skin|trail|avatar)-\d+$/.test(key) || /^orbit-golden-level-\d+$/.test(key))))
         .forEach((key) => localStorage.removeItem(key));
     refreshProgressStateFromStorage();
     return true;

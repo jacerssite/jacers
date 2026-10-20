@@ -1,18 +1,20 @@
-import type { ManagedUser, UpdateLogEntry } from "./types";
+import type { CodeReward, ManagedUser, PowerupKind, ProfileTitle, UpdateLogEntry } from "./types";
 import { apiRequest } from "./api";
 import { createTextButton } from "./ui";
 import { adjustIndentation } from "./text-editor";
+import { avatars, skins, trails } from "./cosmetics";
+import { powerupLabels } from "./game-config";
 
 // Keep these limits in sync with server/game-data.mjs.
 const MAX_UPDATE_LOG_BODY_LENGTH = 20_000;
 const MAX_UPDATE_LOG_BYTES = 200_000;
 
-export async function renderAdminCodeTools(container: HTMLElement) {
+export async function renderAdminCodeTools(container: HTMLElement, availableTitles: ProfileTitle[] = []) {
     container.replaceChildren();
     const heading = document.createElement("h2");
     heading.textContent = "Redemption codes";
     const description = document.createElement("p");
-    description.textContent = "Codes are shown once when created. Rewards are normal or special asteroids; limits are enforced on the server.";
+    description.textContent = "Codes are shown once when created. Rewards can grant asteroids, power-ups, cosmetics, or titles; limits are enforced on the server.";
     const status = document.createElement("small");
     status.setAttribute("role", "status");
     const form = document.createElement("form");
@@ -29,9 +31,14 @@ export async function renderAdminCodeTools(container: HTMLElement) {
     };
     const code = createInput("Code (leave blank to generate)", "text");
     code.maxLength = 40;
-    code.pattern = "[A-Za-z0-9-]{8,40}";
+    code.pattern = "[A-Za-z0-9!?@#$%&*+=._~()\\-]{8,40}";
+    code.title = "Use 8-40 letters, numbers, or ! ? @ # $ % & * + = . _ ~ ( ) -";
     const rewardType = document.createElement("select");
-    [["claims", "Normal asteroids"], ["specialClaims", "Special asteroids"]].forEach(([value, labelText]) => {
+    const rewardTypeOptions: [string, string][] = [
+        ["claims", "Normal asteroids"], ["specialClaims", "Special asteroids"], ["powerup", "Power-up"],
+        ["skin", "Skin"], ["trail", "Trail"], ["avatar", "Avatar"], ["title", "Profile title"],
+    ];
+    rewardTypeOptions.forEach(([value, labelText]) => {
         const option = document.createElement("option");
         option.value = value;
         option.textContent = labelText;
@@ -40,7 +47,50 @@ export async function renderAdminCodeTools(container: HTMLElement) {
     const typeLabel = document.createElement("label");
     typeLabel.append(document.createTextNode("Reward type"), rewardType);
     form.append(typeLabel);
-    const amount = createInput("Reward amount", "number", "50");
+    const rewardDetails = document.createElement("div");
+    rewardDetails.className = "reward-code-details";
+    form.append(rewardDetails);
+    const amount = document.createElement("input");
+    amount.type = "number";
+    amount.value = "50";
+    amount.min = "0";
+    amount.max = "1000000";
+    amount.step = "1";
+    const amountLabel = document.createElement("label");
+    amountLabel.append(document.createTextNode("Reward amount"), amount);
+    rewardDetails.append(amountLabel);
+    const detailSelect = document.createElement("select");
+    const detailLabel = document.createElement("label");
+    detailLabel.append(document.createTextNode("Reward"), detailSelect);
+    rewardDetails.append(detailLabel);
+    const titleId = document.createElement("input");
+    titleId.type = "text";
+    titleId.placeholder = "title-id";
+    titleId.maxLength = 40;
+    titleId.pattern = "[a-z0-9-]{1,40}";
+    const titleSuggestions = document.createElement("datalist");
+    titleSuggestions.id = "reward-title-suggestions";
+    availableTitles.forEach((title) => { const option = document.createElement("option"); option.value = title.id; option.label = title.name; titleSuggestions.append(option); });
+    titleId.setAttribute("list", titleSuggestions.id);
+    form.append(titleSuggestions);
+    const titleLabel = document.createElement("label");
+    titleLabel.append(document.createTextNode("Title ID"), titleId);
+    rewardDetails.append(titleLabel);
+    const redrawRewardDetails = () => {
+        const type = rewardType.value;
+        amountLabel.hidden = !["claims", "specialClaims", "powerup"].includes(type);
+        amount.max = type === "powerup" ? "1000" : "1000000";
+        amount.min = type === "powerup" ? "1" : "0";
+        detailLabel.hidden = !["powerup", "skin", "trail", "avatar"].includes(type);
+        titleLabel.hidden = type !== "title";
+        detailSelect.replaceChildren();
+        if (type === "powerup") Object.entries(powerupLabels).forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; detailSelect.append(option); });
+        if (type === "skin") skins.forEach((item, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `${item.name} (#${index})`; detailSelect.append(option); });
+        if (type === "trail") trails.forEach((item, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `${item.name} (#${index})`; detailSelect.append(option); });
+        if (type === "avatar") avatars.forEach((item, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `${item.name} (#${index})`; detailSelect.append(option); });
+    };
+    rewardType.addEventListener("change", redrawRewardDetails);
+    redrawRewardDetails();
     amount.min = "0";
     amount.max = "1000000";
     const maxUses = createInput("Total use limit", "number", "100");
@@ -65,7 +115,13 @@ export async function renderAdminCodeTools(container: HTMLElement) {
                 method: "POST",
                 body: JSON.stringify({
                     code: code.value.trim() || undefined,
-                    reward: { type: rewardType.value, amount: Number(amount.value) },
+                    reward: (() => {
+                        const type = rewardType.value as CodeReward["type"];
+                        if (type === "claims" || type === "specialClaims") return { type, amount: Number(amount.value) } satisfies CodeReward;
+                        if (type === "powerup") return { type, kind: detailSelect.value as PowerupKind, amount: Math.max(1, Number(amount.value)) } satisfies CodeReward;
+                        if (type === "title") return { type, titleId: titleId.value.trim().toLowerCase() } satisfies CodeReward;
+                        return { type: type as "skin" | "trail" | "avatar", index: Number(detailSelect.value) } satisfies CodeReward;
+                    })(),
                     maxUses: Number(maxUses.value),
                     perPlayerLimit: Number(perPlayerLimit.value),
                     expiresAt: expiresAt.value ? new Date(expiresAt.value).toISOString() : undefined,
@@ -82,13 +138,15 @@ export async function renderAdminCodeTools(container: HTMLElement) {
     });
     const refreshCodes = async () => {
         try {
-            const response = await apiRequest<{ codes: { id: string; maxUses: number; perPlayerLimit: number; uses: number; reward: { type: string; amount: number }; enabled: boolean; expiresAt: string | null }[] }>("/admin/codes");
+            const response = await apiRequest<{ codes: { id: string; maxUses: number; perPlayerLimit: number; uses: number; reward: CodeReward | number; enabled: boolean; expiresAt: string | null }[] }>("/admin/codes");
             history.replaceChildren();
             response.codes.forEach((entry) => {
                 const row = document.createElement("article");
                 row.className = "tester-custom-level-row";
                 const label = document.createElement("span");
-                label.textContent = `${entry.reward.amount} ${entry.reward.type === "specialClaims" ? "special" : "normal"} asteroids / ${entry.uses}/${entry.maxUses} uses / ${entry.enabled ? "enabled" : "disabled"}${entry.expiresAt ? ` / expires ${new Date(entry.expiresAt).toLocaleString()}` : ""}`;
+                const reward: CodeReward = typeof entry.reward === "number" ? { type: "claims", amount: entry.reward } : entry.reward;
+                const rewardText = reward.type === "claims" ? `${reward.amount} normal asteroids` : reward.type === "specialClaims" ? `${reward.amount} special asteroids` : reward.type === "powerup" ? `${reward.amount} ${powerupLabels[reward.kind] ?? reward.kind}` : reward.type === "title" ? `title ${reward.titleId}` : `${reward.type} #${(reward as Extract<CodeReward, { type: "skin" | "trail" | "avatar" }>).index}`;
+                label.textContent = `${rewardText} / ${entry.uses}/${entry.maxUses} uses / ${entry.enabled ? "enabled" : "disabled"}${entry.expiresAt ? ` / expires ${new Date(entry.expiresAt).toLocaleString()}` : ""}`;
                 row.append(label);
                 if (entry.enabled) {
                     const disable = createTextButton("Turn off", async () => {

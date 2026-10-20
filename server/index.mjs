@@ -43,9 +43,9 @@ const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
 const presenceActiveWindowMs = 90 * 1000;
 const recoveryLockMs = 24 * 60 * 60 * 1000;
 const defaultRouletteTiers = [
-  { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
-  { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
-  { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
+  { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 0 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
+  { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 0 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
+  { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18, title: 0 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
 ];
 const isVercel = Boolean(process.env.VERCEL);
 const databaseUrl = getMongoDatabaseConnectionString();
@@ -160,9 +160,20 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
     return value;
   };
   const completedRouteCount = completedRoutes.length;
+  const goldenRouteCount = Object.keys(progress).filter((key) => key.startsWith("orbit-golden-level-") && progress[key] === "1").length;
+  const prestigeLevel = readCount("orbit-prestige");
   const selectedTitle = equippedValue("orbit-title");
   const allTitlesGranted = (role === "owner" || role === "tester") && progress["orbit-all-titles"] === "1";
-  const title = profileTitles.find((candidate) => candidate.id === selectedTitle && (allTitlesGranted || completedRouteCount >= candidate.routes))?.name ?? "";
+  const title = profileTitles.find((candidate) => {
+    if (candidate.id !== selectedTitle) return false;
+    if (allTitlesGranted) return true;
+    if (progress[`orbit-title-unlock-${candidate.id}`] === "1") return true;
+    const requirement = candidate.requirement ?? { type: "routes", amount: candidate.routes };
+    if (requirement.type === "golden") return goldenRouteCount >= requirement.amount;
+    if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
+    if (requirement.type === "roulette") return false;
+    return completedRouteCount >= requirement.amount;
+  })?.name ?? "";
   const equippedIndex = (key) => {
     const value = equippedValue(key);
     const index = value === null ? 0 : Number(value);
@@ -174,7 +185,7 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
     roleBadge: role === "tester" ? "tester" : "player",
     asteroids: readCount("orbit-claims"),
     specialAsteroids: readCount("orbit-special-claims"),
-    prestige: readCount("orbit-prestige"),
+    prestige: prestigeLevel,
     routesCleared: completedRouteCount,
     shipColor: equippedValue("orbit-ship-color") ?? "#ed7657",
     avatar: equippedIndex("orbit-avatar"),
@@ -780,10 +791,14 @@ app.get("/api/players/:id", async (req, res, next) => {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid player id." });
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
-      { _id: new ObjectId(req.params.id), role: { $in: ["player", "tester"] }, banned: { $ne: true } },
+      { _id: new ObjectId(req.params.id), role: { $in: ["player", "tester", "owner"] }, banned: { $ne: true } },
       { projection: { username: 1, role: 1, appearOffline: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Player not found." });
+    if (user.role === "owner") {
+      const publicEntry = await db.collection("leaderboard_entries").findOne({ userId: user._id, public: true }, { projection: { _id: 1 } });
+      if (!publicEntry) return res.status(404).json({ error: "Player not found." });
+    }
     const saved = await db.collection("player_progress").findOne(
       { _id: user._id },
       { projection: { data: 1 } },
@@ -1448,15 +1463,16 @@ app.get("/api/leaderboard", async (req, res, next) => {
       { $sort: { timeMs: 1, achievedAt: 1, _id: 1 } },
       { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "profile" } },
       { $unwind: "$profile" },
-      { $match: { "profile.role": "player", "profile.banned": { $ne: true } } },
+      { $match: { "profile.banned": { $ne: true }, $or: [{ "profile.role": "player" }, { "profile.role": "owner", public: true }] } },
       { $limit: 100 },
-      { $project: { _id: 1, userId: 1, username: "$profile.username", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
+      { $project: { _id: 1, userId: 1, username: "$profile.username", role: "$profile.role", levelName: 1, timeMs: 1, abilities: 1, achievedAt: 1 } },
     ]).toArray();
     res.json({
       entries: entries.map((entry) => ({
         id: entry._id.toHexString(),
         userId: entry.userId.toHexString(),
         username: entry.username ?? "Unknown pilot",
+        role: entry.role,
         level: entry.levelName,
         timeMs: entry.timeMs,
         abilities: entry.abilities,
@@ -1505,8 +1521,9 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
   try {
     const run = req.body;
     if (!isValidRun(run)) return res.status(400).json({ error: "The run details are invalid." });
-    if (req.user.role !== "player") return res.json({ improved: false, ignored: true, entry: null });
-    if (req.user.leaderboardOptIn === false) return res.json({ improved: false, ignored: true, reason: "opted-out", entry: null });
+    const ownerSubmission = req.user.role === "owner" && req.body?.submitOwner === true;
+    if (req.user.role !== "player" && !ownerSubmission) return res.json({ improved: false, ignored: true, reason: "owner-private", entry: null });
+    if (req.user.role === "player" && req.user.leaderboardOptIn === false) return res.json({ improved: false, ignored: true, reason: "opted-out", entry: null });
     const levelName = run.level.trim();
     const db = await getDatabase();
     const entries = db.collection("leaderboard_entries");
@@ -1521,6 +1538,7 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
         timeMs: run.timeMs,
         abilities: run.abilities,
         achievedAt: new Date(),
+        ...(ownerSubmission ? { public: true } : {}),
       },
       $setOnInsert: { userId: req.user.id, levelName },
     };
@@ -1806,7 +1824,7 @@ app.post("/api/admin/codes", requireSameOrigin, requireOwner, async (req, res, n
     const maxUses = req.body?.maxUses ?? 1;
     const perPlayerLimit = req.body?.perPlayerLimit ?? 1;
     const reward = validateCodeReward(req.body?.reward ?? { type: "claims", amount: 0 });
-    if (!/^[A-Z0-9-]{8,40}$/.test(code)
+    if (!/^[A-Z0-9!?@#$%&*+=._~()\-]{8,40}$/.test(code)
       || !Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 1000000
       || !Number.isSafeInteger(perPlayerLimit) || perPlayerLimit < 1 || perPlayerLimit > 1000
       || !reward
@@ -1854,7 +1872,7 @@ app.delete("/api/admin/codes/:id", requireSameOrigin, requireOwner, async (req, 
 app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireUser, async (req, res, next) => {
   try {
     const code = typeof req.body?.code === "string" ? req.body.code.trim().toUpperCase() : "";
-    if (!/^[A-Z0-9-]{8,40}$/.test(code)) return res.status(400).json({ error: "Enter a valid redemption code." });
+    if (!/^[A-Z0-9!?@#$%&*+=._~()\-]{8,40}$/.test(code)) return res.status(400).json({ error: "Enter a valid redemption code." });
     const db = await getDatabase();
     const codes = db.collection("redemption_codes");
     const redemptions = db.collection("code_redemptions");
@@ -1933,15 +1951,24 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
         const savedProgress = await progressCollection.findOne({ _id: req.user.id }, { session });
         const progress = validatePlayerProgress(savedProgress?.data ?? {});
         if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
-        const rewardKey = reward.type === "claims" ? "orbit-claims" : "orbit-special-claims";
-        const currentValue = progress[rewardKey];
-        const currentAmount = typeof currentValue === "string" && /^\d{1,10}$/.test(currentValue)
-          ? Math.min(Number(currentValue), 100000000)
-          : 0;
-        const nextProgress = {
-          ...progress,
-          [rewardKey]: String(Math.min(100000000, currentAmount + reward.amount)),
-        };
+        const nextProgress = { ...progress };
+        if (reward.type === "claims" || reward.type === "specialClaims") {
+          const rewardKey = reward.type === "claims" ? "orbit-claims" : "orbit-special-claims";
+          const currentValue = progress[rewardKey];
+          const currentAmount = typeof currentValue === "string" && /^\d{1,10}$/.test(currentValue)
+            ? Math.min(Number(currentValue), 100000000)
+            : 0;
+          nextProgress[rewardKey] = String(Math.min(100000000, currentAmount + reward.amount));
+        } else if (reward.type === "powerup") {
+          let inventory = {};
+          try { inventory = JSON.parse(progress["orbit-powerups"] ?? "{}"); } catch { inventory = {}; }
+          const currentAmount = Number.isSafeInteger(inventory?.[reward.kind]) ? inventory[reward.kind] : 0;
+          nextProgress["orbit-powerups"] = JSON.stringify({ ...inventory, [reward.kind]: Math.min(100000, currentAmount + reward.amount) });
+        } else if (["skin", "trail", "avatar"].includes(reward.type)) {
+          nextProgress[`orbit-spin-${reward.type}-${reward.index}`] = "1";
+        } else if (reward.type === "title") {
+          nextProgress[`orbit-title-unlock-${reward.titleId}`] = "1";
+        }
         const progressResult = await writePlayerProgress(progressCollection, req.user.id, nextProgress, null, true, session);
         if (!progressResult.progress) {
           throw Object.assign(new Error("Player progress changed while redeeming the code. Try again."), { statusCode: 409 });

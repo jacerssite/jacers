@@ -59,9 +59,18 @@ export type ManagedUser = {
     recoveryLockState: "locked" | "clear";
     progress: Record<string, string>;
 };
-export type OnlineLeaderboardEntry = { id: string; userId: string; username: string; level: string; timeMs: number; abilities: string[]; achievedAt: string };
+export type OnlineLeaderboardEntry = { id: string; userId: string; username: string; role?: OnlineUser["role"]; level: string; timeMs: number; abilities: string[]; achievedAt: string };
 export type OnlinePlayerPresence = { username: string; role?: OnlineUser["role"] };
-export type ProfileTitle = { id: string; name: string; routes: number };
+export type ProfileTitleRequirement = {
+    type: "routes" | "golden" | "prestige" | "roulette";
+    amount: number;
+};
+export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement };
+export type CodeReward =
+    | { type: "claims" | "specialClaims"; amount: number }
+    | { type: "powerup"; kind: PowerupKind; amount: number }
+    | { type: "skin" | "trail" | "avatar"; index: number }
+    | { type: "title"; titleId: string };
 export type PublicPlayerProfile = {
     id: string;
     username: string;
@@ -79,7 +88,7 @@ export type PublicPlayerProfile = {
 };
 export type RouletteTier = {
     buyIn: 5 | 10 | 25;
-    chances: Record<"claims" | "specialClaims" | "color" | "trail" | "avatar", number>;
+    chances: Record<"claims" | "specialClaims" | "color" | "trail" | "avatar" | "title", number>;
     rewards: Record<"claims" | "specialClaims", readonly [number, number]>;
 };
 export type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
@@ -114,6 +123,8 @@ export type GameConfig = {
     enemyRules: {
         attackIntervalFrames: number;
         prestigeAttackMultiplier: number;
+        /** Optional per-prestige overrides; index 0 is prestige 1. */
+        prestigeAttackMultipliers?: number[];
         secretAttackMultiplier: number;
         rapidAttackMultiplier: number;
         projectileSpeed: number;

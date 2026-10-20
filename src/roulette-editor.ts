@@ -6,6 +6,7 @@ const chanceLabels = {
     color: "Ship color",
     trail: "Trail",
     avatar: "Avatar",
+    title: "Profile title",
 } as const;
 
 export function createRouletteFields(initial: RouletteTier[]) {
@@ -45,7 +46,7 @@ export function createRouletteFields(initial: RouletteTier[]) {
                 section.append(heading, grid);
             };
             addFields("Prize chances — total must be 100%", (Object.keys(chanceLabels) as (keyof typeof chanceLabels)[]).map((key) => ({
-                label: `${chanceLabels[key]} %`, key: `chance.${key}`, value: tier.chances[key], min: 0, max: 100,
+                label: `${chanceLabels[key]} %`, key: `chance.${key}`, value: tier.chances[key] ?? 0, min: 0, max: 100,
             })));
             addFields("Asteroid rewards", [
                 { label: "Normal minimum", key: "reward.claims.min", value: tier.rewards.claims[0], min: 1, max: 1000000 },
@@ -65,6 +66,7 @@ export function createRouletteFields(initial: RouletteTier[]) {
                 chances: {
                     claims: value("chance.claims"), specialClaims: value("chance.specialClaims"), color: value("chance.color"),
                     trail: value("chance.trail"), avatar: value("chance.avatar"),
+                    title: value("chance.title"),
                 },
                 rewards: {
                     claims: [value("reward.claims.min"), value("reward.claims.max")],

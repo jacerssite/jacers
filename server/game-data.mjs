@@ -12,11 +12,11 @@ export const RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
 export const POWERUP_KINDS = ["shield", "boost", "rapid", "cannon", "star"];
 export const USER_ROLES = ["owner", "tester", "player"];
 export const PROFILE_TITLE_MILESTONES = [
-  { id: "cadet", name: "Cadet", routes: 1 },
-  { id: "pathfinder", name: "Pathfinder", routes: 5 },
-  { id: "sector-ace", name: "Sector Ace", routes: 10 },
-  { id: "stellar-navigator", name: "Stellar Navigator", routes: 20 },
-  { id: "cosmic-legend", name: "Cosmic Legend", routes: 40 },
+  { id: "cadet", name: "Cadet", routes: 1, requirement: { type: "routes", amount: 1 } },
+  { id: "pathfinder", name: "Pathfinder", routes: 5, requirement: { type: "routes", amount: 5 } },
+  { id: "sector-ace", name: "Sector Ace", routes: 10, requirement: { type: "routes", amount: 10 } },
+  { id: "stellar-navigator", name: "Stellar Navigator", routes: 20, requirement: { type: "routes", amount: 20 } },
+  { id: "cosmic-legend", name: "Cosmic Legend", routes: 40, requirement: { type: "routes", amount: 40 } },
 ];
 export function validateProfileTitles(value) {
   if (!Array.isArray(value) || value.length > 100) return null;
@@ -28,8 +28,14 @@ export function validateProfileTitles(value) {
       || ids.has(entry.id)
       || typeof entry.name !== "string" || !entry.name.trim() || entry.name.trim().length > 50 || /[<>]/.test(entry.name)
       || !Number.isSafeInteger(entry.routes) || entry.routes < 0 || entry.routes > 100000) return null;
+    const requirement = entry.requirement ?? { type: "routes", amount: entry.routes };
+    if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)
+      || !["routes", "golden", "prestige", "roulette"].includes(requirement.type)
+      || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000) return null;
     ids.add(entry.id);
-    titles.push({ id: entry.id, name: entry.name.trim(), routes: entry.routes });
+    const normalized = { id: entry.id, name: entry.name.trim(), routes: entry.routes };
+    if (entry.requirement !== undefined) normalized.requirement = { type: requirement.type, amount: requirement.amount };
+    titles.push(normalized);
   }
   return titles;
 }
@@ -72,6 +78,7 @@ export const DEFAULT_GAME_CONFIG = {
   enemyRules: {
     attackIntervalFrames: 90,
     prestigeAttackMultiplier: 0.72,
+    prestigeAttackMultipliers: [0.72, 0.72, 0.72],
     secretAttackMultiplier: 0.84,
     rapidAttackMultiplier: 0.58,
     projectileSpeed: 2.6,
@@ -131,6 +138,11 @@ export function isValidGameConfig(value) {
     && enemies
     && isBoundedInteger(enemies.attackIntervalFrames, 15, 600)
     && Number.isFinite(enemies.prestigeAttackMultiplier) && enemies.prestigeAttackMultiplier >= 0.25 && enemies.prestigeAttackMultiplier <= 2
+    && (enemies.prestigeAttackMultipliers === undefined
+      || (Array.isArray(enemies.prestigeAttackMultipliers)
+        && enemies.prestigeAttackMultipliers.length >= 1
+        && enemies.prestigeAttackMultipliers.length <= 100
+        && enemies.prestigeAttackMultipliers.every((value) => Number.isFinite(value) && value >= 0.25 && value <= 2)))
     && Number.isFinite(enemies.secretAttackMultiplier) && enemies.secretAttackMultiplier >= 0.25 && enemies.secretAttackMultiplier <= 2
     && Number.isFinite(enemies.rapidAttackMultiplier) && enemies.rapidAttackMultiplier >= 0.25 && enemies.rapidAttackMultiplier <= 1
     && Number.isFinite(enemies.projectileSpeed) && enemies.projectileSpeed >= 0.5 && enemies.projectileSpeed <= 12
@@ -266,9 +278,9 @@ export function validatePlayerProgress(value) {
   return progress;
 }
 
-export function getEarnedProfileTitle(completedRouteCount, selectedTitle) {
+export function getEarnedProfileTitle(completedRouteCount, selectedTitle, titles = PROFILE_TITLE_MILESTONES) {
   if (!Number.isSafeInteger(completedRouteCount) || completedRouteCount < 0 || typeof selectedTitle !== "string") return "";
-  return PROFILE_TITLE_MILESTONES.find((title) => title.id === selectedTitle && completedRouteCount >= title.routes)?.name ?? "";
+  return titles.find((title) => title.id === selectedTitle && completedRouteCount >= (title.requirement?.type === "routes" ? title.requirement.amount : title.routes))?.name ?? "";
 }
 
 export function normalizeUsername(value) {
@@ -290,27 +302,39 @@ export function formatRecoveryCode(value) {
   return code ? code.match(/.{4}/g).join("-") : null;
 }
 
-/**
- * Redemption reward contract: { type: "claims" | "specialClaims", amount: integer }.
- */
+/** Redemption rewards may grant currency, power-ups, cosmetics, or a profile title. */
 export function validateCodeReward(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || !["claims", "specialClaims"].includes(value.type)
-    || !Number.isSafeInteger(value.amount) || value.amount < 0 || value.amount > 1000000) return null;
-  return { type: value.type, amount: value.amount };
+  if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.type !== "string") return null;
+  if (["claims", "specialClaims"].includes(value.type)) {
+    if (!Number.isSafeInteger(value.amount) || value.amount < 0 || value.amount > 1000000) return null;
+    return { type: value.type, amount: value.amount };
+  }
+  if (value.type === "powerup") {
+    if (!POWERUP_KINDS.includes(value.kind) || !Number.isSafeInteger(value.amount) || value.amount < 1 || value.amount > 1000) return null;
+    return { type: value.type, kind: value.kind, amount: value.amount };
+  }
+  if (["skin", "trail", "avatar"].includes(value.type)) {
+    if (!Number.isSafeInteger(value.index) || value.index < 0 || value.index > 500) return null;
+    return { type: value.type, index: value.index };
+  }
+  if (value.type === "title" && typeof value.titleId === "string" && /^[a-z0-9-]{1,40}$/.test(value.titleId)) {
+    return { type: value.type, titleId: value.titleId };
+  }
+  return null;
 }
 
 export function validateRouletteTiers(value) {
   if (!Array.isArray(value) || value.length !== 3) return null;
   const expectedBuyIns = [5, 10, 25];
-  const rewardTypes = ["claims", "specialClaims", "color", "trail", "avatar"];
+  const rewardTypes = ["claims", "specialClaims", "color", "trail", "avatar", "title"];
   const tiers = [];
   for (let index = 0; index < value.length; index++) {
     const tier = value[index];
+    const hasTitleChance = Boolean(tier?.chances && Object.prototype.hasOwnProperty.call(tier.chances, "title"));
     if (!tier || typeof tier !== "object" || Array.isArray(tier) || tier.buyIn !== expectedBuyIns[index]
       || !tier.chances || typeof tier.chances !== "object" || Array.isArray(tier.chances)
-      || !rewardTypes.every((type) => isBoundedInteger(tier.chances[type], 0, 100))
-      || rewardTypes.reduce((total, type) => total + tier.chances[type], 0) !== 100
+      || !rewardTypes.every((type) => isBoundedInteger(tier.chances[type] ?? (type === "title" ? 0 : undefined), 0, 100))
+      || rewardTypes.reduce((total, type) => total + (tier.chances[type] ?? 0), 0) !== 100
       || !tier.rewards || typeof tier.rewards !== "object" || Array.isArray(tier.rewards)) return null;
     const rewards = {};
     for (const type of ["claims", "specialClaims"]) {
@@ -320,9 +344,12 @@ export function validateRouletteTiers(value) {
         || !isBoundedInteger(range[1], range[0], 1000000)) return null;
       rewards[type] = [...range];
     }
+    const normalizedChances = Object.fromEntries(rewardTypes
+      .filter((type) => hasTitleChance || type !== "title")
+      .map((type) => [type, tier.chances[type] ?? 0]));
     tiers.push({
       buyIn: tier.buyIn,
-      chances: Object.fromEntries(rewardTypes.map((type) => [type, tier.chances[type]])),
+      chances: normalizedChances,
       rewards,
     });
   }
