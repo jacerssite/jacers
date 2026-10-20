@@ -69,6 +69,15 @@ export const DEFAULT_GAME_CONFIG = {
     maxUsesPerLevel: { shield: 99, boost: 99, rapid: 99, cannon: 99, star: 99 },
     maxPickupsPerLevel: { shield: 1, boost: 1, rapid: 1, cannon: 1, star: 1 },
   },
+  enemyRules: {
+    attackIntervalFrames: 90,
+    prestigeAttackMultiplier: 0.72,
+    secretAttackMultiplier: 0.84,
+    rapidAttackMultiplier: 0.58,
+    projectileSpeed: 2.6,
+    miniBossProjectileSpeed: 4.5,
+    bossProjectileSpeed: 4.2,
+  },
 };
 
 function isPercent(value) {
@@ -101,6 +110,7 @@ export function isValidGameConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const effects = value.powerupEffects;
   const limits = value.powerupRules;
+  const enemies = value.enemyRules;
   const validLimits = (candidate, maximum) => candidate && POWERUP_KINDS.every((kind) => isBoundedInteger(candidate[kind], 0, maximum));
   return isWorldConfig(value.normal)
     && isWorldConfig(value.prestige)
@@ -117,7 +127,15 @@ export function isValidGameConfig(value) {
     && typeof value.powerupRules.rainbowStarInvincible === "boolean"
     && typeof value.powerupRules.rainbowStarDefeatsEnemies === "boolean"
     && validLimits(limits.maxUsesPerLevel, 99)
-    && validLimits(limits.maxPickupsPerLevel, 20);
+    && validLimits(limits.maxPickupsPerLevel, 20)
+    && enemies
+    && isBoundedInteger(enemies.attackIntervalFrames, 15, 600)
+    && Number.isFinite(enemies.prestigeAttackMultiplier) && enemies.prestigeAttackMultiplier >= 0.25 && enemies.prestigeAttackMultiplier <= 2
+    && Number.isFinite(enemies.secretAttackMultiplier) && enemies.secretAttackMultiplier >= 0.25 && enemies.secretAttackMultiplier <= 2
+    && Number.isFinite(enemies.rapidAttackMultiplier) && enemies.rapidAttackMultiplier >= 0.25 && enemies.rapidAttackMultiplier <= 1
+    && Number.isFinite(enemies.projectileSpeed) && enemies.projectileSpeed >= 0.5 && enemies.projectileSpeed <= 12
+    && Number.isFinite(enemies.miniBossProjectileSpeed) && enemies.miniBossProjectileSpeed >= 0.5 && enemies.miniBossProjectileSpeed <= 16
+    && Number.isFinite(enemies.bossProjectileSpeed) && enemies.bossProjectileSpeed >= 0.5 && enemies.bossProjectileSpeed <= 16;
 }
 
 function parseTileList(value, length) {

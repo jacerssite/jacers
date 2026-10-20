@@ -213,16 +213,17 @@ export async function renderAdminMessageTools(container: HTMLElement) {
 export async function renderAdminUpdateLog(container: HTMLElement, entriesFromServer: UpdateLogEntry[], onSaved: (entries: UpdateLogEntry[]) => void) {
     container.replaceChildren();
     const heading = document.createElement("h2");
-    heading.textContent = "Credits update log";
+    heading.textContent = "Credits update log / edit entries";
     const description = document.createElement("p");
-    description.textContent = "Paste plain text with paragraphs, spaces, and tabs. Published entries appear in Credits for every player.";
+    description.textContent = "Edit any existing entry below, paste plain text with paragraphs, spaces, and tabs, then publish the changes for every player.";
     const form = document.createElement("form");
     form.className = "account-profile-form update-log-editor";
     const entries = document.createElement("section");
     entries.className = "update-log-editor-list";
     const status = document.createElement("small");
     status.setAttribute("role", "status");
-    let draft = entriesFromServer.map((entry) => ({ ...entry }));
+    let savedEntries = entriesFromServer.map((entry) => ({ ...entry }));
+    let draft = savedEntries.map((entry) => ({ ...entry }));
     const drawEntries = () => {
         entries.replaceChildren();
         draft.forEach((entry, index) => {
@@ -280,6 +281,12 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
                 }
             });
             editorActions.append(indent, outdent, tabOption);
+            const edit = createTextButton("Edit entry", () => {
+                title.focus();
+                status.textContent = `Editing update ${index + 1}. Publish the log when you are finished.`;
+            });
+            edit.setAttribute("aria-label", `Edit update ${index + 1}`);
+            editorActions.prepend(edit);
             const remove = createTextButton("Remove", () => {
                 if (!window.confirm(`Remove update ${index + 1} from the draft? You must publish to make this permanent.`)) return;
                 draft = readEntries().filter((_, entryIndex) => entryIndex !== index);
@@ -303,11 +310,16 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
         draft = [{ date: new Date().toISOString().slice(0, 10), title: "", body: "" }, ...readEntries()];
         drawEntries();
     });
+    const reset = createTextButton("Discard unsaved changes", () => {
+        draft = savedEntries.map((entry) => ({ ...entry }));
+        drawEntries();
+        status.textContent = "Unsaved update-log changes discarded.";
+    });
     const save = document.createElement("button");
     save.type = "submit";
     save.className = "menu-button";
     save.textContent = "Publish update log";
-    form.append(entries, add, save, status);
+    form.append(entries, add, reset, save, status);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const nextEntries = readEntries().map((entry) => ({ ...entry, title: entry.title.trim() }));
@@ -329,7 +341,8 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
                 body: requestBody,
             });
             onSaved(result.updateLog);
-            draft = result.updateLog.map((entry) => ({ ...entry }));
+            savedEntries = result.updateLog.map((entry) => ({ ...entry }));
+            draft = savedEntries.map((entry) => ({ ...entry }));
             drawEntries();
             status.textContent = "Credits update log published.";
         } catch (error) {

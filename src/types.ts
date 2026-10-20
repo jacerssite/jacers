@@ -41,7 +41,7 @@ export type Level = { name: string; briefing: string; length: number; asteroids:
 export type ControlAction = "left" | "right" | "jump" | "down" | "shoot";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
-export type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean; appearOffline?: boolean };
+export type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean };
 export type ManagedUser = {
     id: string;
     username: string;
@@ -110,6 +110,15 @@ export type GameConfig = {
         rainbowStarDefeatsEnemies: boolean;
         maxUsesPerLevel: Record<PowerupKind, number>;
         maxPickupsPerLevel: Record<PowerupKind, number>;
+    };
+    enemyRules: {
+        attackIntervalFrames: number;
+        prestigeAttackMultiplier: number;
+        secretAttackMultiplier: number;
+        rapidAttackMultiplier: number;
+        projectileSpeed: number;
+        miniBossProjectileSpeed: number;
+        bossProjectileSpeed: number;
     };
 };
 

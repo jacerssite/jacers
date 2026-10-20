@@ -304,10 +304,10 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1 } },
+    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1 } },
   );
   return user && !user.banned && USER_ROLES.includes(user.role)
-    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline) }
+    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false }
     : null;
 }
 
@@ -403,6 +403,7 @@ async function accountHandler(req, res, next, mode) {
           role: "player",
           banned: false,
           appearOffline: false,
+          leaderboardOptIn: true,
           createdAt: new Date(),
         });
         user = { _id: created.insertedId, username: username.display, role: "player" };
@@ -413,7 +414,7 @@ async function accountHandler(req, res, next, mode) {
       await createSession(user._id, res);
       noStore(res);
       return res.status(201).json({
-        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false },
+        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false, leaderboardOptIn: true },
         recoveryCode: code,
       });
     }
@@ -431,6 +432,7 @@ async function accountHandler(req, res, next, mode) {
         role: user.role,
         mustChangePassword: Boolean(user.mustChangePassword),
         appearOffline: Boolean(user.appearOffline),
+        leaderboardOptIn: user.leaderboardOptIn !== false,
       },
     });
   } catch (error) {
@@ -572,7 +574,7 @@ app.get("/api/auth/session", async (req, res, next) => {
     const user = await getAuthenticatedUser(req);
     res.json({
       user: user
-        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline }
+        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false }
         : null,
     });
   } catch (error) {
@@ -716,6 +718,23 @@ app.put("/api/account/presence", requireSameOrigin, requireUser, async (req, res
     if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
     noStore(res);
     res.json({ appearOffline: req.body.appearOffline });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/account/leaderboard-preference", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (typeof req.body?.leaderboardOptIn !== "boolean") {
+      return res.status(400).json({ error: "Choose whether your runs should be submitted to the online leaderboard." });
+    }
+    const result = await (await getDatabase()).collection("users").updateOne(
+      { _id: req.user.id, banned: { $ne: true } },
+      { $set: { leaderboardOptIn: req.body.leaderboardOptIn } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
+    noStore(res);
+    res.json({ leaderboardOptIn: req.body.leaderboardOptIn });
   } catch (error) {
     next(error);
   }
@@ -1341,7 +1360,7 @@ app.get("/api/game-config", async (_req, res, next) => {
 app.put("/api/game-config", requireSameOrigin, requireOwner, async (req, res, next) => {
   try {
     const { config } = req.body ?? {};
-    if (!isValidGameConfig(config)) return res.status(400).json({ error: "Game settings are invalid. Check percentage totals and power-up limits." });
+    if (!isValidGameConfig(config)) return res.status(400).json({ error: "Game settings are invalid. Check percentage totals, power-up limits, and enemy behavior values." });
     const db = await getDatabase();
     await saveSetting(db, "game_config", config, req.user.id);
     res.json({ config });
@@ -1487,6 +1506,7 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
     const run = req.body;
     if (!isValidRun(run)) return res.status(400).json({ error: "The run details are invalid." });
     if (req.user.role !== "player") return res.json({ improved: false, ignored: true, entry: null });
+    if (req.user.leaderboardOptIn === false) return res.json({ improved: false, ignored: true, reason: "opted-out", entry: null });
     const levelName = run.level.trim();
     const db = await getDatabase();
     const entries = db.collection("leaderboard_entries");

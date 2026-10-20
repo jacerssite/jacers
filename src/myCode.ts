@@ -383,7 +383,7 @@ function refreshProgressStateFromStorage() {
     const savedMusicVolume = Number(localStorage.getItem("orbit-music-volume") ?? "0.3");
     musicVolume = Number.isFinite(savedMusicVolume) && savedMusicVolume >= 0 && savedMusicVolume <= 1 ? savedMusicVolume : 0.3;
     musicMuted = localStorage.getItem("orbit-music-muted") === "true";
-    if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : musicVolume * 0.24);
+    if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : getMusicOutputGain());
     controlBindings = readControlBindings();
 }
 
@@ -740,7 +740,7 @@ function unlockMusic() {
         musicContext = new AudioContext();
         musicFilter = musicContext.createBiquadFilter();
         musicFilter.type = "lowpass";
-        musicFilter.frequency.value = 760;
+        musicFilter.frequency.value = 1500;
         musicFilter.Q.value = 0.45;
         musicGain = musicContext.createGain();
         musicGain.gain.value = 0;
@@ -751,14 +751,14 @@ function unlockMusic() {
             const voice = musicContext!.createGain();
             oscillator.type = index === 1 ? "triangle" : "sine";
             oscillator.frequency.value = frequency;
-            voice.gain.value = index === 0 ? 0.2 : 0.065;
+            voice.gain.value = index === 0 ? 0.24 : 0.08;
             oscillator.connect(voice);
             voice.connect(musicFilter!);
             oscillator.start();
             musicOscillators.push(oscillator);
         });
         void musicContext.resume().then(() => {
-            fadeMusicTo(musicMuted ? 0 : musicVolume * 0.24);
+            fadeMusicTo(musicMuted ? 0 : getMusicOutputGain());
             scheduleMusicStep(80);
         }).catch((error: unknown) => {
             console.error("Could not resume background music:", error);
@@ -772,13 +772,13 @@ function unlockMusic() {
     }
 }
 
-const MUSIC_STEP_MS = 460;
+const MUSIC_STEP_MS = 390;
 const MUSIC_PATTERNS: Record<MusicScene, readonly number[]> = {
-    menu: [0, 2, 4, 7, 9, 7, 4, 2],
-    normal: [0, 4, 7, 9, 12, 9, 7, 4],
-    prestige: [2, 4, 7, 9, 12, 9, 7, 4],
-    secret: [0, 2, 4, 7, 9, 12, 9, 7],
-    boss: [0, 2, 4, 7, 9, 7, 4, 2],
+    menu: [0, 2, 4, 7, 9, 7, 4, 2, 0, 4, 7, 9, 12, 9, 7, 4],
+    normal: [0, 4, 7, 9, 12, 9, 7, 4, 0, 4, 7, 12, 9, 7, 4, 2],
+    prestige: [2, 4, 7, 9, 12, 9, 7, 4, 2, 7, 9, 12, 14, 12, 9, 7],
+    secret: [0, 2, 4, 7, 9, 12, 9, 7, 0, 4, 7, 9, 12, 14, 12, 9],
+    boss: [0, 2, 4, 7, 9, 7, 4, 2, 0, 2, 7, 9, 7, 4, 2, 0],
 };
 
 function musicSceneRoot(scene: MusicScene) {
@@ -812,18 +812,39 @@ function playMusicStep() {
     const oscillator = context.createOscillator();
     const voice = context.createGain();
     const now = context.currentTime;
-    const duration = musicScene === "boss" ? 0.3 : 0.58;
+    const duration = musicScene === "boss" ? 0.28 : 0.46;
     oscillator.type = musicScene === "boss" ? "triangle" : musicStep % 4 === 0 ? "triangle" : "sine";
     oscillator.frequency.setValueAtTime(frequency, now);
     oscillator.detune.setValueAtTime(musicScene === "secret" ? 2 : 0, now);
     voice.gain.setValueAtTime(0.0001, now);
-    voice.gain.exponentialRampToValueAtTime(musicScene === "boss" ? 0.04 : 0.05, now + 0.04);
+    voice.gain.exponentialRampToValueAtTime(musicScene === "boss" ? 0.055 : 0.075, now + 0.035);
     voice.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     oscillator.connect(voice);
     voice.connect(filter);
     oscillator.start(now);
     oscillator.stop(now + duration + 0.03);
+    // A soft low pulse gives the melody a beat without turning the calm
+    // soundtrack into a harsh drum loop.
+    const pulse = context.createOscillator();
+    const pulseGain = context.createGain();
+    const isDownbeat = musicStep % 4 === 0;
+    pulse.type = "sine";
+    pulse.frequency.setValueAtTime(isDownbeat ? musicSceneRoot(musicScene) : musicSceneRoot(musicScene) * 1.5, now);
+    pulse.frequency.exponentialRampToValueAtTime(Math.max(35, musicSceneRoot(musicScene) * 0.5), now + 0.16);
+    pulseGain.gain.setValueAtTime(0.0001, now);
+    pulseGain.gain.exponentialRampToValueAtTime(isDownbeat ? 0.055 : 0.018, now + 0.012);
+    pulseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+    pulse.connect(pulseGain);
+    pulseGain.connect(filter);
+    pulse.start(now);
+    pulse.stop(now + 0.23);
     musicStep++;
+}
+
+function getMusicOutputGain() {
+    // A gentle curve makes the upper half of the settings slider clearly
+    // louder while keeping low-volume listening comfortable.
+    return Math.pow(Math.max(0, Math.min(1, musicVolume)), 0.82) * 0.52;
 }
 
 function fadeMusicTo(volume: number) {
@@ -838,7 +859,7 @@ function setMusicVolume(volume: number) {
     if (!Number.isFinite(volume)) return;
     musicVolume = Math.max(0, Math.min(1, volume));
     localStorage.setItem("orbit-music-volume", String(musicVolume));
-    if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : musicVolume * 0.24);
+    if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : getMusicOutputGain());
 }
 
 function setMusicMuted(muted: boolean) {
@@ -849,7 +870,7 @@ function setMusicMuted(muted: boolean) {
         fadeMusicTo(0);
     } else if (!musicUnlocked) unlockMusic();
     else {
-        fadeMusicTo(musicVolume * 0.24);
+        fadeMusicTo(getMusicOutputGain());
         scheduleMusicStep(80);
     }
 }
@@ -862,7 +883,7 @@ function setMusicScene(scene: MusicScene) {
             const oscillator = musicOscillators[index];
             if (oscillator) oscillator.frequency.setTargetAtTime(frequency, musicContext!.currentTime, 0.65);
         });
-        musicFilter?.frequency.setTargetAtTime(scene === "boss" ? 900 : scene === "secret" ? 820 : 760, musicContext.currentTime, 0.45);
+        musicFilter?.frequency.setTargetAtTime(scene === "boss" ? 1900 : scene === "secret" ? 1700 : 1500, musicContext.currentTime, 0.45);
     }
     scheduleMusicStep(120);
 }
@@ -1299,15 +1320,6 @@ function showSettings() {
         }
     });
     codeSection.append(codeForm);
-    // Planetary flip toggle for customization.
-    const flipRow = document.createElement("label");
-    flipRow.className = "setting-row";
-    flipRow.innerHTML = `<span><b>Show prestige planetary flip in hangar</b><small>Toggle to preview flipped planet avatars/skins.</small></span>`;
-    const flipInput = document.createElement("input");
-    flipInput.type = "checkbox";
-    flipInput.checked = localStorage.getItem("orbit-show-planetary-flip") === "1";
-    flipInput.addEventListener("change", () => { localStorage.setItem("orbit-show-planetary-flip", flipInput.checked ? "1" : "0"); });
-    flipRow.append(flipInput);
     const controlsSection = document.createElement("section");
     controlsSection.className = "custom-controls-settings";
     controlsSection.innerHTML = `<h2>Keyboard controls</h2><p>Choose a key for each action. Your bindings are saved on this device.</p>`;
@@ -1387,7 +1399,7 @@ function showSettings() {
     gameplayPanel.className = "player-settings-category";
     gameplayPanel.dataset.controlSection = "gameplay";
     gameplayPanel.hidden = true;
-    gameplayPanel.append(effectsRow, flipRow);
+    gameplayPanel.append(effectsRow);
 
     const audioPanel = document.createElement("section");
     audioPanel.className = "player-settings-category";
@@ -1408,7 +1420,7 @@ function showSettings() {
     controlsPanel.append(controlsSection);
 
     const sections: ControlSection[] = [
-        { id: "gameplay", title: "Gameplay", group: "Flight setup", description: "Adjust visual effects and how the prestige planet appears in your hangar.", panel: gameplayPanel },
+        { id: "gameplay", title: "Gameplay", group: "Flight setup", description: "Adjust visual effects for your flight.", panel: gameplayPanel },
         { id: "audio", title: "Audio", group: "Flight setup", description: "Turn the procedural soundtrack on or off and set its volume.", panel: audioPanel },
         { id: "controls", title: "Controls", group: "Flight setup", description: "Remap movement and combat actions to the keys that feel natural to you.", panel: controlsPanel },
         { id: "progress", title: "Progress & codes", group: "Pilot data", description: "Redeem rewards and review your best times without crowding the flight controls.", panel: progressPanel },
@@ -1668,6 +1680,40 @@ function showAccount(initialMessage = "") {
                 }
             });
             privacyRow.append(privacyInput);
+            let leaderboardRow: HTMLElement | null = null;
+            let leaderboardStatus: HTMLElement | null = null;
+            if (currentOnlineUser.role === "player") {
+                leaderboardRow = document.createElement("label");
+                leaderboardRow.className = "account-presence-setting";
+                leaderboardRow.innerHTML = `<span><b>Submit leaderboard runs</b><small>Choose whether completed runs can be saved to the public online leaderboard.</small></span>`;
+                const leaderboardInput = document.createElement("input");
+                leaderboardInput.type = "checkbox";
+                leaderboardInput.checked = currentOnlineUser.leaderboardOptIn !== false;
+                leaderboardInput.setAttribute("aria-label", "Submit leaderboard runs");
+                const status = document.createElement("small");
+                leaderboardStatus = status;
+                status.className = "presence-setting-status";
+                status.setAttribute("role", "status");
+                leaderboardInput.addEventListener("change", async () => {
+                    const previousValue = currentOnlineUser?.leaderboardOptIn !== false;
+                    leaderboardInput.disabled = true;
+                    status.textContent = "Saving leaderboard preference...";
+                    try {
+                        const result = await apiRequest<{ leaderboardOptIn: boolean }>("/account/leaderboard-preference", {
+                            method: "PUT",
+                            body: JSON.stringify({ leaderboardOptIn: leaderboardInput.checked }),
+                        });
+                        if (currentOnlineUser) setOnlineUser({ ...currentOnlineUser, leaderboardOptIn: result.leaderboardOptIn });
+                        status.textContent = result.leaderboardOptIn ? "Completed runs will be submitted." : "Completed runs will stay off the online leaderboard.";
+                    } catch (error) {
+                        leaderboardInput.checked = previousValue;
+                        status.textContent = error instanceof Error ? error.message : "Could not save leaderboard preference.";
+                    } finally {
+                        leaderboardInput.disabled = !currentOnlineUser;
+                    }
+                });
+                leaderboardRow.append(leaderboardInput);
+            }
             const allTitlesGranted = (currentOnlineUser.role === "owner" || currentOnlineUser.role === "tester") && localStorage.getItem("orbit-all-titles") === "1";
             const earnedTitles = allTitlesGranted ? profileTitles : profileTitles.filter((title) => getCompletedLevelCount() >= title.routes);
             const titleRow = document.createElement("label");
@@ -1705,7 +1751,7 @@ function showAccount(initialMessage = "") {
             saveProfile.className = "menu-button";
             saveProfile.type = "submit";
             saveProfile.textContent = "Save profile";
-            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, titleRow, titleStatus);
+            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
             profileForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 saveProfile.disabled = true;
@@ -3006,6 +3052,31 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         addLimit(`${powerupLabels[kind]} pickups per level`, "maxPickups", gameConfig.powerupRules.maxPickupsPerLevel[kind], 20);
         addLimit(`${powerupLabels[kind]} inventory uses per level`, "maxUses", gameConfig.powerupRules.maxUsesPerLevel[kind], 99);
     });
+    const enemySettings = document.createElement("section");
+    enemySettings.className = "tester-reward-settings tester-enemy-settings";
+    enemySettings.innerHTML = `<p class="setting-title">Enemy behavior</p><p class="menu-copy">Tune attack cadence and projectile speed. A higher interval means enemies fire less often; multipliers apply to prestige, secret, and Rapid Fire states.</p>`;
+    const addEnemyInput = (title: string, key: keyof GameConfig["enemyRules"], value: number, min: number, max: number, step = 1) => {
+        const label = document.createElement("label");
+        label.append(document.createTextNode(title));
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = String(min);
+        input.max = String(max);
+        input.step = String(step);
+        input.value = String(value);
+        input.dataset.enemyRule = key;
+        bindTesterSetting(input, `enemy.${key}`);
+        label.append(input);
+        enemySettings.append(label);
+    };
+    addEnemyInput("Base attack interval (frames)", "attackIntervalFrames", gameConfig.enemyRules.attackIntervalFrames, 15, 600);
+    addEnemyInput("Prestige attack speed multiplier", "prestigeAttackMultiplier", gameConfig.enemyRules.prestigeAttackMultiplier, 0.25, 2, 0.01);
+    addEnemyInput("Secret attack speed multiplier", "secretAttackMultiplier", gameConfig.enemyRules.secretAttackMultiplier, 0.25, 2, 0.01);
+    addEnemyInput("Rapid Fire attack speed multiplier", "rapidAttackMultiplier", gameConfig.enemyRules.rapidAttackMultiplier, 0.25, 1, 0.01);
+    addEnemyInput("Enemy projectile speed", "projectileSpeed", gameConfig.enemyRules.projectileSpeed, 0.5, 12, 0.1);
+    addEnemyInput("Mini-boss projectile speed", "miniBossProjectileSpeed", gameConfig.enemyRules.miniBossProjectileSpeed, 0.5, 16, 0.1);
+    addEnemyInput("Boss projectile speed", "bossProjectileSpeed", gameConfig.enemyRules.bossProjectileSpeed, 0.5, 16, 0.1);
+    effectSettings.append(enemySettings);
     form.append(effectSettings);
     const customizationTitle = document.createElement("p"); customizationTitle.className = "setting-title"; customizationTitle.textContent = "Customization unlocks"; form.append(customizationTitle);
     const unlocks = document.createElement("div"); unlocks.className = "tester-unlocks";
@@ -3314,6 +3385,20 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             nextConfig.powerupRules.maxPickupsPerLevel[kind] = readTesterSetting(`rule.maxPickups.${kind}`, nextConfig.powerupRules.maxPickupsPerLevel[kind]);
             nextConfig.powerupRules.maxUsesPerLevel[kind] = readTesterSetting(`rule.maxUses.${kind}`, nextConfig.powerupRules.maxUsesPerLevel[kind]);
         });
+        const enemyRules = nextConfig.enemyRules;
+        (Object.keys(enemyRules) as (keyof GameConfig["enemyRules"])[]).forEach((key) => {
+            const value = readTesterSetting(`enemy.${key}`, enemyRules[key]);
+            enemyRules[key] = value;
+        });
+        const enemyRuleValid = Number.isInteger(enemyRules.attackIntervalFrames) && enemyRules.attackIntervalFrames >= 15 && enemyRules.attackIntervalFrames <= 600
+            && [enemyRules.prestigeAttackMultiplier, enemyRules.secretAttackMultiplier].every((value) => Number.isFinite(value) && value >= 0.25 && value <= 2)
+            && Number.isFinite(enemyRules.rapidAttackMultiplier) && enemyRules.rapidAttackMultiplier >= 0.25 && enemyRules.rapidAttackMultiplier <= 1
+            && [enemyRules.projectileSpeed, enemyRules.miniBossProjectileSpeed, enemyRules.bossProjectileSpeed].every((value) => Number.isFinite(value) && value >= 0.5 && value <= 16);
+        if (!enemyRuleValid) {
+            selectSection("abilities");
+            setSaveStatus("Enemy behavior values are invalid. Check the allowed ranges and try again.", true);
+            return;
+        }
         setSaveStatus(isOwner ? "Saving shared settings..." : "Saving tester settings...");
         apply.disabled = true;
         try {
@@ -3361,7 +3446,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const roulettePanel = settingPanel("roulette", [rouletteSettings]);
     const sections: ControlSection[] = [
         { id: "rewards", title: "World chances & rewards", group: "Game settings", description: "Tune world drops, rarity chances, power-up spawns, and reward ranges separately for each world.", panel: settingPanel("rewards", [rewardSettings]) },
-        { id: "abilities", title: "Power-ups", group: "Game settings", description: "Set power-up strength and duration for both worlds.", panel: settingPanel("abilities", [effectSettings]) },
+        { id: "abilities", title: "Power-ups & enemies", group: "Game settings", description: "Set power-up strength, limits, and enemy attack behavior.", panel: settingPanel("abilities", [effectSettings]) },
         { id: "roulette", title: "Roulette & spinning", group: "Game settings", description: "Configure wheel buy-ins, spin prize chances, and asteroid rewards.", panel: roulettePanel },
         { id: "profile", title: "Resources", group: "Your test profile", description: "Adjust the progress and inventory on this device, not other players' accounts.", panel: settingPanel("profile", pilotFields) },
         { id: "cosmetics", title: "Cosmetics", group: "Your test profile", description: "Manage cosmetic unlocks for this device.", panel: settingPanel("cosmetics", [customizationTitle, unlocks, unlockEverySkin]) },
@@ -3510,7 +3595,8 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
     }
     const effects = config.powerupEffects;
     const rules = config.powerupRules;
-    if (!isRecord(rules) || !isRecord(rules.maxUsesPerLevel) || !isRecord(rules.maxPickupsPerLevel)) return false;
+    const enemies = config.enemyRules;
+    if (!isRecord(rules) || !isRecord(rules.maxUsesPerLevel) || !isRecord(rules.maxPickupsPerLevel) || !isRecord(enemies)) return false;
     return isRecord(effects)
         && isRecord(effects.shield) && Number.isFinite(effects.shield.charges)
         && isRecord(effects.boost) && Number.isFinite(effects.boost.durationSeconds) && Number.isFinite(effects.boost.movementMultiplier)
@@ -3521,7 +3607,11 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
         && typeof rules.rainbowStarInvincible === "boolean"
         && typeof rules.rainbowStarDefeatsEnemies === "boolean"
         && (Object.keys(powerupLabels) as PowerupKind[]).every((kind) => Number.isInteger(rules.maxUsesPerLevel[kind]) && rules.maxUsesPerLevel[kind] >= 0 && rules.maxUsesPerLevel[kind] <= 99)
-        && (Object.keys(powerupLabels) as PowerupKind[]).every((kind) => Number.isInteger(rules.maxPickupsPerLevel[kind]) && rules.maxPickupsPerLevel[kind] >= 0 && rules.maxPickupsPerLevel[kind] <= 20);
+        && (Object.keys(powerupLabels) as PowerupKind[]).every((kind) => Number.isInteger(rules.maxPickupsPerLevel[kind]) && rules.maxPickupsPerLevel[kind] >= 0 && rules.maxPickupsPerLevel[kind] <= 20)
+        && Number.isInteger(enemies.attackIntervalFrames) && enemies.attackIntervalFrames >= 15 && enemies.attackIntervalFrames <= 600
+        && [enemies.prestigeAttackMultiplier, enemies.secretAttackMultiplier].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.25 && value <= 2)
+        && typeof enemies.rapidAttackMultiplier === "number" && Number.isFinite(enemies.rapidAttackMultiplier) && enemies.rapidAttackMultiplier >= 0.25 && enemies.rapidAttackMultiplier <= 1
+        && [enemies.projectileSpeed, enemies.miniBossProjectileSpeed, enemies.bossProjectileSpeed].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.5 && value <= 16);
 }
 
 function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
@@ -3589,6 +3679,30 @@ function getLevelEnemyIndices(level: Level) {
         .sort((first, second) => first - second);
 }
 
+/** Add safe, low-profile cover to long authored gaps so a playable route never
+ * renders as an accidentally empty stretch. Workshop previews stay untouched
+ * so creators can still start from a true blank base plate. */
+function fillLevelGaps(levelLength: number, obstacleIndices: number[], occupiedIndices: number[]) {
+    if (isLevelMakerPreview) return [...new Set(obstacleIndices)].sort((first, second) => first - second);
+    const occupied = new Set(occupiedIndices.filter((index) => Number.isInteger(index) && index > 0 && index < levelLength));
+    const filled = new Set(obstacleIndices.filter((index) => Number.isInteger(index) && index > 0 && index < levelLength));
+    const anchors = [...occupied, ...filled].sort((first, second) => first - second);
+    let gapStart = 2;
+    const addGapFill = (gapEnd: number) => {
+        const gapLength = gapEnd - gapStart;
+        if (gapLength < 4) return;
+        for (let index = gapStart + 1; index < gapEnd; index += 3) {
+            if (!occupied.has(index)) filled.add(index);
+        }
+    };
+    anchors.forEach((anchor) => {
+        addGapFill(anchor);
+        gapStart = anchor;
+    });
+    addGapFill(levelLength - 2);
+    return [...filled].sort((first, second) => first - second);
+}
+
 function createLevelPowerups(level: Level, positions: { index: number; kind: PowerupKind }[], blockedTiles: number[]) {
     const worldConfig = gameConfig[level.prestige ? "prestige" : "normal"];
     const limits = gameConfig.powerupRules.maxPickupsPerLevel;
@@ -3598,6 +3712,12 @@ function createLevelPowerups(level: Level, positions: { index: number; kind: Pow
         return positionCounts[powerup.kind] <= limits[powerup.kind];
     });
     positions.splice(0, positions.length, ...cappedPositions);
+    // Workshop routes are authored tile-by-tile. Do not add shared random
+    // pickups to a blank base plate or to a playtest preview; only the
+    // power-ups explicitly placed in the editor should appear there.
+    if (level.customId || isLevelMakerPreview) {
+        return positions.map((powerup) => ({ x: 140 + powerup.index * TILE_WIDTH, y: 170, kind: powerup.kind, collected: false }));
+    }
     const available = Array.from({ length: Math.max(0, level.length - 3) }, (_, offset) => offset + 2)
         .filter((index) => !blockedTiles.includes(index) && !positions.some((powerup) => powerup.index === index));
     (["shield", "boost", "rapid", "cannon"] as const).forEach((kind) => {
@@ -3625,8 +3745,14 @@ function buildLevel(levelIndex: number) {
     const level = levels[levelIndex];
     const claimedAsteroids = getClaimedAsteroids(levelIndex);
     levelAsteroids = level.asteroids.map((index, asteroidIndex) => ({ x: 140 + index * TILE_WIDTH, y: 215 - (index % 2) * 55, claimed: claimedAsteroids.has(asteroidIndex), special: Boolean(level.secret) || (level.specialAsteroids ?? []).includes(index) }));
-    const obstacleIndices = getLevelObstacleIndices(level);
+    const authoredObstacleIndices = getLevelObstacleIndices(level);
     const enemyIndices = getLevelEnemyIndices(level);
+    const obstacleIndices = fillLevelGaps(level.length, authoredObstacleIndices, [
+        ...level.asteroids,
+        ...enemyIndices,
+        ...level.spikes,
+        ...level.gravity,
+    ]);
     const groundObstacles = obstacleIndices.map((index, wallIndex) => ({
         x: 140 + index * TILE_WIDTH,
         y: wallIndex % 2 ? 250 : 330,
@@ -3863,7 +3989,15 @@ function enterFlippedRoute() {
     };
     const validTile = (index: number) => Number.isInteger(index) && index > 0 && index < level.length - 1;
     const reflectY = (y: number, height: number) => FLIPPED_WORLD_HEIGHT - y - height;
-    const wallTiles = new Set([...new Set(route.walls)].filter(validTile));
+    const routeWallIndices = isLevelMakerPreview
+        ? [...new Set(route.walls)].filter(validTile)
+        : fillLevelGaps(level.length, [...new Set(route.walls)].filter(validTile), [
+            ...level.asteroids,
+            ...route.enemies,
+            ...route.spikes,
+            ...route.gravity,
+        ]);
+    const wallTiles = new Set(routeWallIndices);
     const routeEnemyTiles = getLevelEnemyIndices({ ...level, enemies: route.enemies }).filter(validTile);
     const routeWalls = [...wallTiles].map((index) => ({
         x: 140 + index * TILE_WIDTH,
@@ -4022,12 +4156,18 @@ async function submitLeaderboardRun(status: HTMLElement, levelName: string, time
             status.textContent = "Sign in or create an account to submit this run to the online leaderboard.";
             return;
         }
-        const result = await apiRequest<{ entry: OnlineLeaderboardEntry | null; improved: boolean; ignored?: boolean }>("/runs", {
+        if (session.user.leaderboardOptIn === false) {
+            status.textContent = "Leaderboard submission is turned off in your account settings. This run was not submitted.";
+            return;
+        }
+        const result = await apiRequest<{ entry: OnlineLeaderboardEntry | null; improved: boolean; ignored?: boolean; reason?: string }>("/runs", {
             method: "POST",
             body: JSON.stringify({ level: levelName, timeMs, abilities }),
         });
         if (result.ignored) {
-            status.textContent = "Owner and tester runs are not included on the public leaderboard.";
+            status.textContent = result.reason === "opted-out"
+                ? "Leaderboard submission is turned off in your account settings. This run was not submitted."
+                : "Owner and tester runs are not included on the public leaderboard.";
             return;
         }
         if (!result.entry) throw new Error("The leaderboard did not return a saved run.");
@@ -4459,8 +4599,14 @@ function startGameLoop(timestamp = performance.now()) {
         }
     }
     if (shootingHeld || controlKeysFor("shoot").some((key) => pressedKeys.has(key))) shoot();
-    const enemyDifficulty = levels[currentLevel].prestige ? 0.72 : levels[currentLevel].secret ? 0.84 : 1;
-    const projectileInterval = rapidTimer > 0 ? 52 : reducedEffects ? 120 : Math.round(90 * enemyDifficulty);
+    const enemyRules = gameConfig.enemyRules;
+    const enemyDifficulty = levels[currentLevel].prestige
+        ? enemyRules.prestigeAttackMultiplier
+        : levels[currentLevel].secret ? enemyRules.secretAttackMultiplier : 1;
+    const rapidAttackMultiplier = rapidTimer > 0 ? enemyRules.rapidAttackMultiplier : 1;
+    const projectileInterval = reducedEffects
+        ? Math.max(15, Math.round(enemyRules.attackIntervalFrames * 1.33))
+        : Math.max(15, Math.round(enemyRules.attackIntervalFrames * enemyDifficulty * rapidAttackMultiplier));
     if (projectileTimer >= projectileInterval) { projectileTimer -= projectileInterval; levelEnemies.forEach(fireProjectile); levelMiniBosses.forEach(fireMiniBossProjectile); if (boss && !boss.defeated) fireBossProjectile(); }
     trailMovementFrames = Math.max(0, trailMovementFrames - currentFrameScale);
     if (lastJumpDirection !== 0) { trailDirection = lastJumpDirection; trailActive = true; trailPositions = []; lastJumpDirection = 0; }
@@ -4527,10 +4673,10 @@ function fireProjectile(enemy: Enemy) {
     if (enemy.defeated) return;
     playSound("enemy");
     const startX = enemy.x + 18, startY = enemy.y + 25, directionX = playerX + 24 - startX, directionY = playerY + 28 - startY, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div");
-    element.className = "projectile"; world.append(element); projectiles.push({ x: startX, y: startY, vx: directionX / distance * 2.6, vy: directionY / distance * 2.6, element, owner: "enemy" });
+    element.className = "projectile"; world.append(element); projectiles.push({ x: startX, y: startY, vx: directionX / distance * gameConfig.enemyRules.projectileSpeed, vy: directionY / distance * gameConfig.enemyRules.projectileSpeed, element, owner: "enemy" });
 }
-function fireBossProjectile() { if (!boss) return; playSound("enemy"); const directionX = playerX + 24 - boss.x, directionY = playerY + 28 - boss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "boss-projectile"; world.append(element); projectiles.push({ x: boss.x, y: boss.y + 50, vx: directionX / distance * 4.2, vy: directionY / distance * 4.2, element, owner: "enemy" }); }
-function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) return; playSound("enemy"); const directionX = playerX + 24 - miniBoss.x, directionY = playerY + 28 - miniBoss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "mini-projectile"; world.append(element); projectiles.push({ x: miniBoss.x, y: miniBoss.y + 36, vx: directionX / distance * 4.5, vy: directionY / distance * 4.5, element, owner: "enemy" }); }
+function fireBossProjectile() { if (!boss) return; playSound("enemy"); const directionX = playerX + 24 - boss.x, directionY = playerY + 28 - boss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "boss-projectile"; world.append(element); projectiles.push({ x: boss.x, y: boss.y + 50, vx: directionX / distance * gameConfig.enemyRules.bossProjectileSpeed, vy: directionY / distance * gameConfig.enemyRules.bossProjectileSpeed, element, owner: "enemy" }); }
+function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) return; playSound("enemy"); const directionX = playerX + 24 - miniBoss.x, directionY = playerY + 28 - miniBoss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "mini-projectile"; world.append(element); projectiles.push({ x: miniBoss.x, y: miniBoss.y + 36, vx: directionX / distance * gameConfig.enemyRules.miniBossProjectileSpeed, vy: directionY / distance * gameConfig.enemyRules.miniBossProjectileSpeed, element, owner: "enemy" }); }
 function createTrail(visible = true) {
     const trail = trails[selectedTrail] ?? trails[0];
     if (trailElement.length === 0) {

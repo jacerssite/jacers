@@ -39,6 +39,15 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
         maxUsesPerLevel: { shield: 99, boost: 99, rapid: 99, cannon: 99, star: 99 },
         maxPickupsPerLevel: { shield: 1, boost: 1, rapid: 1, cannon: 1, star: 1 },
     },
+    enemyRules: {
+        attackIntervalFrames: 90,
+        prestigeAttackMultiplier: 0.72,
+        secretAttackMultiplier: 0.84,
+        rapidAttackMultiplier: 0.58,
+        projectileSpeed: 2.6,
+        miniBossProjectileSpeed: 4.5,
+        bossProjectileSpeed: 4.2,
+    },
 };
 export const DEFAULT_ROULETTE_TIERS: RouletteTier[] = [
     { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },

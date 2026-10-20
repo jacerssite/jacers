@@ -128,15 +128,66 @@ export function createLevelMaker(context: LevelMakerContext) {
         toolbar.append(prestigeToggle);
         const areaState = document.createElement("span"); areaState.className = "maker-area-state";
         const palette = document.createElement("nav"); palette.className = "maker-palette";
+        const paletteHint = document.createElement("p");
+        paletteHint.className = "maker-palette-hint";
+        paletteHint.textContent = "Empty base plate — add only the platforms, hazards, enemies, collectibles, and power-ups you want.";
+        palette.append(paletteHint);
         const tiles = ["empty", "wall", "block", "spike", "gravity", "portal", "asteroid", "special", "enemy", "miniBoss", "titan", "exitKey", "powerupShield", "powerupBoost", "powerupRapid", "powerupCannon", "powerupStar"];
         const powerupTileKinds: Record<string, PowerupKind> = { powerupShield: "shield", powerupBoost: "boost", powerupRapid: "rapid", powerupCannon: "cannon", powerupStar: "star" };
         const makerCellClass = (kind: string) => `maker-cell ${kind}${powerupTileKinds[kind] ? ` powerup ${powerupTileKinds[kind]}` : ""}`;
-        let selectedTile = "wall";
+        let selectedTile = "empty";
         let deleteMode = false;
         const history: { tiles: string[]; flippedTiles: string[] }[] = [];
         const tileLabels: Record<string, string> = { empty: "Erase", wall: "Platform", block: "Block", miniBoss: "Dark Knight", titan: "Titan", special: "Special asteroid", exitKey: "Exit key" };
         tileLabels.powerupShield = "Shield power-up"; tileLabels.powerupBoost = "Boost power-up"; tileLabels.powerupRapid = "Rapid power-up"; tileLabels.powerupCannon = "Cannon power-up"; tileLabels.powerupStar = "Rainbow Star";
-        tiles.forEach((tile) => { const button = createTextButton(tileLabels[tile] ?? tile, () => { selectedTile = tile; deleteMode = false; modeLabel.textContent = "BUILD MODE"; buildMode.classList.add("selected"); eraseMode.classList.remove("selected"); palette.querySelectorAll("button").forEach((item) => item.classList.toggle("selected", item.dataset.tile === tile)); }); button.dataset.tile = tile; button.classList.toggle("selected", tile === selectedTile); palette.append(button); });
+        const tileIcons: Record<string, string> = {
+            empty: "\u232b", wall: "\u25ac", block: "\u25c6", spike: "\u25b2", gravity: "\u2195", portal: "\u25c9",
+            asteroid: "\u2726", special: "\u2739", enemy: "\u2620", miniBoss: "\u265e", titan: "\u265b", exitKey: "\u26bf",
+            powerupShield: "\u25c7", powerupBoost: "\u00bb", powerupRapid: "\u26a1", powerupCannon: "\u2736", powerupStar: "\u2605",
+        };
+        const tileGroups: Record<string, string> = {
+            empty: "Base", wall: "Obstacles", block: "Obstacles", spike: "Obstacles", gravity: "Obstacles", portal: "Obstacles",
+            asteroid: "Collectibles", special: "Collectibles", enemy: "Enemies", miniBoss: "Enemies", titan: "Enemies", exitKey: "Collectibles",
+            powerupShield: "Power-ups", powerupBoost: "Power-ups", powerupRapid: "Power-ups", powerupCannon: "Power-ups", powerupStar: "Power-ups",
+        };
+        let activeGroup = "";
+        let group: HTMLElement | null = null;
+        tiles.forEach((tile) => {
+            const label = tileLabels[tile] ?? tile;
+            const groupName = tileGroups[tile] ?? "Objects";
+            if (groupName !== activeGroup) {
+                activeGroup = groupName;
+                group = document.createElement("div");
+                group.className = "maker-palette-group";
+                const groupTitle = document.createElement("span");
+                groupTitle.className = "maker-palette-group-title";
+                groupTitle.textContent = groupName;
+                group.append(groupTitle);
+                palette.append(group);
+            }
+            const button = createTextButton(label, () => {
+                selectedTile = tile;
+                deleteMode = false;
+                modeLabel.textContent = "BUILD MODE";
+                buildMode.classList.add("selected");
+                eraseMode.classList.remove("selected");
+                palette.querySelectorAll("button").forEach((item) => item.classList.toggle("selected", item.dataset.tile === tile));
+            });
+            button.dataset.tile = tile;
+            button.classList.add("maker-palette-button", `maker-palette-${tile.toLowerCase()}`);
+            button.classList.toggle("selected", tile === selectedTile);
+            button.title = label;
+            button.setAttribute("aria-label", `Select ${label} tool`);
+            const icon = document.createElement("span");
+            icon.className = "maker-palette-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.dataset.icon = tileIcons[tile] ?? tile.slice(0, 1).toUpperCase();
+            const text = document.createElement("span");
+            text.className = "maker-palette-label";
+            text.textContent = label;
+            button.replaceChildren(icon, text);
+            group?.append(button);
+        });
         const createCells = (target: HTMLElement, initial: string[] = [], prefix: string) => Array.from({ length: gridColumns * 6 }, (_, index) => {
             const cell = document.createElement("button");
             cell.type = "button";
@@ -246,7 +297,10 @@ export function createLevelMaker(context: LevelMakerContext) {
             // Some published routes use the default end-of-route boss and have no
             // explicit titan tile. Keep that metadata while still allowing an
             // explicit titan tile to define a custom boss position.
-            level.boss = Boolean(sourceLevel?.boss && sourceLevel.bossIndex === undefined);
+            // Built-in routes may intentionally use their default end boss,
+            // but a workshop route should stay empty unless the author adds a
+            // Titan tile. This lets an edited custom route remove its boss.
+            level.boss = Boolean(editingBuiltIn && sourceLevel?.boss && sourceLevel.bossIndex === undefined);
             delete level.bossIndex;
             delete level.flippedRoute;
             level.flip = level.prestige ? [] : undefined;

@@ -63,7 +63,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                 onlinePlayers.replaceChildren();
                 response.users.forEach((player) => {
                     const name = document.createElement("span");
-                    name.className = "online-player-name";
+                    name.className = `online-player-name ${player.role === "owner" ? "online-owner" : player.role === "tester" ? "online-tester" : ""}`;
                     const badge = getRoleBadge(player.role ?? "player");
                     name.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
                     onlinePlayers.append(name);

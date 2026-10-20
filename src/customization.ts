@@ -27,30 +27,14 @@ export function createCustomization(context: CustomizationContext) {
         const layout = document.createElement("div"); layout.className = "customization-layout";
         const panel = document.createElement("section"); panel.className = "settings-panel customization-panel";
         
-        // Planetary flip toggle for customization
-        const flipToggleRow = document.createElement("label");
-        flipToggleRow.className = "setting-row";
-        const showFlip = localStorage.getItem("orbit-show-planetary-flip") === "1";
-        flipToggleRow.innerHTML = `<span><b>Show prestige planetary flip</b><small>Preview prestige skins and trails. All normal and prestige avatars stay together below.</small></span>`;
-        const flipToggle = document.createElement("input");
-        flipToggle.type = "checkbox";
-        flipToggle.checked = showFlip;
-        flipToggle.addEventListener("change", () => { localStorage.setItem("orbit-show-planetary-flip", flipToggle.checked ? "1" : "0"); showCustomization(); });
-        flipToggleRow.append(flipToggle);
-        panel.append(flipToggleRow);
-        
         const { shipColor: selectedShipColor, avatar: selectedAvatar, skin: selectedSkin, trail: selectedTrail } = getLoadout();
         const preview = createShipPreview();
         
         const rarityOrder: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
         
         // Create arrays with original indices
-        const skinsWithIndex = showFlip 
-            ? skins.map((s, i) => ({ ...s, originalIndex: i })).filter(s => s.prestige)
-            : skins.map((s, i) => ({ ...s, originalIndex: i })).filter(s => !s.prestige);
-        const trailsWithIndex = showFlip
-            ? trails.map((t, i) => ({ ...t, originalIndex: i })).filter(t => t.prestige)
-            : trails.map((t, i) => ({ ...t, originalIndex: i })).filter(t => !t.prestige);
+        const skinsWithIndex = skins.map((s, i) => ({ ...s, originalIndex: i }));
+        const trailsWithIndex = trails.map((t, i) => ({ ...t, originalIndex: i }));
         // Keep the complete avatar catalog in one collection. Prestige avatars
         // can be won from the roulette wheel just like the normal collection,
         // so hiding them behind the planetary-flip preview made rewards look
@@ -62,15 +46,11 @@ export function createCustomization(context: CustomizationContext) {
                 const heading = document.createElement("p"); heading.className = "setting-title"; heading.textContent = title; target.append(heading);
             }
             const ordered = collection.map((item, index) => ({ item, index, rarity: getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
-            rarityOrder.forEach((rarity) => {
-                const groupItems = ordered.filter((entry) => entry.rarity === rarity);
-                if (!groupItems.length) return;
-                const group = document.createElement("section"); group.className = `rarity-group rarity-${rarity.toLowerCase()}`;
-                group.innerHTML = `<h2>${rarity}</h2>`;
-                const grid = document.createElement("div"); grid.className = gridClass;
-                groupItems.forEach(({ item, index }) => grid.append(createChoice(item, index, rarity)));
-                group.append(grid); target.append(group);
-            });
+            // Keep every rarity in one compact collection. Rarity remains visible
+            // on each item badge, but the large rarity panels are removed.
+            const grid = document.createElement("div"); grid.className = gridClass;
+            ordered.forEach(({ item, index, rarity }) => grid.append(createChoice(item, index, rarity)));
+            target.append(grid);
         };
         const colorOptions = getShipColorOptions(STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins);
         const appearance = document.createElement("section");
