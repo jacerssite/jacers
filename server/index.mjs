@@ -30,6 +30,7 @@ import {
   validateUpdateLog,
   validateWorkshopLevel,
   validateBuiltinLevelOverrides,
+  validatePortalAssignments,
 } from "./game-data.mjs";
 
 const app = express();
@@ -160,7 +161,8 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
   };
   const completedRouteCount = completedRoutes.length;
   const selectedTitle = equippedValue("orbit-title");
-  const title = profileTitles.find((candidate) => candidate.id === selectedTitle && completedRouteCount >= candidate.routes)?.name ?? "";
+  const allTitlesGranted = (role === "owner" || role === "tester") && progress["orbit-all-titles"] === "1";
+  const title = profileTitles.find((candidate) => candidate.id === selectedTitle && (allTitlesGranted || completedRouteCount >= candidate.routes))?.name ?? "";
   const equippedIndex = (key) => {
     const value = equippedValue(key);
     const index = value === null ? 0 : Number(value);
@@ -604,16 +606,16 @@ app.get("/api/presence", async (_req, res, next) => {
     const users = await db.collection("users")
       .find({
         _id: { $in: [...activeUserIds].map((id) => new ObjectId(id)) },
-        role: { $in: ["player", "tester"] },
+        role: { $in: ["player", "tester", "owner"] },
         banned: { $ne: true },
         appearOffline: { $ne: true },
       }, {
-        projection: { username: 1, usernameNormalized: 1 },
+        projection: { username: 1, usernameNormalized: 1, role: 1 },
       })
       .sort({ usernameNormalized: 1 })
       .toArray();
     res.json({
-      users: users.slice(0, 200).map((user) => ({ username: user.username })),
+      users: users.slice(0, 200).map((user) => ({ username: user.username, role: user.role })),
       truncated: users.length > 200,
     });
   } catch (error) {
@@ -1192,13 +1194,14 @@ app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async 
 app.get("/api/settings", async (_req, res, next) => {
   try {
     const db = await getDatabase();
-    const [golden, roulette, version, updateLog, profileTitles, builtinLevelOverrides] = await Promise.all([
+    const [golden, roulette, version, updateLog, profileTitles, builtinLevelOverrides, portalAssignments] = await Promise.all([
       db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }),
       db.collection("game_settings").findOne({ _id: "roulette_tiers" }),
       db.collection("game_settings").findOne({ _id: "app_version" }),
       db.collection("game_settings").findOne({ _id: "update_log" }),
       db.collection("game_settings").findOne({ _id: "profile_titles" }),
       db.collection("game_settings").findOne({ _id: "builtin_level_overrides" }),
+      db.collection("game_settings").findOne({ _id: "portal_assignments" }),
     ]);
     res.json({
       goldenTimeLimitMs: parseGoldenTimeLimit(golden?.value) ? golden.value : 60000,
@@ -1207,6 +1210,7 @@ app.get("/api/settings", async (_req, res, next) => {
       updateLog: validateUpdateLog(updateLog?.value) ?? [],
       profileTitles: validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES,
       builtinLevelOverrides: validateBuiltinLevelOverrides(builtinLevelOverrides?.value) ?? {},
+      portalAssignments: validatePortalAssignments(portalAssignments?.value) ?? {},
     });
   } catch (error) {
     next(error);
@@ -1292,6 +1296,18 @@ app.put("/api/settings/builtin-level-overrides", requireSameOrigin, requireOwner
     overrides[String(index)] = validatedLevel[String(index)];
     await saveSetting(db, "builtin_level_overrides", overrides, req.user.id);
     res.json({ level: validatedLevel[String(index)], builtinLevelOverrides: overrides });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/portal-assignments", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const assignments = validatePortalAssignments(req.body?.assignments);
+    if (!assignments) return res.status(400).json({ error: "Portal assignments are invalid." });
+    const db = await getDatabase();
+    await saveSetting(db, "portal_assignments", assignments, req.user.id);
+    res.json({ portalAssignments: assignments });
   } catch (error) {
     next(error);
   }

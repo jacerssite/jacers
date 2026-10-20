@@ -60,7 +60,7 @@ export type ManagedUser = {
     progress: Record<string, string>;
 };
 export type OnlineLeaderboardEntry = { id: string; userId: string; username: string; level: string; timeMs: number; abilities: string[]; achievedAt: string };
-export type OnlinePlayerPresence = { username: string };
+export type OnlinePlayerPresence = { username: string; role?: OnlineUser["role"] };
 export type ProfileTitle = { id: string; name: string; routes: number };
 export type PublicPlayerProfile = {
     id: string;
@@ -85,7 +85,7 @@ export type RouletteTier = {
 export type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
 export type UpdateLogEntry = { date: string; title: string; body: string };
 export type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
-export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level> };
+export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level>; portalAssignments?: Record<string, string> };
 export type WorldGameConfig = {
     rainbowStarChance: number;
     portalSpawnChance: number;
@@ -108,6 +108,8 @@ export type GameConfig = {
         oneActiveAtATime: boolean;
         rainbowStarInvincible: boolean;
         rainbowStarDefeatsEnemies: boolean;
+        maxUsesPerLevel: Record<PowerupKind, number>;
+        maxPickupsPerLevel: Record<PowerupKind, number>;
     };
 };
 

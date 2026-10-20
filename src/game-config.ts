@@ -36,6 +36,8 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
         oneActiveAtATime: false,
         rainbowStarInvincible: true,
         rainbowStarDefeatsEnemies: true,
+        maxUsesPerLevel: { shield: 99, boost: 99, rapid: 99, cannon: 99, star: 99 },
+        maxPickupsPerLevel: { shield: 1, boost: 1, rapid: 1, cannon: 1, star: 1 },
     },
 };
 export const DEFAULT_ROULETTE_TIERS: RouletteTier[] = [

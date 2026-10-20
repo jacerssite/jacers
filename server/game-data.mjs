@@ -66,6 +66,8 @@ export const DEFAULT_GAME_CONFIG = {
     oneActiveAtATime: false,
     rainbowStarInvincible: true,
     rainbowStarDefeatsEnemies: true,
+    maxUsesPerLevel: { shield: 99, boost: 99, rapid: 99, cannon: 99, star: 99 },
+    maxPickupsPerLevel: { shield: 1, boost: 1, rapid: 1, cannon: 1, star: 1 },
   },
 };
 
@@ -98,6 +100,8 @@ function isWorldConfig(value) {
 export function isValidGameConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const effects = value.powerupEffects;
+  const limits = value.powerupRules;
+  const validLimits = (candidate, maximum) => candidate && POWERUP_KINDS.every((kind) => isBoundedInteger(candidate[kind], 0, maximum));
   return isWorldConfig(value.normal)
     && isWorldConfig(value.prestige)
     && effects && isBoundedInteger(effects.shield?.charges, 1, 10)
@@ -111,7 +115,9 @@ export function isValidGameConfig(value) {
     && value.powerupRules
     && typeof value.powerupRules.oneActiveAtATime === "boolean"
     && typeof value.powerupRules.rainbowStarInvincible === "boolean"
-    && typeof value.powerupRules.rainbowStarDefeatsEnemies === "boolean";
+    && typeof value.powerupRules.rainbowStarDefeatsEnemies === "boolean"
+    && validLimits(limits.maxUsesPerLevel, 99)
+    && validLimits(limits.maxPickupsPerLevel, 20);
 }
 
 function parseTileList(value, length) {
@@ -207,6 +213,21 @@ export function validateBuiltinLevelOverrides(value) {
     overrides[index] = level;
   }
   return overrides;
+}
+
+const PORTAL_TARGET_IDS = new Set(["eclipse", "nebula", "archive", "stellar-sanctum", "quantum-depths", "infinity-spiral"]);
+
+export function validatePortalAssignments(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > PORTAL_TARGET_IDS.size) return null;
+  const assignments = {};
+  for (const [target, source] of entries) {
+    if (!PORTAL_TARGET_IDS.has(target)
+      || typeof source !== "string" || !source.trim() || source.trim().length > 120 || /[<>]/.test(source)) return null;
+    assignments[target] = source.trim();
+  }
+  return assignments;
 }
 
 export function validatePlayerProgress(value) {

@@ -29,7 +29,7 @@ let rouletteTiers: RouletteTier[] = structuredClone(DEFAULT_ROULETTE_TIERS);
 let updateLogEntries: UpdateLogEntry[] = [];
 let profileTitles: ProfileTitle[] = structuredClone(PROFILE_TITLES);
 let builtinLevelOverrides: Record<string, Level> = {};
-let selectedRouletteBuyIn: RouletteTier["buyIn"] = 5;
+let portalAssignments: Record<string, string> = {};
 let selectedRouletteSpinAmount = Math.max(1, Number(localStorage.getItem("orbit-roulette-spin-amount") ?? "5") || 5);
 const storedRouletteColorPreference = localStorage.getItem("orbit-roulette-color-preference");
 let selectedRouletteColorPreference: "green" | "blue" | "yellow" = storedRouletteColorPreference === "blue" || storedRouletteColorPreference === "yellow" ? storedRouletteColorPreference : "green";
@@ -130,6 +130,7 @@ let usedAbilities = new Set<string>();
 let lastJumpDirection = 0;
 let starPowerupActive = false;
 let starPowerupTimer = 0;
+let powerupUsesThisLevel: Record<PowerupKind, number> = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 };
 let starPowerupElement: HTMLElement | null = null;
 const pressedKeys = new Set<string>();
 const DEFAULT_CONTROL_BINDINGS: Record<ControlAction, string> = {
@@ -532,6 +533,9 @@ async function refreshOnlineState() {
             if (settings.builtinLevelOverrides && typeof settings.builtinLevelOverrides === "object" && !Array.isArray(settings.builtinLevelOverrides)) {
                 builtinLevelOverrides = Object.fromEntries(Object.entries(settings.builtinLevelOverrides).filter(([index, level]) => /^\d+$/.test(index) && level && typeof level === "object")) as Record<string, Level>;
             }
+            if (settings.portalAssignments && typeof settings.portalAssignments === "object" && !Array.isArray(settings.portalAssignments)) {
+                portalAssignments = Object.fromEntries(Object.entries(settings.portalAssignments).filter(([target, source]) => typeof target === "string" && typeof source === "string")) as Record<string, string>;
+            }
             applyBuiltinLevelOverrides();
         })(),
         (async () => {
@@ -593,39 +597,48 @@ function configurePortalDistribution() {
             level.secretPortals = undefined;
         }
     });
+    const portalTargets: Record<"normal" | "prestige", string[]> = {
+        normal: ["eclipse", "nebula", "archive"],
+        prestige: ["stellar-sanctum", "quantum-depths", "infinity-spiral"],
+    };
     const secretLevels = levels.map((level, index) => ({ level, index })).filter(({ level }) => level.secret && !level.customId && !level.localOnly);
     secretLevels.forEach(({ level, index }) => {
         if (!level.secretId) level.secretId = `secret-level-${index + 1}`;
         level.secretPortals = undefined;
     });
 
-    const sources = levels.filter((level) => !level.secret && !level.customId && !level.localOnly);
-    secretLevels.forEach(({ level }) => {
-        const secretId = level.secretId;
-        if (!secretId || isSecretPortalClaimed(secretId)) return;
-        const saved = readSecretPortalLocation(secretId);
-        const portalChance = getWorldConfig(Boolean(level.prestige)).portalSpawnChance;
-        // Roll every time the route distribution is rebuilt so an owner change
-        // to the spawn chance takes effect immediately, while preserving the
-        // chosen location whenever the portal does spawn.
-        if (Math.random() * 100 >= portalChance) return;
-        let source = saved ? sources.find((candidate) => candidate.name === saved.source) : undefined;
-        if (!source) {
-            const candidates = sources.filter((candidate) => Boolean(candidate.prestige) === Boolean(level.prestige));
-            source = candidates[Math.floor(Math.random() * candidates.length)];
-            if (!source) return;
-            const location = { source: source.name, index: getHiddenPortalIndex(source), y: getHiddenPortalY() };
-            localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify(location));
-        }
-        const location = readSecretPortalLocation(secretId);
-        if (!location) return;
-        const portal = {
-            id: `${secretId}-portal`,
-            index: location.index,
-            y: location.y,
-            secretId,
-        };
-        source.secretPortals = [...(source.secretPortals ?? []).filter((item) => item.secretId !== secretId), portal];
+    (['normal', 'prestige'] as const).forEach((world) => {
+        const isPrestige = world === "prestige";
+        const sources = levels.filter((candidate) => !candidate.secret && !candidate.customId && !candidate.localOnly && Boolean(candidate.prestige) === isPrestige);
+        const eligibleTargets = secretLevels.filter(({ level }) => Boolean(level.prestige) === isPrestige && portalTargets[world].includes(level.secretId ?? ""));
+        const usedSources = new Set<string>();
+        eligibleTargets.forEach(({ level }) => {
+            const secretId = level.secretId;
+            if (!secretId || isSecretPortalClaimed(secretId)) return;
+            const assignedSourceName = portalAssignments[secretId];
+            const saved = readSecretPortalLocation(secretId);
+            const portalChance = getWorldConfig(isPrestige).portalSpawnChance;
+            let source = assignedSourceName
+                ? sources.find((candidate) => candidate.name === assignedSourceName)
+                : saved ? sources.find((candidate) => candidate.name === saved.source) : undefined;
+            if (!source) {
+                if (Math.random() * 100 >= portalChance) return;
+                const candidates = sources.filter((candidate) => !usedSources.has(candidate.name));
+                source = candidates[Math.floor(Math.random() * candidates.length)];
+                if (!source) return;
+                localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify({ source: source.name, index: getHiddenPortalIndex(source), y: getHiddenPortalY() }));
+            }
+            const location = readSecretPortalLocation(secretId);
+            const assignedLocation = assignedSourceName && source
+                ? { source: source.name, index: getHiddenPortalIndex(source), y: getHiddenPortalY() }
+                : location;
+            if (!assignedLocation) return;
+            if (assignedSourceName) localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify(assignedLocation));
+            usedSources.add(source.name);
+            source.secretPortals = [...(source.secretPortals ?? []).filter((item) => item.secretId !== secretId), {
+                id: `${secretId}-portal`, index: assignedLocation.index, y: assignedLocation.y, secretId,
+            }];
+        });
     });
 }
 
@@ -727,18 +740,18 @@ function unlockMusic() {
         musicContext = new AudioContext();
         musicFilter = musicContext.createBiquadFilter();
         musicFilter.type = "lowpass";
-        musicFilter.frequency.value = 520;
-        musicFilter.Q.value = 0.7;
+        musicFilter.frequency.value = 760;
+        musicFilter.Q.value = 0.45;
         musicGain = musicContext.createGain();
         musicGain.gain.value = 0;
         musicFilter.connect(musicGain);
         musicGain.connect(musicContext.destination);
-        [55, 82.41, 110].forEach((frequency, index) => {
+        [65.41, 98, 130.81].forEach((frequency, index) => {
             const oscillator = musicContext!.createOscillator();
             const voice = musicContext!.createGain();
             oscillator.type = index === 1 ? "triangle" : "sine";
             oscillator.frequency.value = frequency;
-            voice.gain.value = index === 0 ? 0.36 : 0.12;
+            voice.gain.value = index === 0 ? 0.2 : 0.065;
             oscillator.connect(voice);
             voice.connect(musicFilter!);
             oscillator.start();
@@ -759,17 +772,17 @@ function unlockMusic() {
     }
 }
 
-const MUSIC_STEP_MS = 360;
+const MUSIC_STEP_MS = 460;
 const MUSIC_PATTERNS: Record<MusicScene, readonly number[]> = {
-    menu: [0, 3, 7, 10, 7, 3, 5, 7],
-    normal: [0, 2, 4, 7, 9, 7, 4, 2],
-    prestige: [0, 3, 6, 10, 12, 10, 6, 3],
-    secret: [0, 2, 5, 9, 12, 9, 5, 2],
-    boss: [0, 1, 3, 6, 8, 6, 3, 1],
+    menu: [0, 2, 4, 7, 9, 7, 4, 2],
+    normal: [0, 4, 7, 9, 12, 9, 7, 4],
+    prestige: [2, 4, 7, 9, 12, 9, 7, 4],
+    secret: [0, 2, 4, 7, 9, 12, 9, 7],
+    boss: [0, 2, 4, 7, 9, 7, 4, 2],
 };
 
 function musicSceneRoot(scene: MusicScene) {
-    return scene === "prestige" ? 46.25 : scene === "secret" ? 73.42 : scene === "boss" ? 58.27 : scene === "normal" ? 65.41 : 55;
+    return scene === "prestige" ? 73.42 : scene === "secret" ? 55 : scene === "boss" ? 49 : scene === "normal" ? 65.41 : 55;
 }
 
 function stopMusicSequence() {
@@ -799,12 +812,12 @@ function playMusicStep() {
     const oscillator = context.createOscillator();
     const voice = context.createGain();
     const now = context.currentTime;
-    const duration = musicScene === "boss" ? 0.22 : 0.46;
-    oscillator.type = musicScene === "boss" ? "square" : musicStep % 4 === 0 ? "triangle" : "sine";
+    const duration = musicScene === "boss" ? 0.3 : 0.58;
+    oscillator.type = musicScene === "boss" ? "triangle" : musicStep % 4 === 0 ? "triangle" : "sine";
     oscillator.frequency.setValueAtTime(frequency, now);
-    oscillator.detune.setValueAtTime(musicScene === "secret" ? 5 : -3, now);
+    oscillator.detune.setValueAtTime(musicScene === "secret" ? 2 : 0, now);
     voice.gain.setValueAtTime(0.0001, now);
-    voice.gain.exponentialRampToValueAtTime(musicScene === "boss" ? 0.055 : 0.075, now + 0.025);
+    voice.gain.exponentialRampToValueAtTime(musicScene === "boss" ? 0.04 : 0.05, now + 0.04);
     voice.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     oscillator.connect(voice);
     voice.connect(filter);
@@ -849,7 +862,7 @@ function setMusicScene(scene: MusicScene) {
             const oscillator = musicOscillators[index];
             if (oscillator) oscillator.frequency.setTargetAtTime(frequency, musicContext!.currentTime, 0.65);
         });
-        musicFilter?.frequency.setTargetAtTime(scene === "boss" ? 850 : scene === "secret" ? 680 : 520, musicContext.currentTime, 0.45);
+        musicFilter?.frequency.setTargetAtTime(scene === "boss" ? 900 : scene === "secret" ? 820 : 760, musicContext.currentTime, 0.45);
     }
     scheduleMusicStep(120);
 }
@@ -859,12 +872,12 @@ function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "rou
     try {
         const frequencies: Record<typeof kind, number> = {
             shoot: 420, enemy: 180, explode: 90, ability: 620, ui: 300,
-            roulette: 150, reward: 880, lose: 70,
+            roulette: 260, reward: 880, lose: 70,
         };
         const oscillator = musicContext.createOscillator();
         const gain = musicContext.createGain();
         const now = musicContext.currentTime;
-        oscillator.type = kind === "explode" || kind === "lose" ? "sawtooth" : kind === "reward" ? "triangle" : "square";
+        oscillator.type = kind === "explode" || kind === "lose" ? "sawtooth" : kind === "reward" || kind === "roulette" ? "triangle" : "square";
         oscillator.frequency.setValueAtTime(frequencies[kind], now);
         oscillator.frequency.exponentialRampToValueAtTime(Math.max(35, frequencies[kind] * (kind === "reward" ? 1.5 : 0.55)), now + (kind === "ui" ? 0.07 : 0.18));
         gain.gain.setValueAtTime(0.0001, now);
@@ -1655,7 +1668,8 @@ function showAccount(initialMessage = "") {
                 }
             });
             privacyRow.append(privacyInput);
-            const earnedTitles = profileTitles.filter((title) => getCompletedLevelCount() >= title.routes);
+            const allTitlesGranted = (currentOnlineUser.role === "owner" || currentOnlineUser.role === "tester") && localStorage.getItem("orbit-all-titles") === "1";
+            const earnedTitles = allTitlesGranted ? profileTitles : profileTitles.filter((title) => getCompletedLevelCount() >= title.routes);
             const titleRow = document.createElement("label");
             titleRow.className = "account-title-setting";
             titleRow.innerHTML = `<span><b>Pilot title</b><small>Earn titles by completing routes. Your chosen title appears on your public profile.</small></span>`;
@@ -1845,7 +1859,7 @@ function showAccount(initialMessage = "") {
                 const makeCode = document.createElement("button");
                 makeCode.className = "menu-button";
                 makeCode.type = "submit";
-                makeCode.textContent = "Make a new recovery code";
+                makeCode.textContent = "Generate / replace recovery code";
                 recoveryForm.append(currentPasswordLabel, makeCode, recoveryStatus);
                 recoveryForm.addEventListener("submit", async (event) => {
                     event.preventDefault();
@@ -1870,8 +1884,8 @@ function showAccount(initialMessage = "") {
                     .then((profile) => {
                         if (!recoverySection.isConnected) return;
                         recoveryStatus.textContent = profile.hasRecoveryCode
-                            ? `Recovery code set on ${profile.recoveryCodeCreatedAt ? new Date(profile.recoveryCodeCreatedAt).toLocaleDateString() : "an earlier date"}.`
-                            : "No recovery code yet. Make one now so you can get back into your account.";
+                            ? `Recovery code set on ${profile.recoveryCodeCreatedAt ? new Date(profile.recoveryCodeCreatedAt).toLocaleDateString() : "an earlier date"}. The existing code cannot be displayed again; generate a replacement if you lost it.`
+                            : "No recovery code yet. Generate one now so you can get back into your account.";
                     })
                     .catch((error: unknown) => {
                         if (recoverySection.isConnected) recoveryStatus.textContent = error instanceof Error ? error.message : "Could not load recovery-code status.";
@@ -2067,22 +2081,9 @@ function showShop() {
     wheelHub.textContent = "✦";
     const wheelTitle = document.createElement("b");
     wheelTitle.textContent = "ASTEROID ROLL";
-    const tierLabel = document.createElement("label");
-    tierLabel.className = "wheel-tier-label";
-    tierLabel.append(document.createTextNode("Buy-in"));
-    const tierSelect = document.createElement("select");
-    tierSelect.setAttribute("aria-label", "Roulette buy-in");
-    rouletteTiers.forEach((tier) => {
-        const option = document.createElement("option");
-        option.value = String(tier.buyIn);
-        option.textContent = `${tier.buyIn} special asteroids`;
-        option.selected = tier.buyIn === selectedRouletteBuyIn;
-        tierSelect.append(option);
-    });
-    tierLabel.append(tierSelect);
     const customSpinLabel = document.createElement("label");
     customSpinLabel.className = "wheel-tier-label custom-spin-label";
-    customSpinLabel.append(document.createTextNode("Special asteroids to spend (no cap)"));
+    customSpinLabel.append(document.createTextNode("Special asteroids to spend"));
     const customSpinAmount = document.createElement("input");
     customSpinAmount.type = "number";
     customSpinAmount.min = "1";
@@ -2116,8 +2117,7 @@ function showShop() {
     roll.type = "button";
     roll.textContent = "Spin";
     const drawWheel = () => {
-        const tier = rouletteTiers.find((item) => item.buyIn === selectedRouletteBuyIn) ?? rouletteTiers[0];
-        const amount = Math.max(1, Math.floor(Number(customSpinAmount.value) || tier.buyIn));
+        const amount = Math.max(1, Math.floor(Number(customSpinAmount.value) || 1));
         selectedRouletteSpinAmount = amount;
         currency.textContent = `NORMAL ${asteroidsClaimed}  /  SPECIAL ${specialAsteroids}`;
         const pocketCount = 37;
@@ -2147,12 +2147,6 @@ function showShop() {
             ? `The ${amount.toLocaleString()}-asteroid wheel is spinning...`
             : `Available: ${specialAsteroids} special asteroids. More spend increases your preferred reward odds.`;
     };
-    tierSelect.addEventListener("change", () => {
-        selectedRouletteBuyIn = Number(tierSelect.value) as RouletteTier["buyIn"];
-        selectedRouletteSpinAmount = selectedRouletteBuyIn;
-        customSpinAmount.value = String(selectedRouletteSpinAmount);
-        drawWheel();
-    });
     customSpinAmount.addEventListener("input", () => {
         const amount = Math.max(1, Math.floor(Number(customSpinAmount.value) || 1));
         selectedRouletteSpinAmount = amount;
@@ -2164,8 +2158,8 @@ function showShop() {
         localStorage.setItem("orbit-roulette-color-preference", selectedRouletteColorPreference);
     });
     roll.addEventListener("click", () => {
-        const tier = rouletteTiers.find((item) => item.buyIn === selectedRouletteBuyIn) ?? rouletteTiers[0];
-        const amount = Math.max(1, Math.floor(Number(customSpinAmount.value) || tier.buyIn));
+        const amount = Math.max(1, Math.floor(Number(customSpinAmount.value) || 1));
+        const tier = getRouletteTierForSpend(amount);
         const segments = getRouletteSegments(tier, amount, selectedRouletteColorPreference);
         if (specialAsteroids < amount || spinInProgress || !segments.length) return;
         spinInProgress = true;
@@ -2185,12 +2179,10 @@ function showShop() {
         const finalRotation = 6 * 360 + ((360 - midpoint) % 360);
         const startedAt = performance.now();
         const currentRotation = 0;
-        tierSelect.disabled = true;
         roll.disabled = true;
         wheel.classList.add("spinning");
         wheelStatus.textContent = `The ${amount.toLocaleString()}-asteroid wheel is spinning...`;
         drawWheel();
-        tierSelect.disabled = true;
         roll.disabled = true;
         let savedAccountError = "";
         if (currentOnlineUser) {
@@ -2199,6 +2191,7 @@ function showShop() {
                 savedAccountError = " It is saved on this device; account sync failed and will retry.";
             });
         }
+        let lastRouletteTick = startedAt;
         const animate = (now: number) => {
             if (!menu.isConnected) {
                 spinInProgress = false;
@@ -2214,6 +2207,10 @@ function showShop() {
                     : 2160 + (finalRotation - 2160) * (1 - (1 - (progress - cruiseEnd) / (1 - cruiseEnd)) ** 4);
             const nearMiss = progress > 0.9 ? Math.sin(((progress - 0.9) / 0.1) * Math.PI) * 8 : 0;
             wheelRing.style.transform = `rotate(${currentRotation + angle + nearMiss}deg)`;
+            if (progress < 1 && now - lastRouletteTick >= 130) {
+                playSound("roulette");
+                lastRouletteTick = now;
+            }
             if (progress < 1) {
                 requestAnimationFrame(animate);
                 return;
@@ -2222,7 +2219,6 @@ function showShop() {
             spinInProgress = false;
             wheel.classList.remove("spinning");
             playSound("reward");
-            tierSelect.disabled = false;
             drawWheel();
             const result = document.createElement("div");
             result.className = "spin-result";
@@ -2267,7 +2263,7 @@ function showShop() {
         };
         requestAnimationFrame(animate);
     });
-    wheel.append(wheelControls, wheelTitle, tierLabel, customSpinLabel, colorPreferenceLabel, collectionComplete, roll, wheelStatus);
+    wheel.append(wheelControls, wheelTitle, customSpinLabel, colorPreferenceLabel, collectionComplete, roll, wheelStatus);
     drawWheel();
     const cooldownReset = document.createElement("article");
     cooldownReset.className = "shop-card cooldown-reset-card";
@@ -2320,11 +2316,24 @@ function areRouletteCosmeticsComplete() {
         && !getAvailableRouletteCosmetics("avatar").length;
 }
 
-function chooseRouletteCosmetic<T>(candidates: T[], rarityFor: (candidate: T) => Rarity, tier: RouletteTier) {
+function getRouletteTierForSpend(spend: number): RouletteTier {
+    const ordered = [...rouletteTiers].sort((first, second) => first.buyIn - second.buyIn);
+    return [...ordered].reverse().find((tier) => spend >= tier.buyIn) ?? ordered[0] ?? DEFAULT_ROULETTE_TIERS[0];
+}
+
+function chooseRouletteCosmetic<T>(candidates: T[], rarityFor: (candidate: T) => Rarity, tier: RouletteTier, colorPreference?: "green" | "blue" | "yellow") {
     const tierBoost = tier.buyIn === 25 ? 2 : tier.buyIn === 10 ? 1 : 0;
     const weighted = candidates.map((candidate) => {
         const rarityIndex = RARITY_ORDER.indexOf(rarityFor(candidate));
-        return { candidate, weight: (0.55 ** rarityIndex) * (1 + tierBoost * rarityIndex * 0.3) };
+        const color = typeof candidate === "object" && candidate !== null && "color" in candidate
+            ? String((candidate as { color?: string }).color ?? "")
+            : typeof candidate === "object" && candidate !== null && "item" in candidate
+                ? String(((candidate as { item?: { color?: string } }).item?.color) ?? "")
+                : "";
+        const colorBoost = colorPreference && matchesRouletteColorPreference(color, colorPreference)
+            ? 1 + Math.max(0, rarityIndex) * 0.55
+            : 1;
+        return { candidate, weight: (0.55 ** rarityIndex) * (1 + tierBoost * rarityIndex * 0.3) * colorBoost };
     });
     let random = Math.random() * weighted.reduce((sum, entry) => sum + entry.weight, 0);
     return weighted.find((entry) => (random -= entry.weight) < 0)?.candidate ?? weighted[weighted.length - 1].candidate;
@@ -2389,7 +2398,7 @@ function getRouletteReward(type: keyof RouletteTier["chances"], tier: RouletteTi
         const candidates = getAvailableRouletteCosmetics("color");
         if (!candidates.length) return getRouletteReward("claims", tier, colorPreference);
         const preferred = candidates.filter(({ color }) => matchesRouletteColorPreference(color, colorPreference));
-        const chosen = chooseRouletteCosmetic(preferred.length ? preferred : candidates, () => getCosmeticRarity({ required: 30 }), tier);
+        const chosen = chooseRouletteCosmetic(preferred.length ? preferred : candidates, () => getCosmeticRarity({ required: 30 }), tier, colorPreference);
         unlockSpinCosmetic(type, chosen.index);
         const color = chosen.color;
         selectedShipColor = color;
@@ -2399,13 +2408,13 @@ function getRouletteReward(type: keyof RouletteTier["chances"], tier: RouletteTi
     if (type === "trail") {
         const candidates = getAvailableRouletteCosmetics("trail");
         if (!candidates.length) return getRouletteReward("claims", tier);
-        const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier);
+        const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier, colorPreference);
         unlockSpinCosmetic(type, chosen.index);
         return { title: `${chosen.item.name} trail`, description: "New trail unlocked. Equip it from Customization.", rarity: getCosmeticRarity(chosen.item), collectionComplete: false };
     }
     const candidates = getAvailableRouletteCosmetics("avatar");
     if (!candidates.length) return getRouletteReward("claims", tier);
-    const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier);
+    const chosen = chooseRouletteCosmetic(candidates, ({ item }) => getCosmeticRarity(item), tier, colorPreference);
     unlockSpinCosmetic(type, chosen.index);
     return {
         title: `${chosen.item.name} avatar`,
@@ -2597,12 +2606,6 @@ function showTesterLogin() {
     username.focus();
 }
 
-function createTesterRateField(title: string, input: HTMLInputElement) {
-    const field = document.createElement("label");
-    field.append(document.createTextNode(title), input);
-    return field;
-}
-
 function bindTesterSetting(input: HTMLInputElement, key: string, world?: "normal" | "prestige" | (() => "normal" | "prestige")) {
     const draftKey = () => {
         const currentWorld = typeof world === "function" ? world() : world;
@@ -2757,7 +2760,12 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             localStorage.setItem("orbit-title", grant.value);
             void syncAccountProgress("save", true).then(() => { status.textContent = "Selected title saved to your account."; }).catch((error: unknown) => { status.textContent = error instanceof Error ? error.message : "Could not sync title."; });
         });
-        list.append(add, save, grant, grantButton, status);
+        const grantAllButton = createTextButton("Grant all titles on my account", () => {
+            localStorage.setItem("orbit-all-titles", "1");
+            if (!localStorage.getItem("orbit-title") && profileTitles[0]) localStorage.setItem("orbit-title", profileTitles[0].id);
+            void syncAccountProgress("save", true).then(() => { status.textContent = "All titles are now available on your account."; }).catch((error: unknown) => { status.textContent = error instanceof Error ? error.message : "Could not sync title unlocks."; });
+        });
+        list.append(add, save, grant, grantButton, grantAllButton, status);
         titleManagement.append(heading, description, list);
     };
     drawTitleManagement();
@@ -2798,7 +2806,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     });
     const rewardSettings = document.createElement("section");
     rewardSettings.className = "tester-reward-settings";
-    rewardSettings.innerHTML = `<p class="setting-title">${selectedWorld === "prestige" ? "Prestige" : "Normal"} world percentages</p><p class="menu-copy">Each world has its own Rainbow Star chance and special-roll percentages. Rarity odds must total exactly 100%.</p>`;
+    rewardSettings.innerHTML = `<p class="setting-title">${selectedWorld === "prestige" ? "Prestige" : "Normal"} world percentages</p><p class="menu-copy">Configure portal, Rainbow Star, and power-up spawns for this world. Roulette rarity odds are managed in the Roulette tab.</p>`;
     const starChanceLabel = document.createElement("label");
     starChanceLabel.innerHTML = `<span>Rainbow Star chance per level (%)</span>`;
     const starChanceInput = document.createElement("input");
@@ -2823,46 +2831,26 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     bindTesterSetting(portalChanceInput, "portalSpawnChance", () => selectedWorld);
     portalChanceLabel.append(portalChanceInput);
     rewardSettings.append(portalChanceLabel);
-    const odds = selectedConfig.rarityOdds;
-    const rewards = selectedConfig.rewardRanges;
-    const skinChances = selectedConfig.skinChances;
+    // Keep the rarity values in the shared config without exposing the old
+    // rarity editor in this world-settings section. Roulette owns that UI.
+    const rarityCompatibility = document.createElement("div");
+    rarityCompatibility.hidden = true;
     RARITY_ORDER.forEach((rarity) => {
-        const rarityLabel = document.createElement("label");
-        rarityLabel.className = "tester-rarity-settings";
-        rarityLabel.innerHTML = `<b>${rarity}</b>`;
-        const rarityInputs = document.createElement("div");
-        rarityInputs.className = "tester-rarity-inputs";
         const oddsInput = document.createElement("input");
-        oddsInput.type = "number"; oddsInput.min = "0"; oddsInput.max = "100"; oddsInput.value = String(odds[rarity]);
-        oddsInput.step = "1";
-        oddsInput.setAttribute("aria-label", `${rarity} roll chance percent`);
-        oddsInput.dataset.rollOdds = rarity;
+        oddsInput.type = "number"; oddsInput.value = String(selectedConfig.rarityOdds[rarity]); oddsInput.dataset.rollOdds = rarity;
         bindTesterSetting(oddsInput, `rarityOdds.${rarity}`, () => selectedWorld);
         const minimumInput = document.createElement("input");
-        minimumInput.type = "number"; minimumInput.min = "0"; minimumInput.value = String(rewards[rarity][0]);
-        minimumInput.setAttribute("aria-label", `${rarity} minimum asteroid reward`);
-        minimumInput.dataset.rewardMin = rarity;
+        minimumInput.type = "number"; minimumInput.value = String(selectedConfig.rewardRanges[rarity][0]); minimumInput.dataset.rewardMin = rarity;
         bindTesterSetting(minimumInput, `rewardMin.${rarity}`, () => selectedWorld);
         const maximumInput = document.createElement("input");
-        maximumInput.type = "number"; maximumInput.min = "0"; maximumInput.value = String(rewards[rarity][1]);
-        maximumInput.setAttribute("aria-label", `${rarity} maximum asteroid reward`);
-        maximumInput.dataset.rewardMax = rarity;
+        maximumInput.type = "number"; maximumInput.value = String(selectedConfig.rewardRanges[rarity][1]); maximumInput.dataset.rewardMax = rarity;
         bindTesterSetting(maximumInput, `rewardMax.${rarity}`, () => selectedWorld);
-        const skinChanceInput = document.createElement("input");
-        skinChanceInput.type = "number"; skinChanceInput.min = "0"; skinChanceInput.max = "100"; skinChanceInput.value = String(skinChances[rarity]);
-        skinChanceInput.step = "1";
-        skinChanceInput.setAttribute("aria-label", `${rarity} skin chance percent`);
-        skinChanceInput.dataset.skinChance = rarity;
-        bindTesterSetting(skinChanceInput, `skinChance.${rarity}`, () => selectedWorld);
-        rarityInputs.append(
-            createTesterRateField("Roll %", oddsInput),
-            createTesterRateField("Min asteroids", minimumInput),
-            createTesterRateField("Max asteroids", maximumInput),
-            createTesterRateField("Skin %", skinChanceInput),
-        );
-        rarityLabel.append(rarityInputs);
-        rewardSettings.append(rarityLabel);
+        const skinInput = document.createElement("input");
+        skinInput.type = "number"; skinInput.value = String(selectedConfig.skinChances[rarity]); skinInput.dataset.skinChance = rarity;
+        bindTesterSetting(skinInput, `skinChance.${rarity}`, () => selectedWorld);
+        rarityCompatibility.append(oddsInput, minimumInput, maximumInput, skinInput);
     });
+    rewardSettings.append(rarityCompatibility);
     const spawnTitle = document.createElement("p");
     spawnTitle.className = "setting-title";
     spawnTitle.textContent = "Power-up chance per level";
@@ -2982,7 +2970,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     addEffectInput("Rapid Fire duration (seconds)", "rapid-duration", gameConfig.powerupEffects.rapid.durationSeconds, 1, 300);
     addEffectInput("Cannon duration (seconds, 0 = permanent)", "cannon-duration", gameConfig.powerupEffects.cannon.durationSeconds, 0, 300);
     addEffectInput("Rainbow Star duration (seconds)", "star-duration", gameConfig.powerupEffects.star.durationSeconds, 1, 300);
-    const addRuleToggle = (labelText: string, key: keyof GameConfig["powerupRules"]) => {
+    const addRuleToggle = (labelText: string, key: "oneActiveAtATime" | "rainbowStarInvincible" | "rainbowStarDefeatsEnemies") => {
         const label = document.createElement("label");
         label.append(document.createTextNode(labelText));
         const input = document.createElement("input");
@@ -2996,6 +2984,28 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     addRuleToggle("Allow only one active power-up", "oneActiveAtATime");
     addRuleToggle("Rainbow Star grants invincibility", "rainbowStarInvincible");
     addRuleToggle("Rainbow Star defeats enemies", "rainbowStarDefeatsEnemies");
+    const limitHeading = document.createElement("p");
+    limitHeading.className = "setting-title";
+    limitHeading.textContent = "Per-level power-up limits";
+    effectSettings.append(limitHeading);
+    (Object.keys(powerupLabels) as PowerupKind[]).forEach((kind) => {
+        const addLimit = (labelText: string, key: "maxPickups" | "maxUses", value: number, max: number) => {
+            const label = document.createElement("label");
+            label.append(document.createTextNode(labelText));
+            const input = document.createElement("input");
+            input.type = "number";
+            input.min = "0";
+            input.max = String(max);
+            input.step = "1";
+            input.value = String(value);
+            input.dataset.powerupLimit = `${key}.${kind}`;
+            bindTesterSetting(input, `rule.${key}.${kind}`);
+            label.append(input);
+            effectSettings.append(label);
+        };
+        addLimit(`${powerupLabels[kind]} pickups per level`, "maxPickups", gameConfig.powerupRules.maxPickupsPerLevel[kind], 20);
+        addLimit(`${powerupLabels[kind]} inventory uses per level`, "maxUses", gameConfig.powerupRules.maxUsesPerLevel[kind], 99);
+    });
     form.append(effectSettings);
     const customizationTitle = document.createElement("p"); customizationTitle.className = "setting-title"; customizationTitle.textContent = "Customization unlocks"; form.append(customizationTitle);
     const unlocks = document.createElement("div"); unlocks.className = "tester-unlocks";
@@ -3010,7 +3020,12 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         skins.forEach((_, index) => unlockSpinCosmetic("skin", index));
         unlocks.querySelector<HTMLInputElement>('input[data-unlock="skins"]')!.checked = true;
     });
-    form.append(unlockEverySkin);
+    const unlockAllTitles = createTextButton("Grant all profile titles", () => {
+        localStorage.setItem("orbit-all-titles", "1");
+        statusLabel.textContent = "All profile titles unlocked for this test account.";
+        if (currentOnlineUser) void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not sync title unlocks:", error));
+    });
+    form.append(unlockEverySkin, unlockAllTitles);
     const levelTitle = document.createElement("p");
     levelTitle.className = "setting-title";
     levelTitle.textContent = "Unlock levels";
@@ -3081,6 +3096,85 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         });
     });
     form.append(levelChoices);
+    let portalAssignmentPanel: HTMLElement | undefined;
+    if (isOwner) {
+        portalAssignmentPanel = document.createElement("section");
+        portalAssignmentPanel.className = "tester-reward-settings portal-assignment-settings";
+        const portalHeading = document.createElement("p");
+        portalHeading.className = "setting-title";
+        portalHeading.textContent = "Secret portal placement";
+        const portalDescription = document.createElement("p");
+        portalDescription.className = "menu-copy";
+        portalDescription.textContent = "Choose the normal or prestige level where each secret portal can appear. Empty assignments use automatic placement; portal spawn chance still applies to automatic portals.";
+        portalAssignmentPanel.append(portalHeading, portalDescription);
+        const portalTargets: Record<"normal" | "prestige", string[]> = {
+            normal: ["eclipse", "nebula", "archive"],
+            prestige: ["stellar-sanctum", "quantum-depths", "infinity-spiral"],
+        };
+        const portalTargetLabels: Record<string, string> = {
+            eclipse: "Eclipse Vault",
+            nebula: "Nebula Hollow",
+            archive: "Black Hole Archive",
+            "stellar-sanctum": "Stellar Sanctum",
+            "quantum-depths": "Quantum Depths",
+            "infinity-spiral": "Infinity Spiral",
+        };
+        (Object.entries(portalTargets) as ["normal" | "prestige", string[]][]).forEach(([world, targetIds]) => {
+            const group = document.createElement("div");
+            group.className = "portal-assignment-group";
+            const groupTitle = document.createElement("b");
+            groupTitle.textContent = `${world === "prestige" ? "Prestige" : "Normal"} secret portals`;
+            group.append(groupTitle);
+            const sourceLevels = levels.filter((level) => !level.secret && !level.customId && !level.localOnly && Boolean(level.prestige) === (world === "prestige"));
+            targetIds.forEach((targetId) => {
+                const label = document.createElement("label");
+                label.textContent = `${portalTargetLabels[targetId] ?? targetId} portal appears in`;
+                const select = document.createElement("select");
+                select.dataset.portalAssignment = targetId;
+                select.setAttribute("aria-label", `${portalTargetLabels[targetId] ?? targetId} portal source level`);
+                const automatic = document.createElement("option");
+                automatic.value = "";
+                automatic.textContent = "Automatic placement";
+                select.append(automatic);
+                sourceLevels.forEach((source) => {
+                    const option = document.createElement("option");
+                    option.value = source.name;
+                    option.textContent = source.name;
+                    select.append(option);
+                });
+                select.value = portalAssignments[targetId] ?? "";
+                label.append(select);
+                group.append(label);
+            });
+            portalAssignmentPanel!.append(group);
+        });
+        const portalStatus = document.createElement("small");
+        portalStatus.className = "portal-assignment-status";
+        portalStatus.setAttribute("role", "status");
+        const savePortalAssignments = createTextButton("Save portal placement", async () => {
+            const assignments: Record<string, string> = {};
+            portalAssignmentPanel!.querySelectorAll<HTMLSelectElement>("select[data-portal-assignment]").forEach((select) => {
+                if (select.value) assignments[select.dataset.portalAssignment!] = select.value;
+            });
+            savePortalAssignments.disabled = true;
+            portalStatus.textContent = "Saving portal placement for every player...";
+            try {
+                const response = await apiRequest<{ portalAssignments: Record<string, string> }>("/settings/portal-assignments", {
+                    method: "PUT",
+                    body: JSON.stringify({ assignments }),
+                });
+                portalAssignments = response.portalAssignments;
+                configurePortalDistribution();
+                portalStatus.textContent = "Portal placement saved for every player.";
+            } catch (error) {
+                portalStatus.textContent = error instanceof Error ? error.message : "Could not save portal placement.";
+            } finally {
+                savePortalAssignments.disabled = false;
+            }
+        });
+        portalAssignmentPanel.append(savePortalAssignments, portalStatus);
+        form.append(portalAssignmentPanel);
+    }
     const customTitle = document.createElement("p");
     customTitle.className = "setting-title";
     customTitle.textContent = "Shared workshop levels";
@@ -3212,9 +3306,13 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         nextConfig.powerupEffects.rapid.durationSeconds = readTesterSetting("effect.rapid-duration", nextConfig.powerupEffects.rapid.durationSeconds);
         nextConfig.powerupEffects.cannon.durationSeconds = readTesterSetting("effect.cannon-duration", nextConfig.powerupEffects.cannon.durationSeconds);
         nextConfig.powerupEffects.star.durationSeconds = readTesterSetting("effect.star-duration", nextConfig.powerupEffects.star.durationSeconds);
-        (Object.keys(nextConfig.powerupRules) as (keyof GameConfig["powerupRules"])[]).forEach((key) => {
+        (["oneActiveAtATime", "rainbowStarInvincible", "rainbowStarDefeatsEnemies"] as const).forEach((key) => {
             const draft = testerSettingsDraft.get(`rule.${key}`);
             if (draft !== undefined) nextConfig.powerupRules[key] = draft === "1";
+        });
+        (Object.keys(powerupLabels) as PowerupKind[]).forEach((kind) => {
+            nextConfig.powerupRules.maxPickupsPerLevel[kind] = readTesterSetting(`rule.maxPickups.${kind}`, nextConfig.powerupRules.maxPickupsPerLevel[kind]);
+            nextConfig.powerupRules.maxUsesPerLevel[kind] = readTesterSetting(`rule.maxUses.${kind}`, nextConfig.powerupRules.maxUsesPerLevel[kind]);
         });
         setSaveStatus(isOwner ? "Saving shared settings..." : "Saving tester settings...");
         apply.disabled = true;
@@ -3267,7 +3365,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         { id: "roulette", title: "Roulette & spinning", group: "Game settings", description: "Configure wheel buy-ins, spin prize chances, and asteroid rewards.", panel: roulettePanel },
         { id: "profile", title: "Resources", group: "Your test profile", description: "Adjust the progress and inventory on this device, not other players' accounts.", panel: settingPanel("profile", pilotFields) },
         { id: "cosmetics", title: "Cosmetics", group: "Your test profile", description: "Manage cosmetic unlocks for this device.", panel: settingPanel("cosmetics", [customizationTitle, unlocks, unlockEverySkin]) },
-        { id: "levels", title: "Levels & prestige", group: "Your test profile", description: "Quick unlock buttons apply immediately. Save checkbox changes when you're ready.", panel: settingPanel("levels", [levelTitle, levelActions, prestigeGateLabel, levelChoices, tryPrestige]) },
+        { id: "levels", title: "Levels & prestige", group: "Your test profile", description: "Quick unlock buttons apply immediately. Save checkbox changes when you're ready.", panel: settingPanel("levels", [levelTitle, levelActions, prestigeGateLabel, levelChoices, ...(portalAssignmentPanel ? [portalAssignmentPanel] : []), tryPrestige]) },
         { id: "workshop", title: "Level workshop", group: "Your test profile", description: isOwner ? "Build routes or manage shared workshop levels." : "Playtest routes. Publishing or deleting shared levels requires owner access.", panel: settingPanel("workshop", [customTitle, sharedLevels, workshopStatus, openMaker]) },
         { id: "reset", title: "Device reset", group: "Your test profile", description: "Reset this device's game data without deleting shared settings.", panel: settingPanel("reset", [resetTitle, resetPanel]) },
     ];
@@ -3411,16 +3509,19 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
             ...Object.values(settings.powerupSpawnChances)].every((item) => typeof item === "number" && Number.isFinite(item))) return false;
     }
     const effects = config.powerupEffects;
+    const rules = config.powerupRules;
+    if (!isRecord(rules) || !isRecord(rules.maxUsesPerLevel) || !isRecord(rules.maxPickupsPerLevel)) return false;
     return isRecord(effects)
         && isRecord(effects.shield) && Number.isFinite(effects.shield.charges)
         && isRecord(effects.boost) && Number.isFinite(effects.boost.durationSeconds) && Number.isFinite(effects.boost.movementMultiplier)
         && isRecord(effects.rapid) && Number.isFinite(effects.rapid.durationSeconds)
         && isRecord(effects.cannon) && Number.isFinite(effects.cannon.durationSeconds)
         && isRecord(effects.star) && Number.isFinite(effects.star.durationSeconds)
-        && isRecord(config.powerupRules)
-        && typeof config.powerupRules.oneActiveAtATime === "boolean"
-        && typeof config.powerupRules.rainbowStarInvincible === "boolean"
-        && typeof config.powerupRules.rainbowStarDefeatsEnemies === "boolean";
+        && typeof rules.oneActiveAtATime === "boolean"
+        && typeof rules.rainbowStarInvincible === "boolean"
+        && typeof rules.rainbowStarDefeatsEnemies === "boolean"
+        && (Object.keys(powerupLabels) as PowerupKind[]).every((kind) => Number.isInteger(rules.maxUsesPerLevel[kind]) && rules.maxUsesPerLevel[kind] >= 0 && rules.maxUsesPerLevel[kind] <= 99)
+        && (Object.keys(powerupLabels) as PowerupKind[]).every((kind) => Number.isInteger(rules.maxPickupsPerLevel[kind]) && rules.maxPickupsPerLevel[kind] >= 0 && rules.maxPickupsPerLevel[kind] <= 20);
 }
 
 function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
@@ -3490,18 +3591,32 @@ function getLevelEnemyIndices(level: Level) {
 
 function createLevelPowerups(level: Level, positions: { index: number; kind: PowerupKind }[], blockedTiles: number[]) {
     const worldConfig = gameConfig[level.prestige ? "prestige" : "normal"];
+    const limits = gameConfig.powerupRules.maxPickupsPerLevel;
+    const positionCounts: Record<PowerupKind, number> = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 };
+    const cappedPositions = positions.filter((powerup) => {
+        positionCounts[powerup.kind]++;
+        return positionCounts[powerup.kind] <= limits[powerup.kind];
+    });
+    positions.splice(0, positions.length, ...cappedPositions);
     const available = Array.from({ length: Math.max(0, level.length - 3) }, (_, offset) => offset + 2)
         .filter((index) => !blockedTiles.includes(index) && !positions.some((powerup) => powerup.index === index));
     (["shield", "boost", "rapid", "cannon"] as const).forEach((kind) => {
-        if (positions.some((powerup) => powerup.kind === kind) || Math.random() * 100 >= worldConfig.powerupSpawnChances[kind]) return;
-        const candidateIndex = available.findIndex((index) => !positions.some((powerup) => powerup.index === index));
-        if (candidateIndex < 0) return;
-        const [index] = available.splice(candidateIndex, 1);
-        positions.push({ index, kind });
+        const existing = positions.filter((powerup) => powerup.kind === kind).length;
+        const maximum = Math.max(0, limits[kind]);
+        for (let count = existing; count < maximum; count++) {
+            if (Math.random() * 100 >= worldConfig.powerupSpawnChances[kind]) break;
+            const candidateIndex = available.findIndex((index) => !positions.some((powerup) => powerup.index === index));
+            if (candidateIndex < 0) break;
+            const [index] = available.splice(candidateIndex, 1);
+            positions.push({ index, kind });
+        }
     });
-    if (!positions.some((powerup) => powerup.kind === "star") && Math.random() * 100 < worldConfig.rainbowStarChance) {
+    const existingStars = positions.filter((powerup) => powerup.kind === "star").length;
+    for (let count = existingStars; count < Math.max(0, limits.star); count++) {
+        if (Math.random() * 100 >= worldConfig.rainbowStarChance) break;
         const candidateIndex = Math.floor(Math.random() * available.length);
-        if (available[candidateIndex] !== undefined) positions.push({ index: available[candidateIndex], kind: "star" });
+        if (available[candidateIndex] === undefined) break;
+        positions.push({ index: available.splice(candidateIndex, 1)[0], kind: "star" });
     }
     return positions.map((powerup) => ({ x: 140 + powerup.index * TILE_WIDTH, y: 170, kind: powerup.kind, collected: false }));
 }
@@ -3843,7 +3958,7 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     document.body.innerHTML = "";
     createGameShell(); createPlayer(); createWorldObjects(); createTrail(false); createControls(); startGameLoop();
 }
@@ -4191,6 +4306,10 @@ function exitSecretBossRoom() {
 function createControls() {
     const controls = document.createElement("nav"); controls.className = "controls"; controls.setAttribute("aria-label", "Game controls");
     controls.append(createButton("left", "←", moveLeft), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createButton("right", "→", moveRight), createHoldButton("shoot", "✦", shoot), createButton("exit", "Exit", showLevelMenu));
+    const hint = document.createElement("small");
+    hint.className = "controls-key-hint";
+    hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · R restart`;
+    controls.append(hint);
     document.querySelector(".game-frame")?.append(controls);
 }
 
@@ -4717,7 +4836,18 @@ function activatePowerup(kind: PowerupKind) {
     } 
     updatePowerupHud(); 
 }
-function useInventoryPowerup(kind: PowerupKind) { const inventory = getInventory(); if (inventory[kind] < 1) { statusLabel.textContent = `No ${powerupLabels[kind]} power-ups in the hold.`; return; } if (!canActivatePowerup(kind)) return; inventory[kind]--; saveInventory(inventory); activatePowerup(kind); statusLabel.textContent = `${powerupLabels[kind]} launched from the hold.`; }
+function useInventoryPowerup(kind: PowerupKind) {
+    const inventory = getInventory();
+    if (inventory[kind] < 1) { statusLabel.textContent = `No ${powerupLabels[kind]} power-ups in the hold.`; return; }
+    const maximum = gameConfig.powerupRules.maxUsesPerLevel[kind];
+    if (powerupUsesThisLevel[kind] >= maximum) { statusLabel.textContent = `${powerupLabels[kind]} has reached its per-level use limit.`; return; }
+    if (!canActivatePowerup(kind)) return;
+    inventory[kind]--;
+    powerupUsesThisLevel[kind]++;
+    saveInventory(inventory);
+    activatePowerup(kind);
+    statusLabel.textContent = `${powerupLabels[kind]} launched from the hold.`;
+}
 function updatePowerupHud() { 
     const inventory = getInventory(); 
     document.querySelectorAll<HTMLButtonElement>(".hud-power").forEach((button) => { 

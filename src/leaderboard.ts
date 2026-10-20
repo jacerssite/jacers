@@ -64,7 +64,8 @@ export function createLeaderboard(context: LeaderboardContext) {
                 response.users.forEach((player) => {
                     const name = document.createElement("span");
                     name.className = "online-player-name";
-                    name.textContent = player.username;
+                    const badge = getRoleBadge(player.role ?? "player");
+                    name.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
                     onlinePlayers.append(name);
                 });
                 presenceStatus.textContent = response.truncated
