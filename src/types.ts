@@ -16,7 +16,16 @@ export type AvatarStyle = { name: string; color: string; shape: "classic" | "dar
 export type FlippedRoute = { walls: number[]; enemies: number[]; spikes: number[]; gravity: number[]; powerups?: { index: number; kind: PowerupKind }[]; key?: number };
 export type SecretKeyPlacement = { id: string; index: number; y?: number; requiresPortal?: boolean };
 export type SecretPortal = { id?: string; index: number; secretId: string; y?: number };
-export type LevelMakerDraft = { name: string; briefing: string; prestige: boolean; tiles: string[]; flippedTiles: string[]; customId?: string };
+export type LevelMakerDraft = {
+    name: string;
+    briefing: string;
+    prestige: boolean;
+    tiles: string[];
+    flippedTiles: string[];
+    length?: number;
+    customId?: string;
+    sourceLevelIndex?: number;
+};
 export type UnflippedRouteSnapshot = {
     asteroids: Asteroid[];
     obstacles: Obstacle[];
@@ -76,7 +85,7 @@ export type RouletteTier = {
 export type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
 export type UpdateLogEntry = { date: string; title: string; body: string };
 export type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
-export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[] };
+export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level> };
 export type WorldGameConfig = {
     rainbowStarChance: number;
     portalSpawnChance: number;

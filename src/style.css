@@ -761,6 +761,11 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .custom-controls-settings .text-button { padding: 8px; border: 1px solid #385267; text-align: left; }
 .maker-existing-levels { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: min(760px, 96vw); margin: 8px auto; padding: 12px; border: 1px solid #385267; }
 .maker-existing-levels .setting-title { width: 100%; margin: 0; color: #f6c46e; font: .68rem 'DM Mono', monospace; }
+.maker-built-in-levels { display: grid; gap: 12px; justify-content: stretch; width: min(1100px, 96vw); text-align: left; }
+.maker-level-edit-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 7px; padding: 10px; border: 1px solid #385267; background: #101b2b88; }
+.maker-level-edit-group > b { grid-column: 1 / -1; color: #f6c46e; font: .64rem 'DM Mono', monospace; letter-spacing: 1px; text-transform: uppercase; }
+.maker-level-edit-button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.maker-cell-disabled { opacity: .25; cursor: not-allowed; }
 .tester-custom-levels { display: grid; gap: 8px; padding: 12px; border: 1px solid #385267; text-align: left; }
 .tester-custom-levels > small { color: #99b3a6; font: .65rem/1.5 'DM Mono', monospace; }
 .tester-custom-level-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #f3f5e9; font: .65rem 'DM Mono', monospace; }

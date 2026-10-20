@@ -29,6 +29,7 @@ import {
   validateProfileTitles,
   validateUpdateLog,
   validateWorkshopLevel,
+  validateBuiltinLevelOverrides,
 } from "./game-data.mjs";
 
 const app = express();
@@ -1191,12 +1192,13 @@ app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async 
 app.get("/api/settings", async (_req, res, next) => {
   try {
     const db = await getDatabase();
-    const [golden, roulette, version, updateLog, profileTitles] = await Promise.all([
+    const [golden, roulette, version, updateLog, profileTitles, builtinLevelOverrides] = await Promise.all([
       db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }),
       db.collection("game_settings").findOne({ _id: "roulette_tiers" }),
       db.collection("game_settings").findOne({ _id: "app_version" }),
       db.collection("game_settings").findOne({ _id: "update_log" }),
       db.collection("game_settings").findOne({ _id: "profile_titles" }),
+      db.collection("game_settings").findOne({ _id: "builtin_level_overrides" }),
     ]);
     res.json({
       goldenTimeLimitMs: parseGoldenTimeLimit(golden?.value) ? golden.value : 60000,
@@ -1204,6 +1206,7 @@ app.get("/api/settings", async (_req, res, next) => {
       version: version?.value ?? "1",
       updateLog: validateUpdateLog(updateLog?.value) ?? [],
       profileTitles: validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES,
+      builtinLevelOverrides: validateBuiltinLevelOverrides(builtinLevelOverrides?.value) ?? {},
     });
   } catch (error) {
     next(error);
@@ -1272,6 +1275,23 @@ app.put("/api/settings/profile-titles", requireSameOrigin, requireOwner, async (
     const db = await getDatabase();
     await saveSetting(db, "profile_titles", profileTitles, req.user.id);
     res.json({ profileTitles });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/builtin-level-overrides", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const index = req.body?.index;
+    if (!Number.isSafeInteger(index) || index < 0 || index > 999) return res.status(400).json({ error: "Select a valid built-in level." });
+    const validatedLevel = validateBuiltinLevelOverrides({ [String(index)]: req.body?.level });
+    if (!validatedLevel) return res.status(400).json({ error: "Built-in level data is invalid." });
+    const db = await getDatabase();
+    const current = await db.collection("game_settings").findOne({ _id: "builtin_level_overrides" });
+    const overrides = validateBuiltinLevelOverrides(current?.value) ?? {};
+    overrides[String(index)] = validatedLevel[String(index)];
+    await saveSetting(db, "builtin_level_overrides", overrides, req.user.id);
+    res.json({ level: validatedLevel[String(index)], builtinLevelOverrides: overrides });
   } catch (error) {
     next(error);
   }
@@ -1988,6 +2008,11 @@ async function initializeDatabaseOnce() {
     settings.updateOne(
       { _id: "app_version" },
       { $setOnInsert: { value: "1", createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
+      { _id: "builtin_level_overrides" },
+      { $setOnInsert: { value: {}, createdAt: new Date() } },
       { upsert: true },
     ),
   ]);

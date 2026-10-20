@@ -28,6 +28,7 @@ let gameConfig: GameConfig = structuredClone(DEFAULT_GAME_CONFIG);
 let rouletteTiers: RouletteTier[] = structuredClone(DEFAULT_ROULETTE_TIERS);
 let updateLogEntries: UpdateLogEntry[] = [];
 let profileTitles: ProfileTitle[] = structuredClone(PROFILE_TITLES);
+let builtinLevelOverrides: Record<string, Level> = {};
 let selectedRouletteBuyIn: RouletteTier["buyIn"] = 5;
 let selectedRouletteSpinAmount = Math.max(1, Number(localStorage.getItem("orbit-roulette-spin-amount") ?? "5") || 5);
 const storedRouletteColorPreference = localStorage.getItem("orbit-roulette-color-preference");
@@ -189,6 +190,17 @@ const showLevelMaker = createLevelMaker({
     configurePortalDistribution,
     showLevelMenu,
     showTesterPanel,
+    canEditBuiltInLevels: () => currentOnlineUser?.role === "owner",
+    saveBuiltInLevel: async (index, level) => {
+        const result = await apiRequest<{ level: Level; builtinLevelOverrides?: Record<string, Level> }>("/settings/builtin-level-overrides", {
+            method: "PUT",
+            body: JSON.stringify({ index, level }),
+        });
+        builtinLevelOverrides = result.builtinLevelOverrides ?? { ...builtinLevelOverrides, [String(index)]: result.level };
+        const existing = levels[index];
+        if (existing) levels[index] = { ...existing, ...result.level, customId: existing.customId, localOnly: existing.localOnly };
+        return levels[index] ?? result.level;
+    },
     startPreview: (index, returnToEditor) => {
         isLevelMakerPreview = true;
         levelMakerPreviewReturn = () => {
@@ -517,6 +529,10 @@ async function refreshOnlineState() {
                 : structuredClone(DEFAULT_ROULETTE_TIERS);
             updateLogEntries = Array.isArray(settings.updateLog) ? settings.updateLog : [];
             if (isUsableProfileTitles(settings.profileTitles)) profileTitles = structuredClone(settings.profileTitles);
+            if (settings.builtinLevelOverrides && typeof settings.builtinLevelOverrides === "object" && !Array.isArray(settings.builtinLevelOverrides)) {
+                builtinLevelOverrides = Object.fromEntries(Object.entries(settings.builtinLevelOverrides).filter(([index, level]) => /^\d+$/.test(index) && level && typeof level === "object")) as Record<string, Level>;
+            }
+            applyBuiltinLevelOverrides();
         })(),
         (async () => {
             const sharedConfig = await apiRequest<{ config: GameConfig }>("/game-config");
@@ -525,6 +541,7 @@ async function refreshOnlineState() {
         (async () => {
             const sharedLevels = await apiRequest<{ levels: Level[] }>("/levels");
             levels.splice(0, levels.length, ...levels.filter((level) => !level.customId || level.localOnly), ...sharedLevels.levels.map((level) => ({ ...level, localOnly: false })));
+            applyBuiltinLevelOverrides();
             localStorage.setItem("orbit-global-level-cache", JSON.stringify(sharedLevels.levels));
             configurePortalDistribution();
         })(),
@@ -557,6 +574,16 @@ async function refreshOnlineState() {
             }
         }
     }
+}
+
+function applyBuiltinLevelOverrides() {
+    Object.entries(builtinLevelOverrides).forEach(([index, override]) => {
+        const levelIndex = Number(index);
+        const base = levels[levelIndex];
+        if (!base || base.customId || base.localOnly || !override || typeof override !== "object") return;
+        levels[levelIndex] = { ...base, ...structuredClone(override), customId: undefined, localOnly: undefined };
+    });
+    if (levels.length) configurePortalDistribution();
 }
 
 function configurePortalDistribution() {

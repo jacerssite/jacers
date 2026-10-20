@@ -8,18 +8,21 @@ type LevelMakerContext = {
     configurePortalDistribution: () => void;
     showLevelMenu: () => void;
     showTesterPanel: () => void;
+    canEditBuiltInLevels?: () => boolean;
+    saveBuiltInLevel?: (index: number, level: Level) => Promise<Level>;
     startPreview: (index: number, returnToEditor: () => void) => void;
 };
 
-export function levelToMakerDraft(level: Level): LevelMakerDraft {
-    const tiles = Array<string>(144).fill("empty");
-    const flippedTiles = Array<string>(144).fill("empty");
+export function levelToMakerDraft(level: Level, sourceLevelIndex?: number): LevelMakerDraft {
+    const columns = Math.max(24, Math.min(60, level.length));
+    const tiles = Array<string>(columns * 6).fill("empty");
+    const flippedTiles = Array<string>(columns * 6).fill("empty");
     const place = (target: string[], index: number, kind: string) => {
         const column = index - 1;
-        if (column < 0 || column >= 24) return;
+        if (column < 0 || column >= columns) return;
         let row = 0;
-        while (row < 6 && target[row * 24 + column] !== "empty") row++;
-        if (row < 6) target[row * 24 + column] = kind;
+        while (row < 6 && target[row * columns + column] !== "empty") row++;
+        if (row < 6) target[row * columns + column] = kind;
     };
     const special = new Set(level.specialAsteroids ?? []);
     level.asteroids.forEach((index) => place(tiles, index, special.has(index) ? "special" : "asteroid"));
@@ -41,14 +44,20 @@ export function levelToMakerDraft(level: Level): LevelMakerDraft {
         (route.powerups ?? []).forEach(({ index, kind }) => place(flippedTiles, index, `powerup${kind.charAt(0).toUpperCase()}${kind.slice(1)}`));
         if (route.key !== undefined) place(flippedTiles, route.key, "exitKey");
     }
-    return { name: level.name, briefing: level.briefing, prestige: Boolean(level.prestige), tiles, flippedTiles, customId: level.customId };
+    return { name: level.name, briefing: level.briefing, prestige: Boolean(level.prestige), length: level.length, tiles, flippedTiles, customId: level.customId, sourceLevelIndex };
 }
 
 export function createLevelMaker(context: LevelMakerContext) {
-    const { powerupLabels, configurePortalDistribution, showLevelMenu, showTesterPanel, startPreview } = context;
+    const { powerupLabels, configurePortalDistribution, showLevelMenu, showTesterPanel, canEditBuiltInLevels, saveBuiltInLevel, startPreview } = context;
     function showLevelMaker(draft?: LevelMakerDraft) {
         const menu = document.createElement("main"); menu.className = "menu-screen maker-screen";
-        menu.innerHTML = `<p class="eyebrow">JACER WORKSHOP / LEVEL EDITOR</p><h1>Build a <em>route</em></h1><p class="menu-copy">Playtest your draft before publishing. Published workshop levels are stored online for every player; only workshop levels can be deleted.</p>`;
+        const editingBuiltIn = draft?.sourceLevelIndex !== undefined && !draft.customId;
+        const sourceLevel = draft?.sourceLevelIndex !== undefined
+            ? levels[draft.sourceLevelIndex]
+            : draft?.customId ? levels.find((level) => level.customId === draft.customId) : undefined;
+        const routeLength = Math.max(8, Math.min(60, draft?.length ?? sourceLevel?.length ?? 26));
+        const gridColumns = Math.max(24, routeLength);
+        menu.innerHTML = `<p class="eyebrow">JACER WORKSHOP / LEVEL EDITOR</p><h1>${editingBuiltIn ? "Edit a" : "Build a"} <em>route</em></h1><p class="menu-copy">Playtest your draft before publishing. Built-in route edits are shared with every player after an owner saves them.</p>`;
         const details = document.createElement("div");
         details.className = "maker-details";
         const nameInput = document.createElement("input");
@@ -77,6 +86,35 @@ export function createLevelMaker(context: LevelMakerContext) {
             });
             menu.append(editSection);
         }
+        if (canEditBuiltInLevels?.()) {
+            const builtInLevels = levels.map((level, index) => ({ level, index })).filter(({ level }) => !level.customId && !level.localOnly);
+            if (builtInLevels.length) {
+                const editSection = document.createElement("section");
+                editSection.className = "maker-existing-levels maker-built-in-levels";
+                const heading = document.createElement("p");
+                heading.className = "setting-title";
+                heading.textContent = "Edit a built-in route";
+                editSection.append(heading);
+                const groups = new Map<string, HTMLElement>();
+                builtInLevels.forEach(({ level, index }) => {
+                    const groupName = level.secret ? "Secret routes" : level.prestige ? "Prestige routes" : "Normal routes";
+                    let group = groups.get(groupName);
+                    if (!group) {
+                        group = document.createElement("div");
+                        group.className = "maker-level-edit-group";
+                        const label = document.createElement("b");
+                        label.textContent = groupName;
+                        group.append(label);
+                        groups.set(groupName, group);
+                        editSection.append(group);
+                    }
+                    const editButton = createTextButton(`Edit ${level.name}`, () => showLevelMaker(levelToMakerDraft(level, index)));
+                    editButton.classList.add("maker-level-edit-button");
+                    group.append(editButton);
+                });
+                menu.append(editSection);
+            }
+        }
         const toolbar = document.createElement("nav"); toolbar.className = "maker-toolbar";
         const undo = document.createElement("button"); undo.className = "maker-tool-button"; undo.type = "button"; undo.textContent = "Undo";
         const clear = document.createElement("button"); clear.className = "maker-tool-button danger"; clear.type = "button"; clear.textContent = "Clear area";
@@ -99,15 +137,19 @@ export function createLevelMaker(context: LevelMakerContext) {
         const tileLabels: Record<string, string> = { empty: "Erase", wall: "Platform", block: "Block", miniBoss: "Dark Knight", titan: "Titan", special: "Special asteroid", exitKey: "Exit key" };
         tileLabels.powerupShield = "Shield power-up"; tileLabels.powerupBoost = "Boost power-up"; tileLabels.powerupRapid = "Rapid power-up"; tileLabels.powerupCannon = "Cannon power-up"; tileLabels.powerupStar = "Rainbow Star";
         tiles.forEach((tile) => { const button = createTextButton(tileLabels[tile] ?? tile, () => { selectedTile = tile; deleteMode = false; modeLabel.textContent = "BUILD MODE"; buildMode.classList.add("selected"); eraseMode.classList.remove("selected"); palette.querySelectorAll("button").forEach((item) => item.classList.toggle("selected", item.dataset.tile === tile)); }); button.dataset.tile = tile; button.classList.toggle("selected", tile === selectedTile); palette.append(button); });
-        const createCells = (target: HTMLElement, initial: string[] = [], prefix: string) => Array.from({ length: 144 }, (_, index) => {
+        const createCells = (target: HTMLElement, initial: string[] = [], prefix: string) => Array.from({ length: gridColumns * 6 }, (_, index) => {
             const cell = document.createElement("button");
             cell.type = "button";
             const initialKind = initial[index] ?? "empty";
             cell.className = makerCellClass(initialKind);
             cell.dataset.kind = initialKind;
             cell.textContent = initialKind === "gravity" ? "" : initialKind === "exitKey" ? "K" : powerupTileKinds[initialKind] ? powerupLabels[powerupTileKinds[initialKind]].slice(0, 1) : "";
+            const column = index % gridColumns + 1;
+            cell.disabled = column > routeLength - 2;
+            if (cell.disabled) cell.classList.add("maker-cell-disabled");
             cell.setAttribute("aria-label", `${prefix} tile ${index + 1}`);
             cell.addEventListener("click", () => {
+                if (cell.disabled) return;
                 history.push({ tiles: cells.map((item) => item.dataset.kind ?? "empty"), flippedTiles: flippedCells.map((item) => item.dataset.kind ?? "empty") });
                 const next = deleteMode ? "empty" : selectedTile;
                 cell.dataset.kind = next;
@@ -122,6 +164,8 @@ export function createLevelMaker(context: LevelMakerContext) {
         const normalTab = document.createElement("button"); normalTab.className = "maker-tool-button"; normalTab.type = "button"; normalTab.textContent = "Normal area"; normalTab.hidden = true;
         const flippedTab = document.createElement("button"); flippedTab.className = "maker-tool-button"; flippedTab.type = "button"; flippedTab.textContent = "Flipped planet area"; flippedTab.hidden = true;
         const flippedGrid = document.createElement("div"); flippedGrid.className = "maker-grid"; flippedGrid.hidden = true; flippedGrid.setAttribute("aria-label", "Flipped planet area grid");
+        grid.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
+        flippedGrid.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
         let cells: HTMLButtonElement[] = [];
         let flippedCells: HTMLButtonElement[] = [];
         cells = createCells(grid, draft?.tiles, "Normal");
@@ -138,7 +182,9 @@ export function createLevelMaker(context: LevelMakerContext) {
             prestige: prestigeRouteInput.checked,
             tiles: cells.map((cell) => cell.dataset.kind ?? "empty"),
             flippedTiles: flippedCells.map((cell) => cell.dataset.kind ?? "empty"),
+            length: routeLength,
             customId: draft?.customId,
+            sourceLevelIndex: draft?.sourceLevelIndex,
         });
         const updatePaletteForArea = () => {
             const inFlippedArea = !flippedGrid.hidden;
@@ -180,11 +226,34 @@ export function createLevelMaker(context: LevelMakerContext) {
             if (!name || /[<>]/.test(name)) { saveStatus.textContent = "Enter a level name using plain text."; return null; }
             const briefing = briefingInput.value.trim() || "A route assembled in the Jacer workshop.";
             if (/[<>]/.test(briefing)) { saveStatus.textContent = "Briefing must use plain text."; return null; }
-            const level: Level = { name, briefing, length: 26, asteroids: [], walls: [], blocks: [], enemies: [], spikes: [], gravity: [], portals: [], specialAsteroids: [], miniBosses: [], powerups: [], prestige: prestigeRouteInput.checked, customId: draft?.customId };
+            const level: Level = sourceLevel ? structuredClone(sourceLevel) : { name, briefing, length: routeLength, asteroids: [], walls: [], blocks: [], enemies: [], spikes: [], gravity: [], portals: [], specialAsteroids: [], miniBosses: [], powerups: [], prestige: prestigeRouteInput.checked, customId: draft?.customId };
+            level.name = name;
+            level.briefing = briefing;
+            level.length = routeLength;
+            level.prestige = prestigeRouteInput.checked;
+            level.customId = draft?.customId;
+            level.localOnly = sourceLevel?.localOnly;
+            level.asteroids = [];
+            level.walls = [];
+            level.blocks = [];
+            level.enemies = [];
+            level.spikes = [];
+            level.gravity = [];
+            level.portals = [];
+            level.specialAsteroids = [];
+            level.miniBosses = [];
+            level.powerups = [];
+            // Some published routes use the default end-of-route boss and have no
+            // explicit titan tile. Keep that metadata while still allowing an
+            // explicit titan tile to define a custom boss position.
+            level.boss = Boolean(sourceLevel?.boss && sourceLevel.bossIndex === undefined);
+            delete level.bossIndex;
+            delete level.flippedRoute;
+            level.flip = level.prestige ? [] : undefined;
             const addTile = (target: number[], index: number) => { if (!target.includes(index)) target.push(index); };
             cells.forEach((cell, cellIndex) => {
                 const tile = cell.dataset.kind ?? "empty";
-                const column = cellIndex % 24 + 1;
+                const column = cellIndex % gridColumns + 1;
                 if (tile === "asteroid" || tile === "special") addTile(level.asteroids, column);
                 if (tile === "special") addTile(level.specialAsteroids!, column);
                 if (tile === "wall") addTile(level.walls, column);
@@ -192,16 +261,17 @@ export function createLevelMaker(context: LevelMakerContext) {
                 if (tile === "enemy") addTile(level.enemies, column);
                 if (tile === "spike") addTile(level.spikes, column);
                 if (tile === "gravity") addTile(level.gravity, column);
+                if (tile === "gravity" && level.flip) addTile(level.flip, column);
                 if (tile === "portal") addTile(level.portals!, column);
                 if (tile === "miniBoss") addTile(level.miniBosses!, column);
                 if (tile === "titan") { level.boss = true; level.bossIndex = column; }
                 if (powerupTileKinds[tile] && !level.powerups!.some((powerup) => powerup.index === column)) level.powerups!.push({ index: column, kind: powerupTileKinds[tile] });
             });
             if (level.prestige && level.gravity.length) {
-                const route: FlippedRoute = { walls: [], enemies: [], spikes: [], gravity: [], powerups: [], key: 23 };
+                const route: FlippedRoute = { walls: [], enemies: [], spikes: [], gravity: [], powerups: [], key: Math.min(routeLength - 2, Math.max(1, sourceLevel?.flippedRoute?.key ?? 23)) };
                 flippedCells.forEach((cell, cellIndex) => {
                     const tile = cell.dataset.kind ?? "empty";
-                    const column = cellIndex % 24 + 1;
+                    const column = cellIndex % gridColumns + 1;
                     if (tile === "wall") addTile(route.walls, column);
                     if (tile === "enemy") addTile(route.enemies, column);
                     if (tile === "spike") addTile(route.spikes, column);
@@ -223,11 +293,27 @@ export function createLevelMaker(context: LevelMakerContext) {
             const previewIndex = levels.push(level) - 1;
             startPreview(previewIndex, () => showLevelMaker(draftSnapshot));
         });
-        const save = createMenuButton(draft?.customId ? "Save level changes" : "Publish shared level", async () => {
+        const save = createMenuButton(editingBuiltIn ? "Save built-in changes" : draft?.customId ? "Save level changes" : "Publish shared level", async () => {
             const level = collectLevel();
             if (!level) return;
             save.disabled = true;
-            saveStatus.textContent = draft?.customId ? "Saving workshop changes..." : "Publishing workshop level...";
+            saveStatus.textContent = editingBuiltIn ? "Saving built-in route..." : draft?.customId ? "Saving workshop changes..." : "Publishing workshop level...";
+            if (editingBuiltIn) {
+                if (!saveBuiltInLevel || draft?.sourceLevelIndex === undefined) {
+                    saveStatus.textContent = "Built-in route editing is unavailable in this session.";
+                    save.disabled = false;
+                    return;
+                }
+                try {
+                    await saveBuiltInLevel(draft.sourceLevelIndex, level);
+                    configurePortalDistribution();
+                    showLevelMenu();
+                } catch (error) {
+                    saveStatus.textContent = error instanceof Error ? error.message : "Could not save the built-in route.";
+                    save.disabled = false;
+                }
+                return;
+            }
             const { customId: _customId, localOnly: _localOnly, ...levelData } = level;
             try {
                 const result = await apiRequest<{ level: Level }>(draft?.customId ? `/levels/${encodeURIComponent(draft.customId)}` : "/levels", {

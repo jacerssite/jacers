@@ -749,3 +749,34 @@ test("workshop switches between normal and flipped areas without silently droppi
     dom.window.close();
   }
 });
+
+test("owners can edit built-in routes without shrinking their original route", async () => {
+  const user = { username: "Owner_1", role: "owner", appearOffline: false };
+  let savedLevel;
+  const { dom, document } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "PUT /api/settings/builtin-level-overrides": ({ init }) => {
+      savedLevel = JSON.parse(init.body).level;
+      return { level: savedLevel, builtinLevelOverrides: { "0": savedLevel } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    await waitFor(() => document.querySelector('[data-section="workshop"]'), "Owner tools did not load");
+    clickButton(document, "Level workshop");
+    clickButton(document, "Open level maker");
+    clickButton(document, "Edit Quiet Orbit");
+    assert.equal(document.querySelector('[aria-label="Level name"]').value, "Quiet Orbit");
+    assert.equal(document.querySelectorAll('[aria-label^="Normal tile"]').length, 144);
+    document.querySelector('[aria-label="Level name"]').value = "Quiet Orbit Revised";
+    clickButton(document, "Save built-in changes");
+    await waitFor(() => document.querySelector(".level-menu"), "Built-in route did not return to the level menu");
+    assert.equal(savedLevel.name, "Quiet Orbit Revised");
+    assert.equal(savedLevel.length, 12);
+  } finally {
+    dom.window.close();
+  }
+});

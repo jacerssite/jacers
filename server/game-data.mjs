@@ -127,6 +127,23 @@ function validPowerups(value, length) {
     && new Set(value.map((item) => item.index)).size === value.length;
 }
 
+function validSecretPortal(value, length) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && isBoundedInteger(value.index, 1, length - 2)
+    && typeof value.secretId === "string" && /^[a-z0-9-]{1,50}$/.test(value.secretId)
+    && (value.id === undefined || typeof value.id === "string" && /^[a-z0-9-]{1,80}$/.test(value.id))
+    && (value.y === undefined || isBoundedInteger(value.y, 0, 2000))
+    && (value.requiresPortal === undefined || typeof value.requiresPortal === "boolean");
+}
+
+function validSecretKey(value, length) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && typeof value.id === "string" && /^[a-z0-9-]{1,50}$/.test(value.id)
+    && isBoundedInteger(value.index, 1, length - 2)
+    && (value.y === undefined || isBoundedInteger(value.y, 0, 2000))
+    && (value.requiresPortal === undefined || typeof value.requiresPortal === "boolean");
+}
+
 export function validateWorkshopLevel(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || typeof value.name !== "string" || value.name.trim().length < 1 || value.name.trim().length > 40
@@ -142,6 +159,8 @@ export function validateWorkshopLevel(value) {
   if (value.powerups !== undefined && !validPowerups(value.powerups, value.length)) return null;
   if (value.bossIndex !== undefined && !isBoundedInteger(value.bossIndex, 1, value.length - 2)) return null;
   if (value.secretId !== undefined && (typeof value.secretId !== "string" || !/^[a-z0-9-]{1,50}$/.test(value.secretId))) return null;
+  if (value.secretPortals !== undefined && (!Array.isArray(value.secretPortals) || value.secretPortals.length > 20 || !value.secretPortals.every((portal) => validSecretPortal(portal, value.length)))) return null;
+  if (value.secretKey !== undefined && !validSecretKey(value.secretKey, value.length)) return null;
   if (value.flippedRoute !== undefined) {
     const route = value.flippedRoute;
     if (!route || typeof route !== "object" || Array.isArray(route)
@@ -151,7 +170,9 @@ export function validateWorkshopLevel(value) {
   }
   if (value.secret !== undefined && typeof value.secret !== "boolean"
     || value.prestige !== undefined && typeof value.prestige !== "boolean"
-    || value.boss !== undefined && typeof value.boss !== "boolean") return null;
+    || value.boss !== undefined && typeof value.boss !== "boolean"
+    || value.prestigeRequirement !== undefined && !isBoundedInteger(value.prestigeRequirement, 0, 100)
+    || value.type !== undefined && !["normal", "secret", "prestige"].includes(value.type)) return null;
   const level = {
     name: value.name.trim(),
     briefing: value.briefing.trim(),
@@ -162,7 +183,7 @@ export function validateWorkshopLevel(value) {
     spikes: [...value.spikes],
     gravity: [...value.gravity],
   };
-  for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip", "powerups", "bossIndex", "secret", "secretId", "prestige", "boss"]) {
+  for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip", "powerups", "bossIndex", "secret", "secretId", "secretPortals", "secretKey", "prestige", "prestigeRequirement", "type", "boss"]) {
     if (value[field] !== undefined) level[field] = structuredClone(value[field]);
   }
   if (value.flippedRoute !== undefined) {
@@ -172,6 +193,20 @@ export function validateWorkshopLevel(value) {
       .map((field) => [field, structuredClone(route[field])]));
   }
   return level;
+}
+
+export function validateBuiltinLevelOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > 100) return null;
+  const overrides = {};
+  for (const [index, item] of entries) {
+    if (!/^\d{1,3}$/.test(index) || Number(index) > 999) return null;
+    const level = validateWorkshopLevel(item);
+    if (!level) return null;
+    overrides[index] = level;
+  }
+  return overrides;
 }
 
 export function validatePlayerProgress(value) {
