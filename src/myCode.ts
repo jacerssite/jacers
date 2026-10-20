@@ -176,6 +176,9 @@ let lastSyncedAccountProgress = "";
 let loadedAccountProgressFor: string | null = null;
 let onlineSessionVersion = 0;
 
+const OWNER_TEST_INVENTORY_AMOUNT = 100000;
+function hasOwnerAccess() { return currentOnlineUser?.role === "owner"; }
+
 function accountIdentity(user: OnlineUser | null) {
     return user?.username.toLowerCase() ?? null;
 }
@@ -1214,7 +1217,7 @@ function showLevelMenu() {
         menu.className = "menu-screen level-menu";
         menu.innerHTML = `<p class="eyebrow">MISSION SELECT / ${activePlanet === "prestige" ? "RINGED PLANET" : "BLUE PLANET"}</p><h1>Choose your <em>sector</em></h1><p class="menu-copy">Claim the asteroids in order. New sectors unlock after the previous beacon is reached.</p>`;
         const planetButton = createMenuButton(activePlanet === "normal" ? "Fly to prestige planet" : "Return to blue planet", switchPlanet);
-        if (activePlanet === "normal" && prestigeLevel < 1) {
+        if (activePlanet === "normal" && prestigeLevel < 1 && !hasOwnerAccess()) {
             planetButton.disabled = true;
             planetButton.textContent = "Prestige planet locked / reach prestige 1";
             planetButton.classList.add("locked");
@@ -1229,13 +1232,13 @@ function showLevelMenu() {
         if (level.secret || Boolean(level.prestige) !== (activePlanet === "prestige")) return;
         const visibleLevels = levels.filter((candidate) => !candidate.secret && Boolean(candidate.prestige) === (activePlanet === "prestige"));
         const routeIndex = visibleLevels.indexOf(level);
-        const unlocked = level.secret ? isSecretLevelUnlocked(level) : Boolean(level.customId || level.localOnly) || routeIndex === 0 || Number(localStorage.getItem(`orbit-level-${index}`) ?? "0") === 1;
+        const unlocked = hasOwnerAccess() || (level.secret ? isSecretLevelUnlocked(level) : Boolean(level.customId || level.localOnly) || routeIndex === 0 || Number(localStorage.getItem(`orbit-level-${index}`) ?? "0") === 1);
         const button = document.createElement("button");
         button.className = `level-button ${level.secret ? "secret-level" : ""} ${unlocked ? "" : "locked"}`;
         button.type = "button";
         button.disabled = !unlocked;
         const requiredPrestige = level.prestigeRequirement ?? 1;
-        const prestigeLocked = activePlanet === "prestige" && prestigeLevel < requiredPrestige;
+        const prestigeLocked = !hasOwnerAccess() && activePlanet === "prestige" && prestigeLevel < requiredPrestige;
         button.disabled = !unlocked || prestigeLocked;
         const lockMessage = prestigeLocked ? `LOCKED / reach prestige ${requiredPrestige}` : "LOCKED / clear the previous sector";
         button.innerHTML = `<span><b>${String(routeIndex + 1).padStart(2, "0")}</b> ${level.name}</span><small>${button.disabled ? lockMessage : `${level.asteroids.length} asteroids / ${level.briefing}`}</small>`;
@@ -1907,7 +1910,7 @@ function showAccount(initialMessage = "") {
                 });
                 leaderboardRow.append(leaderboardInput);
             }
-            const allTitlesGranted = (currentOnlineUser.role === "owner" || currentOnlineUser.role === "tester") && localStorage.getItem("orbit-all-titles") === "1";
+            const allTitlesGranted = hasOwnerAccess() || (currentOnlineUser.role === "tester" && localStorage.getItem("orbit-all-titles") === "1");
             const earnedTitles = allTitlesGranted ? profileTitles : profileTitles.filter(isProfileTitleUnlocked);
             const titleRow = document.createElement("label");
             titleRow.className = "account-title-setting";
@@ -2262,6 +2265,7 @@ function controlKeysFor(action: ControlAction) {
 }
 
 function getInventory(): Record<PowerupKind, number> {
+    if (hasOwnerAccess()) return { shield: OWNER_TEST_INVENTORY_AMOUNT, boost: OWNER_TEST_INVENTORY_AMOUNT, rapid: OWNER_TEST_INVENTORY_AMOUNT, cannon: OWNER_TEST_INVENTORY_AMOUNT, star: OWNER_TEST_INVENTORY_AMOUNT };
     try { return { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0, ...JSON.parse(localStorage.getItem("orbit-powerups") ?? "{}") }; }
     catch { return { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; }
 }
@@ -2533,7 +2537,7 @@ function showShop() {
 }
 
 function cosmeticUnlockKey(group: CosmeticGroup, index: number) { return `orbit-spin-${group}-${index}`; }
-function isSpinCosmeticUnlocked(group: CosmeticGroup, index: number) { return localStorage.getItem(cosmeticUnlockKey(group, index)) === "1"; }
+function isSpinCosmeticUnlocked(group: CosmeticGroup, index: number) { return hasOwnerAccess() || localStorage.getItem(cosmeticUnlockKey(group, index)) === "1"; }
 function unlockSpinCosmetic(group: CosmeticGroup, index: number) { localStorage.setItem(cosmeticUnlockKey(group, index), "1"); }
 
 function getAvailableRouletteCosmetics(type: "color"): { color: string; index: number }[];
@@ -2550,6 +2554,7 @@ function getAvailableRouletteCosmetics(type: "color" | "trail" | "avatar") {
 }
 
 function getAvailableRouletteTitles() {
+    if (hasOwnerAccess()) return [];
     return profileTitles.filter((title) => (title.requirement?.type ?? "routes") === "roulette"
         && localStorage.getItem(`orbit-title-unlock-${title.id}`) !== "1");
 }
@@ -2781,6 +2786,7 @@ function getClaimedAsteroids(levelIndex: number): Set<number> {
 function saveClaimedAsteroids(levelIndex: number, claimed: Set<number>) { localStorage.setItem(`orbit-asteroids-${levelIndex}`, JSON.stringify([...claimed])); }
 
 function isSecretLevelUnlocked(level: Level) {
+    if (hasOwnerAccess()) return true;
     if (level.secretId === "prestige-gate") return localStorage.getItem("orbit-key-prestige-gate") === "1" || getNormalRouteCompletionCount() >= getNormalRouteCount();
     return level.secretId === "eclipse" ? localStorage.getItem("orbit-key-eclipse") === "1" || localStorage.getItem("orbit-secret-unlocked") === "1" : level.secretId ? localStorage.getItem(`orbit-key-${level.secretId}`) === "1" : localStorage.getItem("orbit-secret-unlocked") === "1";
 }
@@ -5283,7 +5289,7 @@ function getNormalRouteCompletionCount() { return levels.filter((level, index) =
 function getNormalCompletedLevelCount() { return levels.filter((level, index) => { const bestTime = Number(localStorage.getItem(`orbit-best-${index}`) ?? "0"); return !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1" && bestTime > 0 && bestTime <= goldenTimeLimitMs; }).length; }
 function getCompletedLevelCount() { return levels.filter((_, index) => localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
 function isProfileTitleUnlocked(title: ProfileTitle) {
-    if (localStorage.getItem("orbit-all-titles") === "1") return true;
+    if (hasOwnerAccess() || localStorage.getItem("orbit-all-titles") === "1") return true;
     const requirement = title.requirement ?? { type: "routes" as const, amount: title.routes };
     if (requirement.type === "golden") return getNormalCompletedLevelCount() >= requirement.amount;
     if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
@@ -5297,7 +5303,7 @@ function getPrestigeGateAccessError() {
     if (normalComplete < getNormalRouteCount()) return `Clear every normal route (${normalComplete}/${getNormalRouteCount()} complete).`;
     return "";
 }
-function canClaimPrestige() { return !getPrestigeGateAccessError(); }
+function canClaimPrestige() { return !hasOwnerAccess() && !getPrestigeGateAccessError(); }
 function getPrestigeDifficultyMultiplier() { return Math.min(2, 1 + 0.05 * Math.max(0, prestigeLevel)); }
 
 function getNextRouteIndex(currentIndex: number) {
@@ -5364,9 +5370,9 @@ function tryPrestige() {
     refreshProgressStateFromStorage();
     return true;
 }
-function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean }, index?: number) { return localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && isSpinCosmeticUnlocked("skin", index)) || (skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required); }
+function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean }, index?: number) { return hasOwnerAccess() || localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && isSpinCosmeticUnlocked("skin", index)) || (skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required); }
 function getUnlockedSkinCount() { return skins.filter(isSkinUnlocked).length; }
-function isAvatarUnlocked(avatar: AvatarStyle) { const index = avatars.indexOf(avatar); return localStorage.getItem("orbit-unlock-avatars") === "1" || (index >= 0 && isSpinCosmeticUnlocked("avatar", index)) || (avatar.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : avatar.prestige !== undefined ? prestigeLevel >= avatar.prestige : avatar.jackpot ? localStorage.getItem("orbit-jackpot-avatar") === "1" : true); }
-function isTrailUnlocked(trail: TrailStyle) { const index = trails.indexOf(trail); return localStorage.getItem("orbit-unlock-trails") === "1" || (index >= 0 && isSpinCosmeticUnlocked("trail", index)) || (trail.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : trail.prestige !== undefined ? prestigeLevel >= trail.prestige : trail.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : trail.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= trail.required); }
+function isAvatarUnlocked(avatar: AvatarStyle) { const index = avatars.indexOf(avatar); return hasOwnerAccess() || localStorage.getItem("orbit-unlock-avatars") === "1" || (index >= 0 && isSpinCosmeticUnlocked("avatar", index)) || (avatar.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : avatar.prestige !== undefined ? prestigeLevel >= avatar.prestige : avatar.jackpot ? localStorage.getItem("orbit-jackpot-avatar") === "1" : true); }
+function isTrailUnlocked(trail: TrailStyle) { const index = trails.indexOf(trail); return hasOwnerAccess() || localStorage.getItem("orbit-unlock-trails") === "1" || (index >= 0 && isSpinCosmeticUnlocked("trail", index)) || (trail.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : trail.prestige !== undefined ? prestigeLevel >= trail.prestige : trail.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : trail.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= trail.required); }
 function getUnlockedTrailCount() { return trails.filter(isTrailUnlocked).length; }
 function formatTime(milliseconds: number) { const total = Math.max(0, Math.floor(milliseconds)); const minutes = Math.floor(total / 60000).toString().padStart(2, "0"); const seconds = Math.floor(total / 1000 % 60).toString().padStart(2, "0"); const millis = (total % 1000).toString().padStart(3, "0"); return `${minutes}:${seconds}.${millis}`; }

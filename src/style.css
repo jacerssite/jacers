@@ -300,6 +300,25 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .flat-cosmetic-choice:hover:not(:disabled), .flat-cosmetic-choice.selected { border-bottom-color: #f6c46e; color: #f6c46e; box-shadow: none; }
 .flat-cosmetic-choice:disabled { opacity: .35; cursor: not-allowed; }
 .flat-cosmetic-choice small { color: #99b3a6; font: .52rem 'DM Mono', monospace; }
+.cosmetic-icon { position: relative; display: inline-grid; flex: 0 0 30px; place-items: center; width: 30px; height: 26px; overflow: visible; }
+.trail-choice-icon { --trail-icon-color: #ed7657; }
+.trail-choice-icon::before, .trail-choice-icon::after { position: absolute; content: ""; pointer-events: none; }
+.trail-choice-icon.trail-effect-ember::before { left: 12px; top: 3px; width: 7px; height: 19px; border-radius: 60% 42% 55% 38%; background: linear-gradient(180deg, #fff3bd, var(--trail-icon-color) 58%, #8b3153); box-shadow: 0 0 10px var(--trail-icon-color); clip-path: polygon(50% 0, 100% 46%, 73% 42%, 84% 100%, 18% 68%, 0 100%, 16% 42%, 0 48%); transform: rotate(-8deg); }
+.trail-choice-icon.trail-effect-comet::before { left: 3px; top: 9px; width: 25px; height: 7px; border-radius: 80% 20% 20% 80%; background: linear-gradient(90deg, transparent, var(--trail-icon-color) 50%, #fff3bd); box-shadow: 0 0 10px var(--trail-icon-color); transform: rotate(-16deg); }
+.trail-choice-icon.trail-effect-spark::before { left: 11px; top: 7px; width: 9px; height: 9px; border-radius: 50%; background: var(--trail-icon-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--trail-icon-color) 28%, transparent), 0 0 13px var(--trail-icon-color); }
+.trail-choice-icon.trail-effect-spark::after { left: 5px; top: 4px; width: 3px; height: 3px; border-radius: 1px; background: #fff3bd; box-shadow: 18px 13px 0 #fff3bd, 19px 1px 0 var(--trail-icon-color); transform: rotate(45deg); }
+.trail-choice-icon.trail-effect-ribbon::before { left: 10px; top: 1px; width: 10px; height: 24px; border-radius: 55%; background: linear-gradient(90deg, transparent, var(--trail-icon-color) 45%, #fff3bd 52%, transparent 80%); box-shadow: 0 0 10px var(--trail-icon-color); transform: rotate(22deg); }
+.trail-choice-icon.trail-effect-arc::before { left: 6px; top: 2px; width: 18px; height: 18px; border: 3px solid var(--trail-icon-color); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; box-shadow: 0 0 10px var(--trail-icon-color); transform: rotate(24deg); }
+.avatar-choice-icon { overflow: hidden; }
+.avatar-choice-icon .ship-art-image, .avatar-choice-icon .ship-art-inline, .avatar-choice-icon .ship-css-art { display: block; width: 28px; height: 25px; object-fit: contain; }
+.avatar-choice-icon .ship-art-image { position: relative; }
+.avatar-choice-icon .ship-art-inline svg { display: block; width: 100%; height: 100%; }
+.avatar-choice-icon .ship-css-art { box-shadow: 0 0 9px color-mix(in srgb, var(--ship-color) 82%, transparent); }
+.avatar-choice-shape { display: block; width: 22px; height: 22px; border: 2px solid #f3f5e9; background: var(--avatar-choice-color); box-shadow: 0 0 9px var(--avatar-choice-color); }
+.avatar-shape-classic { border-radius: 50%; }
+.avatar-shape-dart { clip-path: polygon(50% 0, 100% 100%, 50% 77%, 0 100%); }
+.avatar-shape-ring { border-radius: 50%; background: transparent; border-color: var(--avatar-choice-color); box-shadow: inset 0 0 0 5px #101b2b, 0 0 9px var(--avatar-choice-color); }
+.avatar-shape-blade { clip-path: polygon(50% 0, 100% 78%, 61% 65%, 50% 100%, 39% 65%, 0 78%); }
 .ship-color-choice { width: 44px; height: 44px; justify-self: center; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--ship-color-choice); cursor: pointer; }
 .ship-color-choice:hover, .ship-color-choice:focus-visible, .ship-color-choice.selected { outline: 3px solid #f6c46e; outline-offset: 3px; }
 .customization-screen .flat-cosmetic-choice > span { display: inline; }

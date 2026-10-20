@@ -23,17 +23,18 @@ export function createCustomization(context: CustomizationContext) {
     function showCustomization() {
         const menu = document.createElement("main");
         menu.className = "menu-screen customization-screen";
-        menu.innerHTML = `<p class="eyebrow">HANGAR / LOADOUT</p><h1>Build your <em>ship</em></h1><p class="menu-copy">Equip a skin, trail, and avatar. Every collection is grouped from Common through Legendary.</p>`;
+        menu.innerHTML = `<p class="eyebrow">HANGAR / LOADOUT</p><h1>Build your <em>ship</em></h1><p class="menu-copy">Choose a ship color, trail, and avatar. Every collection is grouped from Common through Legendary.</p>`;
         const layout = document.createElement("div"); layout.className = "customization-layout";
         const panel = document.createElement("section"); panel.className = "settings-panel customization-panel";
         
-        const { shipColor: selectedShipColor, avatar: selectedAvatar, skin: selectedSkin, trail: selectedTrail } = getLoadout();
+        const { shipColor: selectedShipColor, avatar: selectedAvatar, trail: selectedTrail } = getLoadout();
         const preview = createShipPreview();
         
         const rarityOrder: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
         
-        // Create arrays with original indices
-        const skinsWithIndex = skins.map((s, i) => ({ ...s, originalIndex: i }));
+        // Create arrays with original indices. Skins are represented by the
+        // color swatches above; they are intentionally not shown as a second
+        // selectable collection.
         const trailsWithIndex = trails.map((t, i) => ({ ...t, originalIndex: i }));
         // Keep the complete avatar catalog in one collection. Prestige avatars
         // can be won from the roulette wheel just like the normal collection,
@@ -56,7 +57,7 @@ export function createCustomization(context: CustomizationContext) {
         const colorOptions = getShipColorOptions(STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins);
         const appearance = document.createElement("section");
         appearance.className = "appearance-loadout-section";
-        appearance.innerHTML = `<h2>Appearance</h2><p>Choose your ship color. Colors are grouped by rarity; skins, trails, and avatars are listed below by type.</p>`;
+        appearance.innerHTML = `<h2>Appearance</h2><p>Choose your ship color. Colors are grouped by rarity.</p>`;
         const appendColorGroups = () => {
             const grouped = new Map<Rarity, typeof colorOptions>();
             rarityOrder.forEach((rarity) => grouped.set(rarity, []));
@@ -88,25 +89,37 @@ export function createCustomization(context: CustomizationContext) {
         };
         appendColorGroups();
         panel.append(appearance);
-        // Keep cosmetic collections grouped by type, with simple text choices
-        // instead of the old boxed icon cards.
-        appendRarityGroups(panel, "Skins", skinsWithIndex, "flat-cosmetic-list", (skin, _index, rarity) => {
-            const button = document.createElement("button"); button.className = `flat-cosmetic-choice ${selectedSkin === skin.originalIndex ? "selected" : ""}`; button.disabled = !isSkinUnlocked(skin, skin.originalIndex);
-            button.innerHTML = `<span>${skin.name}</span>${createRarityBadge(rarity)}`;
-            button.addEventListener("click", () => {
-                setLoadout({ skin: skin.originalIndex, shipColor: skin.color });
-                showCustomization();
-            }); return button;
-        });
+        // Keep the remaining cosmetic collections grouped by type, with simple
+        // text choices instead of the old boxed icon cards. Skins only define
+        // unlockable colors now and are not presented as a separate list.
         appendRarityGroups(panel, "Trails", trailsWithIndex, "flat-cosmetic-list", (trail, _index, rarity) => {
             const button = document.createElement("button"); button.className = `flat-cosmetic-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]);
-            button.innerHTML = `<span>${trail.name}</span>${createRarityBadge(rarity)}`;
+            const icon = document.createElement("span");
+            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}`;
+            icon.style.setProperty("--trail-icon-color", trail.color);
+            icon.setAttribute("aria-hidden", "true");
+            const label = document.createElement("span"); label.textContent = trail.name;
+            button.append(icon, label);
+            button.insertAdjacentHTML("beforeend", createRarityBadge(rarity));
             button.addEventListener("click", () => { setLoadout({ trail: trail.originalIndex }); showCustomization(); }); return button;
         });
         appendRarityGroups(panel, "Avatars", avatarsWithIndex, "flat-cosmetic-list", (avatar, _index, rarity) => {
             const unlocked = isAvatarUnlocked(avatars[avatar.originalIndex]);
             const button = document.createElement("button"); button.className = `flat-cosmetic-choice ${selectedAvatar === avatar.originalIndex ? "selected" : ""}`; button.disabled = !unlocked;
-            button.innerHTML = `<span>${avatar.name}</span>${createRarityBadge(rarity)}<small>${unlocked ? "READY" : avatar.prestige ? `PRESTIGE ${avatar.prestige}` : avatar.golden ? "20 routes" : avatar.jackpot ? "JACKPOT" : "LOCKED"}</small>`;
+            const icon = document.createElement("span");
+            icon.className = "cosmetic-icon avatar-choice-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.innerHTML = avatar.cssArt
+                ? createCssShipArtMarkup(avatar.cssArt, avatar.name, avatar.color)
+                : avatar.image
+                    ? createShipArtMarkup(avatar.image, avatar.name, avatar.color)
+                    : `<span class="avatar-choice-shape avatar-shape-${avatar.shape}" style="--avatar-choice-color:${avatar.color}"></span>`;
+            const label = document.createElement("span"); label.textContent = avatar.name;
+            button.append(icon, label);
+            button.insertAdjacentHTML("beforeend", createRarityBadge(rarity));
+            const status = document.createElement("small");
+            status.textContent = unlocked ? "READY" : avatar.prestige ? `PRESTIGE ${avatar.prestige}` : avatar.golden ? "20 routes" : avatar.jackpot ? "JACKPOT" : "LOCKED";
+            button.append(status);
             button.addEventListener("click", () => {
                 const skin = skins[avatar.defaultSkin];
                 setLoadout(isSkinUnlocked(skin, avatar.defaultSkin)
@@ -154,7 +167,7 @@ export function createCustomization(context: CustomizationContext) {
         const name = document.createElement("b");
         name.textContent = avatar.name;
         const details = document.createElement("small");
-        details.textContent = `Color ${shipColor} / ${skin.name} skin / ${trail.name} trail`;
+        details.textContent = `Color ${shipColor} / ${trail.name} trail`;
         preview.append(heading, stage, name, details);
         let animationStart = 0;
         let lastSampleAt = 0;
