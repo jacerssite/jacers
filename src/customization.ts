@@ -117,8 +117,9 @@ export function createCustomization(context: CustomizationContext) {
         appendRarityGroups(panel, "Trails", trailsWithIndex, "cosmetic-card-grid", (trail, _index, rarity) => {
             const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]); button.dataset.trailIndex = String(trail.originalIndex);
             const icon = document.createElement("span");
-            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}`;
+            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
+            if (trail.secondaryColor) icon.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             icon.setAttribute("aria-hidden", "true");
             const label = document.createElement("span"); label.textContent = trail.name;
             button.append(icon, label);
@@ -170,10 +171,12 @@ export function createCustomization(context: CustomizationContext) {
         const scene = document.createElement("div");
         scene.className = "trail-preview-scene";
         scene.style.setProperty("--trail-color", trail.color);
+        if (trail.secondaryColor) scene.style.setProperty("--trail-secondary-color", trail.secondaryColor);
         const particleElements = Array.from({ length: 5 }, (_, index) => {
             const particle = document.createElement("i");
-            particle.className = `trail-particle trail-effect-${trail.effect} ${index === 0 ? "trail-head" : ""}`;
+            particle.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""} ${index === 0 ? "trail-head" : ""}`;
             particle.style.setProperty("--trail-delay", `${index * 60}ms`);
+            if (trail.secondaryColor) particle.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             scene.append(particle);
             return particle;
         });

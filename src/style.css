@@ -227,6 +227,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .trail-active.trail-effect-ribbon { animation: trail-ribbon .9s ease-in-out infinite alternate; }
 .trail-effect-arc { width: 24px; height: 24px; border: 3px solid var(--trail-color, #ed7657); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; background: transparent; box-shadow: 0 0 12px var(--trail-color, #ed7657); }
 .trail-active.trail-effect-arc { animation: trail-arc .8s linear infinite; }
+.trail-effect-arc.trail-duotone { border: 0; background: conic-gradient(from 0deg, var(--trail-color, #ed7657) 0 48%, var(--trail-secondary-color, #fff3bd) 48% 100%); -webkit-mask: radial-gradient(circle, transparent 0 55%, #000 58%); mask: radial-gradient(circle, transparent 0 55%, #000 58%); box-shadow: 0 0 14px var(--trail-color, #ed7657), 0 0 18px var(--trail-secondary-color, #fff3bd); }
+.trail-active.trail-effect-arc.trail-duotone, .trail-active.trail-effect-arc.trail-duotone.trail-head { animation: trail-arc-duotone .9s linear infinite !important; }
 #game-world.reduced-effects .trail-particle { animation: none !important; }
 .trail-effect-comet.flipped-trail { transform: rotate(18deg); animation-name: trail-comet-flipped; }
 .trail-effect-ribbon.flipped-trail { animation-name: trail-ribbon-flipped; }
@@ -322,6 +324,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .trail-choice-icon.trail-effect-spark::after { left: 5px; top: 4px; width: 3px; height: 3px; border-radius: 1px; background: #fff3bd; box-shadow: 18px 13px 0 #fff3bd, 19px 1px 0 var(--trail-icon-color); transform: rotate(45deg); }
 .trail-choice-icon.trail-effect-ribbon::before { left: 10px; top: 1px; width: 10px; height: 24px; border-radius: 55%; background: linear-gradient(90deg, transparent, var(--trail-icon-color) 45%, #fff3bd 52%, transparent 80%); box-shadow: 0 0 10px var(--trail-icon-color); transform: rotate(22deg); }
 .trail-choice-icon.trail-effect-arc::before { left: 6px; top: 2px; width: 18px; height: 18px; border: 3px solid var(--trail-icon-color); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; box-shadow: 0 0 10px var(--trail-icon-color); transform: rotate(24deg); }
+.trail-choice-icon.trail-effect-arc.trail-duotone::before { border: 0; background: conic-gradient(from 0deg, var(--trail-icon-color) 0 48%, var(--trail-secondary-color, #fff3bd) 48% 100%); -webkit-mask: radial-gradient(circle, transparent 0 55%, #000 58%); mask: radial-gradient(circle, transparent 0 55%, #000 58%); box-shadow: 0 0 10px var(--trail-icon-color), 0 0 12px var(--trail-secondary-color, #fff3bd); animation: trail-icon-spin 1.1s linear infinite; }
 .avatar-choice-icon { overflow: hidden; }
 .avatar-choice-icon .ship-art-image, .avatar-choice-icon .ship-art-inline, .avatar-choice-icon .ship-css-art { display: block; width: 28px; height: 25px; object-fit: contain; }
 .avatar-choice-icon .ship-art-image { position: relative; }
@@ -712,6 +715,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @keyframes trail-ribbon { to { transform: rotate(16deg) translateY(7px); opacity: .5; } }
 @keyframes trail-ribbon-flipped { to { transform: rotate(-16deg) translateY(-7px); opacity: .5; } }
 @keyframes trail-arc { to { transform: rotate(360deg); } }
+@keyframes trail-arc-duotone { from { rotate: 0deg; } to { rotate: 360deg; } }
+@keyframes trail-icon-spin { to { rotate: 360deg; } }
 
 @media (max-width: 600px) {
 	.level-list { grid-template-columns: 1fr; }

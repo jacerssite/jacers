@@ -4959,14 +4959,18 @@ function createTrail(visible = true) {
     if (trailElement.length === 0) {
         trailElement = Array.from({ length: 5 }, (_, index) => {
             const element = document.createElement("i");
-            element.className = `trail-particle trail-effect-${trail.effect} ${index === 0 ? "trail-head" : ""}`;
+            element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""} ${index === 0 ? "trail-head" : ""}`;
             element.style.setProperty("--trail-delay", `${index * 60}ms`);
             element.style.opacity = "0";
             world.append(element);
             return element;
         });
     }
-    trailElement.forEach((element) => element.style.setProperty("--trail-color", trail.color));
+    trailElement.forEach((element) => {
+        element.style.setProperty("--trail-color", trail.color);
+        if (trail.secondaryColor) element.style.setProperty("--trail-secondary-color", trail.secondaryColor);
+        else element.style.removeProperty("--trail-secondary-color");
+    });
     if (visible) { trailActive = true; trailTimer = 0; }
     else { trailActive = false; trailPositions = []; }
     updateTrail(visible);
