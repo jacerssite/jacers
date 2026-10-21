@@ -28,7 +28,24 @@ export function createCustomization(context: CustomizationContext) {
         const panel = document.createElement("section"); panel.className = "settings-panel customization-panel";
         
         const { shipColor: selectedShipColor, avatar: selectedAvatar, trail: selectedTrail } = getLoadout();
-        const preview = createShipPreview();
+        let preview = createShipPreview();
+        const refreshCustomization = () => {
+            const loadout = getLoadout();
+            panel.querySelectorAll<HTMLButtonElement>(".ship-color-choice").forEach((button) => {
+                const selected = loadout.shipColor.toLowerCase() === (button.dataset.color ?? "").toLowerCase();
+                button.classList.toggle("selected", selected);
+                button.setAttribute("aria-pressed", String(selected));
+            });
+            panel.querySelectorAll<HTMLButtonElement>(".cosmetic-card-choice[data-trail-index]").forEach((button) => {
+                button.classList.toggle("selected", Number(button.dataset.trailIndex) === loadout.trail);
+            });
+            panel.querySelectorAll<HTMLButtonElement>(".cosmetic-card-choice[data-avatar-index]").forEach((button) => {
+                button.classList.toggle("selected", Number(button.dataset.avatarIndex) === loadout.avatar);
+            });
+            const nextPreview = createShipPreview(loadout);
+            layout.replaceChild(nextPreview, preview);
+            preview = nextPreview;
+        };
         
         const rarityOrder: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
         
@@ -82,13 +99,14 @@ export function createCustomization(context: CustomizationContext) {
             button.className = `ship-color-choice ${selected ? "selected" : ""}`;
             button.type = "button";
             button.disabled = !unlocked;
+            button.dataset.color = option.color;
             button.title = unlocked ? `${option.name} / ${option.color}` : option.source === "roulette" ? "Unlock this color from the roulette wheel" : `Unlock the ${option.name} skin to use this color`;
             button.setAttribute("aria-label", `Ship color ${option.name}${unlocked ? "" : ", locked"}`);
             button.setAttribute("aria-pressed", String(selected));
             button.style.setProperty("--ship-color-choice", option.color);
             button.addEventListener("click", () => {
                 setLoadout({ shipColor: option.color });
-                showCustomization();
+                refreshCustomization();
             });
             return button;
         };
@@ -97,7 +115,7 @@ export function createCustomization(context: CustomizationContext) {
         // Keep trails and avatars grouped into compact cards. Skins only define
         // unlockable colors now and are not presented as a separate list.
         appendRarityGroups(panel, "Trails", trailsWithIndex, "cosmetic-card-grid", (trail, _index, rarity) => {
-            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]);
+            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]); button.dataset.trailIndex = String(trail.originalIndex);
             const icon = document.createElement("span");
             icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
@@ -105,11 +123,11 @@ export function createCustomization(context: CustomizationContext) {
             const label = document.createElement("span"); label.textContent = trail.name;
             button.append(icon, label);
             button.insertAdjacentHTML("beforeend", createRarityBadge(rarity));
-            button.addEventListener("click", () => { setLoadout({ trail: trail.originalIndex }); showCustomization(); }); return button;
+            button.addEventListener("click", () => { setLoadout({ trail: trail.originalIndex }); refreshCustomization(); }); return button;
         });
         appendRarityGroups(panel, "Avatars", avatarsWithIndex, "cosmetic-card-grid", (avatar, _index, rarity) => {
             const unlocked = isAvatarUnlocked(avatars[avatar.originalIndex]);
-            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedAvatar === avatar.originalIndex ? "selected" : ""}`; button.disabled = !unlocked;
+            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedAvatar === avatar.originalIndex ? "selected" : ""}`; button.disabled = !unlocked; button.dataset.avatarIndex = String(avatar.originalIndex);
             const icon = document.createElement("span");
             icon.className = "cosmetic-icon avatar-choice-icon";
             icon.setAttribute("aria-hidden", "true");
@@ -129,7 +147,7 @@ export function createCustomization(context: CustomizationContext) {
                 setLoadout(isSkinUnlocked(skin, avatar.defaultSkin)
                     ? { avatar: avatar.originalIndex, skin: avatar.defaultSkin, shipColor: skin.color }
                     : { avatar: avatar.originalIndex });
-                showCustomization();
+                refreshCustomization();
             }); return button;
         });
         layout.append(panel, preview);
