@@ -14,7 +14,7 @@ type LevelMakerContext = {
 };
 
 export function levelToMakerDraft(level: Level, sourceLevelIndex?: number): LevelMakerDraft {
-    const columns = Math.max(24, Math.min(60, level.length));
+    const columns = Math.max(24, Math.min(100, level.length));
     const tiles = Array<string>(columns * 6).fill("empty");
     const flippedTiles = Array<string>(columns * 6).fill("empty");
     const place = (target: string[], index: number, kind: string) => {
@@ -55,8 +55,11 @@ export function createLevelMaker(context: LevelMakerContext) {
         const sourceLevel = draft?.sourceLevelIndex !== undefined
             ? levels[draft.sourceLevelIndex]
             : draft?.customId ? levels.find((level) => level.customId === draft.customId) : undefined;
-        const routeLength = Math.max(8, Math.min(60, draft?.length ?? sourceLevel?.length ?? 26));
-        const gridColumns = Math.max(24, routeLength);
+        const maxRouteLength = 100;
+        let routeLength = Math.max(8, Math.min(maxRouteLength, draft?.length ?? sourceLevel?.length ?? 26));
+        // Start with a compact grid, then grow the timeline when the author
+        // extends the route so the initial editor stays easy to scan.
+        let gridColumns = Math.max(24, routeLength);
         menu.innerHTML = `<p class="eyebrow">JACER WORKSHOP / LEVEL EDITOR</p><h1>${editingBuiltIn ? "Edit a" : "Build a"} <em>route</em></h1><p class="menu-copy">Playtest your draft before publishing. Built-in route edits are shared with every player after an owner saves them.</p>`;
         const details = document.createElement("div");
         details.className = "maker-details";
@@ -72,6 +75,33 @@ export function createLevelMaker(context: LevelMakerContext) {
         briefingInput.value = draft?.briefing ?? "";
         briefingInput.setAttribute("aria-label", "Level briefing");
         details.append(nameInput, briefingInput);
+        const lengthControl = document.createElement("section");
+        lengthControl.className = "maker-length-control";
+        const lengthHeading = document.createElement("b");
+        lengthHeading.textContent = "Timeline length";
+        const lengthCopy = document.createElement("span");
+        lengthCopy.textContent = "Scroll the timeline with your mouse wheel. Extend the route to make room for more columns.";
+        const lengthInputs = document.createElement("div");
+        lengthInputs.className = "maker-length-inputs";
+        const lengthRange = document.createElement("input");
+        lengthRange.type = "range";
+        lengthRange.min = "8";
+        lengthRange.max = String(maxRouteLength);
+        lengthRange.step = "1";
+        lengthRange.value = String(routeLength);
+        lengthRange.setAttribute("aria-label", "Timeline length");
+        const lengthNumber = document.createElement("input");
+        lengthNumber.type = "number";
+        lengthNumber.min = "8";
+        lengthNumber.max = String(maxRouteLength);
+        lengthNumber.step = "1";
+        lengthNumber.value = String(routeLength);
+        lengthNumber.setAttribute("aria-label", "Timeline length in columns");
+        const lengthValue = document.createElement("output");
+        lengthValue.className = "maker-length-value";
+        lengthValue.textContent = `${routeLength} columns`;
+        lengthInputs.append(lengthRange, lengthNumber, lengthValue);
+        lengthControl.append(lengthHeading, lengthCopy, lengthInputs);
         const existingWorkshopLevels = levels.filter((level) => Boolean(level.customId) && !level.localOnly);
         if (existingWorkshopLevels.length) {
             const editSection = document.createElement("section");
@@ -217,15 +247,74 @@ export function createLevelMaker(context: LevelMakerContext) {
         const flippedGrid = document.createElement("div"); flippedGrid.className = "maker-grid"; flippedGrid.hidden = true; flippedGrid.setAttribute("aria-label", "Flipped planet area grid");
         grid.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
         flippedGrid.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
+        const gridViewport = document.createElement("div");
+        gridViewport.className = "maker-grid-viewport";
+        gridViewport.setAttribute("aria-label", "Scrollable level timeline");
+        const ruler = document.createElement("div");
+        ruler.className = "maker-grid-ruler";
+        const renderRuler = () => {
+            ruler.replaceChildren();
+            ruler.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
+            for (let column = 1; column <= gridColumns; column++) {
+                const marker = document.createElement("span");
+                marker.textContent = column === 1 || column % 5 === 0 ? String(column) : "";
+                ruler.append(marker);
+            }
+        };
+        renderRuler();
+        gridViewport.addEventListener("wheel", (event) => {
+            if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+            event.preventDefault();
+            gridViewport.scrollLeft += event.deltaY;
+        }, { passive: false });
         let cells: HTMLButtonElement[] = [];
         let flippedCells: HTMLButtonElement[] = [];
         cells = createCells(grid, draft?.tiles, "Normal");
         flippedCells = createCells(flippedGrid, draft?.flippedTiles, "Flipped");
+        gridViewport.append(ruler, grid, flippedGrid);
+        const updateRouteLength = (nextLength: number) => {
+            routeLength = Math.max(8, Math.min(maxRouteLength, Math.round(nextLength)));
+            if (routeLength > gridColumns) {
+                const normalValues = cells.map((cell) => cell.dataset.kind ?? "empty");
+                const flippedValues = flippedCells.map((cell) => cell.dataset.kind ?? "empty");
+                gridColumns = routeLength;
+                grid.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
+                flippedGrid.style.gridTemplateColumns = `repeat(${gridColumns}, minmax(28px, 1fr))`;
+                renderRuler();
+                grid.replaceChildren();
+                flippedGrid.replaceChildren();
+                cells = createCells(grid, normalValues, "Normal");
+                flippedCells = createCells(flippedGrid, flippedValues, "Flipped");
+            }
+            lengthRange.value = String(routeLength);
+            lengthNumber.value = String(routeLength);
+            lengthValue.textContent = `${routeLength} columns`;
+            [...cells, ...flippedCells].forEach((cell, index) => {
+                const column = index % gridColumns + 1;
+                const disabled = column > routeLength - 2;
+                cell.disabled = disabled;
+                cell.classList.toggle("maker-cell-disabled", disabled);
+                if (disabled) {
+                    cell.dataset.kind = "empty";
+                    cell.className = makerCellClass("empty");
+                    cell.classList.add("maker-cell-disabled");
+                    cell.textContent = "";
+                }
+            });
+        };
+        lengthRange.addEventListener("input", () => updateRouteLength(Number(lengthRange.value)));
+        lengthNumber.addEventListener("change", () => updateRouteLength(Number(lengthNumber.value)));
+        lengthNumber.addEventListener("input", () => {
+            if (lengthNumber.value) updateRouteLength(Number(lengthNumber.value));
+        });
         const applyCellData = (collection: HTMLButtonElement[], values: string[]) => collection.forEach((cell, index) => {
             const kind = values[index] ?? "empty";
             cell.dataset.kind = kind;
             cell.className = makerCellClass(kind);
             cell.textContent = kind === "empty" || kind === "gravity" ? "" : kind === "exitKey" ? "K" : powerupTileKinds[kind] ? powerupLabels[powerupTileKinds[kind]].slice(0, 1) : "";
+            const disabled = index % gridColumns + 1 > routeLength - 2;
+            cell.disabled = disabled;
+            if (disabled) cell.classList.add("maker-cell-disabled");
         });
         const currentDraft = (): LevelMakerDraft => ({
             name: nameInput.value,
@@ -399,7 +488,7 @@ export function createLevelMaker(context: LevelMakerContext) {
         });
         updateFlippedTab();
         toolbar.append(areaState, normalTab, flippedTab);
-        menu.append(details, toolbar, grid, flippedGrid, palette, playtest, save, saveStatus, createTextButton("Back to tester", () => showTesterPanel()));
+        menu.append(details, lengthControl, toolbar, gridViewport, palette, playtest, save, saveStatus, createTextButton("Back to tester", () => showTesterPanel()));
         document.body.replaceChildren(menu);
     }
 

@@ -152,13 +152,13 @@ export function isValidGameConfig(value) {
 
 function parseTileList(value, length) {
   return Array.isArray(value)
-    && value.length <= 60
+    && value.length <= 100
     && value.every((index) => isBoundedInteger(index, 1, length - 2))
     && new Set(value).size === value.length;
 }
 
 function validPowerups(value, length) {
-  return Array.isArray(value) && value.length <= 60
+  return Array.isArray(value) && value.length <= 100
     && value.every((item) => item && isBoundedInteger(item.index, 1, length - 2) && POWERUP_KINDS.includes(item.kind))
     && new Set(value.map((item) => item.index)).size === value.length;
 }
@@ -186,7 +186,7 @@ export function validateWorkshopLevel(value) {
     || /[<>]/.test(value.name)
     || typeof value.briefing !== "string" || value.briefing.trim().length < 1 || value.briefing.trim().length > 240
     || /[<>]/.test(value.briefing)
-    || !isBoundedInteger(value.length, 8, 60)) return null;
+    || !isBoundedInteger(value.length, 8, 100)) return null;
   const fields = ["asteroids", "walls", "enemies", "spikes", "gravity"];
   if (!fields.every((field) => parseTileList(value[field], value.length))) return null;
   for (const field of ["blocks", "portals", "specialAsteroids", "miniBosses", "flip"]) {

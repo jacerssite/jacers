@@ -43,10 +43,14 @@ export function createCustomization(context: CustomizationContext) {
         const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i }));
         
         const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity) => HTMLButtonElement) => {
-            const group = document.createElement("section");
-            group.className = "cosmetic-group-section";
+            const group = document.createElement("details");
+            group.className = "cosmetic-group-section cosmetic-dropdown";
+            group.open = title === "Appearance";
             if (title) {
-                const heading = document.createElement("h3"); heading.className = "setting-title"; heading.textContent = title; group.append(heading);
+                const heading = document.createElement("summary");
+                heading.className = "cosmetic-dropdown-summary";
+                heading.textContent = title;
+                group.append(heading);
             }
             const ordered = collection.map((item, index) => ({ item, index, rarity: getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
             const grid = document.createElement("div"); grid.className = gridClass;
@@ -55,9 +59,10 @@ export function createCustomization(context: CustomizationContext) {
             target.append(group);
         };
         const colorOptions = getShipColorOptions(STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins);
-        const appearance = document.createElement("section");
-        appearance.className = "appearance-loadout-section";
-        appearance.innerHTML = `<h2>Appearance</h2><p>Choose your ship color. Colors are grouped by rarity.</p>`;
+        const appearance = document.createElement("details");
+        appearance.className = "appearance-loadout-section cosmetic-dropdown";
+        appearance.open = true;
+        appearance.innerHTML = `<summary class="cosmetic-dropdown-summary">Appearance</summary><p>Choose your ship color. Colors are grouped by rarity.</p>`;
         const appendColorGroups = () => {
             const grouped = new Map<Rarity, typeof colorOptions>();
             rarityOrder.forEach((rarity) => grouped.set(rarity, []));
@@ -89,11 +94,10 @@ export function createCustomization(context: CustomizationContext) {
         };
         appendColorGroups();
         panel.append(appearance);
-        // Keep the remaining cosmetic collections grouped by type, with simple
-        // text choices instead of the old boxed icon cards. Skins only define
+        // Keep trails and avatars grouped into compact cards. Skins only define
         // unlockable colors now and are not presented as a separate list.
-        appendRarityGroups(panel, "Trails", trailsWithIndex, "flat-cosmetic-list", (trail, _index, rarity) => {
-            const button = document.createElement("button"); button.className = `flat-cosmetic-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]);
+        appendRarityGroups(panel, "Trails", trailsWithIndex, "cosmetic-card-grid", (trail, _index, rarity) => {
+            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]);
             const icon = document.createElement("span");
             icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
@@ -103,9 +107,9 @@ export function createCustomization(context: CustomizationContext) {
             button.insertAdjacentHTML("beforeend", createRarityBadge(rarity));
             button.addEventListener("click", () => { setLoadout({ trail: trail.originalIndex }); showCustomization(); }); return button;
         });
-        appendRarityGroups(panel, "Avatars", avatarsWithIndex, "flat-cosmetic-list", (avatar, _index, rarity) => {
+        appendRarityGroups(panel, "Avatars", avatarsWithIndex, "cosmetic-card-grid", (avatar, _index, rarity) => {
             const unlocked = isAvatarUnlocked(avatars[avatar.originalIndex]);
-            const button = document.createElement("button"); button.className = `flat-cosmetic-choice ${selectedAvatar === avatar.originalIndex ? "selected" : ""}`; button.disabled = !unlocked;
+            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedAvatar === avatar.originalIndex ? "selected" : ""}`; button.disabled = !unlocked;
             const icon = document.createElement("span");
             icon.className = "cosmetic-icon avatar-choice-icon";
             icon.setAttribute("aria-hidden", "true");

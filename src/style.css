@@ -269,7 +269,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .customization-layout .settings-panel { width: auto; margin: 0; }
 .customization-layout .ship-preview { position: sticky; top: 18px; min-height: 190px; padding: 12px; }
 .appearance-loadout-section { margin: 18px 0 24px; padding: 14px; border: 1px solid #f6c46e88; background: linear-gradient(135deg, #143746cc, #101b2bcc); }
-.appearance-loadout-section > h2 { margin: 0; color: #f6c46e; font: 700 .92rem 'DM Mono', monospace; letter-spacing: 1.4px; text-transform: uppercase; }
+.appearance-loadout-section > summary { margin: 0; color: #f6c46e; font: 700 .92rem 'DM Mono', monospace; letter-spacing: 1.4px; text-transform: uppercase; }
 .appearance-loadout-section > p { margin: 7px 0 13px; color: #99b3a6; font: .62rem/1.55 'DM Mono', monospace; }
 .appearance-loadout-section .setting-title { margin-top: 17px; }
 .appearance-loadout-section .setting-title:first-of-type { margin-top: 0; }
@@ -295,11 +295,24 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .appearance-group-title { margin: 14px 0 6px; color: #f6c46e; }
 .cosmetic-group-section { margin: 18px 0 24px; padding-top: 12px; border-top: 1px solid #385267; }
 .cosmetic-group-section .setting-title { margin: 0 0 8px; color: #f6c46e; font: 700 .82rem 'DM Mono', monospace; letter-spacing: 1.2px; text-transform: uppercase; }
+.cosmetic-dropdown > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; list-style: none; cursor: pointer; user-select: none; }
+.cosmetic-dropdown > summary::-webkit-details-marker { display: none; }
+.cosmetic-dropdown > summary::after { content: '+'; color: #99b3a6; font: 700 1rem 'DM Mono', monospace; }
+.cosmetic-dropdown[open] > summary::after { content: '−'; color: #f6c46e; }
+.cosmetic-dropdown > summary:focus-visible { outline: 1px solid #f6c46e; outline-offset: 4px; }
+.appearance-loadout-section > summary { padding: 2px 0 4px; }
 .flat-cosmetic-list { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 14px; }
 .flat-cosmetic-choice { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; min-height: 30px; padding: 5px 8px; border: 0; border-bottom: 1px solid #385267; color: #c4d1bd; background: transparent; font: .62rem 'DM Mono', monospace; cursor: pointer; }
 .flat-cosmetic-choice:hover:not(:disabled), .flat-cosmetic-choice.selected { border-bottom-color: #f6c46e; color: #f6c46e; box-shadow: none; }
 .flat-cosmetic-choice:disabled { opacity: .35; cursor: not-allowed; }
 .flat-cosmetic-choice small { color: #99b3a6; font: .52rem 'DM Mono', monospace; }
+.cosmetic-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.cosmetic-card-choice { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; gap: 3px 8px; min-height: 64px; padding: 8px; border: 1px solid #385267; border-radius: 3px; color: #c4d1bd; background: #101b2bcc; font: .62rem 'DM Mono', monospace; text-align: left; cursor: pointer; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease, transform .12s ease; }
+.cosmetic-card-choice:hover:not(:disabled), .cosmetic-card-choice:focus-visible, .cosmetic-card-choice.selected { border-color: #f6c46e; color: #f6c46e; background: #143746; box-shadow: 0 0 0 2px #f6c46e33, 0 4px 12px #08121f66; outline: none; transform: translateY(-1px); }
+.cosmetic-card-choice:disabled { opacity: .38; cursor: not-allowed; }
+.cosmetic-card-choice > .cosmetic-icon { grid-row: 1 / span 2; }
+.cosmetic-card-choice > .rarity-badge, .cosmetic-card-choice > small { grid-column: 2; justify-self: start; }
+.cosmetic-card-choice > small { color: #99b3a6; font: .52rem 'DM Mono', monospace; }
 .cosmetic-icon { position: relative; display: inline-grid; flex: 0 0 30px; place-items: center; width: 30px; height: 26px; overflow: visible; }
 .trail-choice-icon { --trail-icon-color: #ed7657; }
 .trail-choice-icon::before, .trail-choice-icon::after { position: absolute; content: ""; pointer-events: none; }
@@ -323,6 +336,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .ship-color-choice:hover, .ship-color-choice:focus-visible, .ship-color-choice.selected { outline: 3px solid #f6c46e; outline-offset: 3px; }
 .customization-screen .flat-cosmetic-choice > span { display: inline; }
 .customization-screen .flat-cosmetic-choice small { display: inline; margin: 0; }
+.customization-screen .cosmetic-card-choice > span:not(.cosmetic-icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .credits-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: min(560px, 90vw); margin: 20px 0; }
 .credits-list b { padding: 24px 10px; border: 1px solid #385267; color: #f6c46e; background: #143746cc; }
 .leaderboard-list { display: grid; gap: 6px; width: min(820px, 90vw); margin: 10px 0 24px; }
@@ -653,7 +667,17 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .maker-palette-asteroid .maker-palette-icon { color: #f6c46e; }
 .maker-palette-special .maker-palette-icon { color: #f58bff; }
 .maker-palette-enemy .maker-palette-icon, .maker-palette-miniboss .maker-palette-icon, .maker-palette-titan .maker-palette-icon { color: #ed7657; }
-.maker-grid { display: grid; grid-template-columns: repeat(24, minmax(28px, 1fr)); grid-auto-rows: minmax(28px, 1fr); gap: 2px; width: min(1100px, 96vw); height: min(48vh, 390px); overflow: auto; margin: 8px 0 0; padding: 12px; border: 1px solid #385267; background-color: #101b2bcc; background-image: linear-gradient(#38526755 1px, transparent 1px), linear-gradient(90deg, #38526755 1px, transparent 1px); background-size: 32px 32px; }
+.maker-length-control { display: grid; gap: 6px; width: min(1100px, 96vw); margin: 8px 0 2px; padding: 10px 12px; border: 1px solid #385267; background: #101b2bcc; }
+.maker-length-control b { color: #f6c46e; font: .68rem 'DM Mono', monospace; letter-spacing: .8px; text-transform: uppercase; }
+.maker-length-control > span { color: #99b3a6; font: .6rem/1.4 'DM Mono', monospace; }
+.maker-length-inputs { display: grid; grid-template-columns: minmax(160px, 1fr) 88px auto; align-items: center; gap: 10px; }
+.maker-length-inputs input[type="range"] { width: 100%; accent-color: #f6c46e; }
+.maker-length-inputs input[type="number"] { width: 100%; min-width: 0; padding: 8px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
+.maker-length-value { color: #bcecff; font: .62rem 'DM Mono', monospace; white-space: nowrap; }
+.maker-grid-viewport { width: min(1100px, 96vw); height: min(48vh, 390px); overflow-x: auto; overflow-y: hidden; margin: 8px 0 0; padding: 0 0 8px; border: 1px solid #385267; background-color: #101b2bcc; background-image: linear-gradient(#38526755 1px, transparent 1px), linear-gradient(90deg, #38526755 1px, transparent 1px); background-size: 32px 32px; overscroll-behavior-x: contain; scrollbar-color: #f6c46e #101b2b; }
+.maker-grid-ruler { display: grid; width: max-content; min-width: 100%; height: 24px; padding: 5px 12px 0; color: #99b3a6; font: .52rem 'DM Mono', monospace; text-align: center; }
+.maker-grid-ruler span { min-width: 0; border-left: 1px solid #38526788; }
+.maker-grid { display: grid; grid-template-columns: repeat(24, minmax(28px, 1fr)); grid-auto-rows: minmax(28px, 1fr); gap: 2px; width: max-content; min-width: 100%; height: min(48vh, 390px); overflow: visible; margin: 0; padding: 12px; border: 0; background: transparent; }
 .hud span { white-space: nowrap; }
 .player { background: var(--ship-color, #ed7657); box-shadow: 0 0 0 5px color-mix(in srgb, var(--ship-color, #ed7657) 20%, transparent), 0 8px 18px #101b2b88; }
 .ship-flame { background: #f6c46e; }
@@ -712,6 +736,11 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 	.maker-toolbar { flex-wrap: wrap; }
 	.maker-mode-label { width: 100%; order: -1; }
 	.maker-area-state { width: 100%; text-align: left; }
+	.maker-length-inputs { grid-template-columns: 1fr 76px; }
+	.maker-length-inputs input[type="range"] { grid-column: 1 / -1; grid-row: 1; }
+	.maker-length-inputs input[type="number"] { grid-column: 1; grid-row: 2; }
+	.maker-length-value { grid-column: 2; grid-row: 2; }
+	.maker-grid-viewport { width: 100%; }
 	.maker-grid { grid-template-columns: repeat(24, 24px); grid-auto-rows: 24px; height: 45vh; padding: 8px; }
 	.maker-palette .maker-palette-button { min-width: 70px; min-height: 58px; padding-inline: 5px; }
 }
