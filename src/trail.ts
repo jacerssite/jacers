@@ -16,7 +16,10 @@ export function drawTrailParticles(
         element.classList.toggle("flipped-trail", flipped);
         element.style.left = `${index === 0 ? anchor.x : tailX}px`;
         element.style.top = `${index === 0 ? anchor.y : tailY}px`;
-        element.style.opacity = `${Math.max(0.1, 1 - index * 0.2)}`;
+        // The particle at the ship's core is only an anchor for the trail
+        // geometry. Keep it invisible so the visible tail starts just behind
+        // the ship instead of drawing a spinning shape over the hull.
+        element.style.opacity = index === 0 ? "0" : `${Math.max(0.1, 1 - index * 0.2)}`;
     });
 }
 

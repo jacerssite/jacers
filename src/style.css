@@ -231,7 +231,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .trail-effect-arc.trail-duotone::before, .trail-effect-arc.trail-duotone::after { position: absolute; inset: 2px; content: ''; border: 3px solid; border-radius: 50%; pointer-events: none; }
 .trail-effect-arc.trail-duotone::before { border-color: var(--trail-color, #ed7657) transparent var(--trail-color, #ed7657) var(--trail-color, #ed7657); box-shadow: 0 0 8px var(--trail-color, #ed7657); transform: rotate(-28deg); animation: trail-orbit-primary .9s linear infinite; }
 .trail-effect-arc.trail-duotone::after { inset: 4px 1px 0 6px; border-color: transparent var(--trail-secondary-color, #fff3bd) var(--trail-secondary-color, #fff3bd) transparent; box-shadow: 0 0 8px var(--trail-secondary-color, #fff3bd); transform: rotate(24deg); animation: trail-orbit-secondary .9s linear infinite; }
-.trail-active.trail-effect-arc.trail-duotone, .trail-active.trail-effect-arc.trail-duotone.trail-head { animation: trail-arc-duotone .9s linear infinite !important; }
+.trail-active.trail-effect-arc.trail-duotone:not(.trail-head) { animation: trail-arc-duotone .9s linear infinite !important; }
+.trail-effect-arc.trail-duotone.trail-head::before, .trail-effect-arc.trail-duotone.trail-head::after { animation: none; }
 #game-world.reduced-effects .trail-particle { animation: none !important; }
 #game-world.reduced-effects .trail-effect-arc.trail-duotone::before, #game-world.reduced-effects .trail-effect-arc.trail-duotone::after { animation: none !important; }
 .trail-effect-comet.flipped-trail { transform: rotate(18deg); animation-name: trail-comet-flipped; }

@@ -315,9 +315,14 @@ function loadCustomLevels() {
 }
 
 function getHiddenPortalIndex(level: Level) {
-    const occupied = new Set([...level.walls, ...level.enemies, ...level.spikes, ...level.gravity]);
+    const occupied = new Set([...level.walls, ...level.enemies, ...level.spikes, ...level.gravity, ...(level.portals ?? [])]);
     const candidates = Array.from({ length: Math.max(1, level.length - 4) }, (_, index) => index + 2).filter((index) => !occupied.has(index));
     return candidates[Math.floor(Math.random() * candidates.length)] ?? Math.max(2, Math.floor(level.length / 2));
+}
+
+function getPlacedPortalIndex(level: Level) {
+    const portalIndex = (level.portals ?? []).find((index) => Number.isSafeInteger(index) && index >= 2 && index <= level.length - 2);
+    return portalIndex ?? null;
 }
 
 function getLevelType(level: Level): "normal" | "secret" | "prestige" {
@@ -634,7 +639,9 @@ function configurePortalDistribution() {
         const usedSources = new Set<string>();
         eligibleTargets.forEach(({ level }) => {
             const secretId = level.secretId;
-            if (!secretId || isSecretPortalClaimed(secretId)) return;
+            // Owners need to be able to verify a new portal assignment even
+            // after their test account has already claimed that secret route.
+            if (!secretId || (isSecretPortalClaimed(secretId) && !hasOwnerAccess())) return;
             const assignedSourceName = portalAssignments[secretId];
             const saved = readSecretPortalLocation(secretId);
             const portalChance = getWorldConfig(isPrestige).portalSpawnChance;
@@ -649,8 +656,10 @@ function configurePortalDistribution() {
                 localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify({ source: source.name, index: getHiddenPortalIndex(source), y: getHiddenPortalY() }));
             }
             const location = readSecretPortalLocation(secretId);
+            const placedPortalIndex = source ? getPlacedPortalIndex(source) : null;
+            const sameSource = Boolean(source && location?.source === source.name);
             const assignedLocation = assignedSourceName && source
-                ? { source: source.name, index: getHiddenPortalIndex(source), y: getHiddenPortalY() }
+                ? { source: source.name, index: placedPortalIndex ?? (sameSource ? location!.index : getHiddenPortalIndex(source)), y: sameSource ? location!.y : getHiddenPortalY() }
                 : location;
             if (!assignedLocation) return;
             if (assignedSourceName) localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify(assignedLocation));
@@ -3407,7 +3416,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         portalHeading.textContent = "Secret portal placement";
         const portalDescription = document.createElement("p");
         portalDescription.className = "menu-copy";
-        portalDescription.textContent = "Choose the normal or prestige level where each secret portal can appear. Empty assignments use automatic placement; portal spawn chance still applies to automatic portals.";
+        portalDescription.textContent = "Choose the normal or prestige level where each secret portal can appear. If that level has a Portal tile, the secret portal uses the first placed tile; otherwise it uses a stable hidden slot. Empty assignments use automatic placement.";
         portalAssignmentPanel.append(portalHeading, portalDescription);
         const portalTargets: Record<"normal" | "prestige", string[]> = {
             normal: ["eclipse", "nebula", "archive"],
@@ -4546,7 +4555,9 @@ createLevelKeyObject();
     const isSecretLevel = levels[currentLevel].secret === true;
     if (!isSecretLevel) {
         const portals = levels[currentLevel].portals ?? [];
+        const secretPortalIndexes = new Set(secretPortals.map((portal) => portal.index));
         portals.forEach((index, portalIndex) => { 
+            if (secretPortalIndexes.has(index)) return;
             const element = document.createElement("div"); 
             element.className = "portal";
             element.textContent = "↔";
@@ -4791,6 +4802,25 @@ function playerBox(): Box {
     };
 }
 function isInGravityZone() { return levelHazards.some((hazard) => hazard.kind === "gravity" && intersects(playerBox(), hazard)); }
+function applyGravityPull(frameScale: number) {
+    const ship = playerBox();
+    const well = levelHazards.find((hazard) => hazard.kind === "gravity" && intersects(ship, hazard));
+    if (!well) return;
+    const shipCenterX = ship.x + ship.width / 2;
+    const shipCenterY = ship.y + ship.height / 2;
+    const wellCenterX = well.x + well.width / 2;
+    const wellCenterY = well.y + well.height / 2;
+    const offsetX = wellCenterX - shipCenterX;
+    const offsetY = wellCenterY - shipCenterY;
+    const distance = Math.max(1, Math.hypot(offsetX, offsetY));
+    const proximity = Math.max(0, Math.min(1, 1 - distance / 220));
+    const horizontalStrength = 0.003 + proximity * 0.005;
+    const verticalStrength = 0.0015 + proximity * 0.0025;
+    // The pull is deliberately gentle and only exists while inside the zone,
+    // so holding left/right or jumping can still carry the ship back out.
+    playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH - playerWidth, playerX + Math.max(-1.4, Math.min(1.4, offsetX * horizontalStrength)) * frameScale));
+    playerY += Math.max(-0.85, Math.min(0.85, offsetY * verticalStrength)) * frameScale;
+}
 function moveDown(distance = 36) {
     if (portalTravelInProgress) return;
     const now = performance.now();
@@ -4859,6 +4889,7 @@ function startGameLoop(timestamp = performance.now()) {
     }
     updateHeldMovement(); previousPlayerY = playerY;
     const inGravity = isInGravityZone();
+    applyGravityPull(currentFrameScale);
     if (shipFlipped && !inGravity && !inFlippedRoute) shipFlipped = false;
     playerLabel.classList.toggle("flipped", shipFlipped);
     if (gameStarted) { elapsedMilliseconds = performance.now() - levelStartedAt; timerLabel.textContent = formatTime(elapsedMilliseconds); }
