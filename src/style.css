@@ -227,9 +227,13 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .trail-active.trail-effect-ribbon { animation: trail-ribbon .9s ease-in-out infinite alternate; }
 .trail-effect-arc { width: 24px; height: 24px; border: 3px solid var(--trail-color, #ed7657); border-left-color: transparent; border-bottom-color: transparent; border-radius: 50%; background: transparent; box-shadow: 0 0 12px var(--trail-color, #ed7657); }
 .trail-active.trail-effect-arc { animation: trail-arc .8s linear infinite; }
-.trail-effect-arc.trail-duotone { border: 0; background: conic-gradient(from 0deg, var(--trail-color, #ed7657) 0 48%, var(--trail-secondary-color, #fff3bd) 48% 100%); -webkit-mask: radial-gradient(circle, transparent 0 55%, #000 58%); mask: radial-gradient(circle, transparent 0 55%, #000 58%); box-shadow: 0 0 14px var(--trail-color, #ed7657), 0 0 18px var(--trail-secondary-color, #fff3bd); }
+.trail-effect-arc.trail-duotone { width: 31px; height: 20px; clip-path: none; border: 0; border-radius: 50%; background: transparent; box-shadow: none; }
+.trail-effect-arc.trail-duotone::before, .trail-effect-arc.trail-duotone::after { position: absolute; inset: 2px; content: ''; border: 3px solid; border-radius: 50%; pointer-events: none; }
+.trail-effect-arc.trail-duotone::before { border-color: var(--trail-color, #ed7657) transparent var(--trail-color, #ed7657) var(--trail-color, #ed7657); box-shadow: 0 0 8px var(--trail-color, #ed7657); transform: rotate(-28deg); animation: trail-orbit-primary .9s linear infinite; }
+.trail-effect-arc.trail-duotone::after { inset: 4px 1px 0 6px; border-color: transparent var(--trail-secondary-color, #fff3bd) var(--trail-secondary-color, #fff3bd) transparent; box-shadow: 0 0 8px var(--trail-secondary-color, #fff3bd); transform: rotate(24deg); animation: trail-orbit-secondary .9s linear infinite; }
 .trail-active.trail-effect-arc.trail-duotone, .trail-active.trail-effect-arc.trail-duotone.trail-head { animation: trail-arc-duotone .9s linear infinite !important; }
 #game-world.reduced-effects .trail-particle { animation: none !important; }
+#game-world.reduced-effects .trail-effect-arc.trail-duotone::before, #game-world.reduced-effects .trail-effect-arc.trail-duotone::after { animation: none !important; }
 .trail-effect-comet.flipped-trail { transform: rotate(18deg); animation-name: trail-comet-flipped; }
 .trail-effect-ribbon.flipped-trail { animation-name: trail-ribbon-flipped; }
 .game-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px; width: min(1080px, calc(100% - 40px)); margin: 0 auto; padding: 10px 0 16px; }
@@ -690,9 +694,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .game-frame .asteroid.claimed { opacity: 0; transform: scale(1.8) rotate(180deg); transition: .3s; }
 .hazard { position: absolute; z-index: 3; pointer-events: none; }
 .hazard.spikes { background: repeating-linear-gradient(135deg, transparent 0 9px, #ed7657 10px 17px, transparent 18px 26px); filter: drop-shadow(0 0 6px #ed7657); }
-.hazard.gravity { opacity: .9; }
-.hazard.gravity::before { position: absolute; inset: 8px; content: ''; border: 12px solid transparent; border-radius: 50%; background: conic-gradient(from 20deg, transparent 0 22%, #b991ff 24% 29%, transparent 31% 53%, #f58bff 55% 60%, transparent 62% 84%, #b991ff 86% 91%, transparent 93%); -webkit-mask: radial-gradient(circle, transparent 0 32%, #000 34% 43%, transparent 45% 58%, #000 60% 68%, transparent 70%); mask: radial-gradient(circle, transparent 0 32%, #000 34% 43%, transparent 45% 58%, #000 60% 68%, transparent 70%); animation: gravity-spiral 4s linear infinite; }
-.hazard.gravity::after { position: absolute; top: 50%; left: 50%; width: 34px; height: 34px; content: ''; border-radius: 50%; background: #080b18; box-shadow: 0 0 18px #b991ff, 0 0 35px #f58bff66; transform: translate(-50%, -50%); }
+.hazard.gravity { opacity: .96; isolation: isolate; }
+.hazard.gravity::before { position: absolute; top: 50%; left: 50%; width: 164px; height: 94px; content: ''; border-radius: 50%; background: conic-gradient(from 8deg, #4a2b82 0deg, #b991ff 34deg, #f58bff 68deg, #351d68 112deg, #6ecbff 164deg, #241544 214deg, #f58bff 270deg, #b991ff 316deg, #4a2b82 360deg); -webkit-mask: radial-gradient(ellipse at center, transparent 0 29%, #000 35% 49%, transparent 58% 100%); mask: radial-gradient(ellipse at center, transparent 0 29%, #000 35% 49%, transparent 58% 100%); filter: blur(.2px) drop-shadow(0 0 8px #b991ff) drop-shadow(0 0 18px #f58bff66); transform: translate(-50%, -50%) rotate(-12deg); animation: gravity-accretion 3.6s linear infinite; }
+.hazard.gravity::after { position: absolute; z-index: 2; top: 50%; left: 50%; width: 44px; height: 44px; content: ''; border: 2px solid #b991ff99; border-radius: 50%; background: radial-gradient(circle at 34% 28%, #1c1d34 0 8%, #080912 38%, #010207 72%); box-shadow: 0 0 0 5px #b991ff22, 0 0 16px #b991ff, 0 0 34px #f58bff66, inset 0 0 12px #000; transform: translate(-50%, -50%); }
+#game-world.reduced-effects .hazard.gravity::before { animation: none; }
 .game-frame:has(.hazard.gravity)::before { opacity: .75; }
 .beacon { background: #f6c46e; }
 @keyframes tumble { to { transform: rotate(360deg); } }
@@ -701,6 +706,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @keyframes shield-bubble { 50% { transform: scale(1.08); opacity: .65; } }
 @keyframes key-pulse { 50% { transform: translateY(-7px) rotate(12deg); } }
 @keyframes gravity-spiral { to { transform: rotate(360deg); } }
+@keyframes gravity-accretion { from { transform: translate(-50%, -50%) rotate(-12deg); } to { transform: translate(-50%, -50%) rotate(348deg); } }
 @keyframes wheel-spin { to { transform: rotate(360deg); } }
 @keyframes result-fade-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
 @keyframes planet-shift { 0% { opacity: 0; transform: scale(1.08); } 18% { opacity: 1; transform: scale(1); } 78% { opacity: 1; } 100% { opacity: 0; } }
@@ -717,6 +723,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @keyframes trail-arc { to { transform: rotate(360deg); } }
 @keyframes trail-arc-duotone { from { rotate: 0deg; } to { rotate: 360deg; } }
 @keyframes trail-icon-spin { to { rotate: 360deg; } }
+@keyframes trail-orbit-primary { to { transform: rotate(332deg); } }
+@keyframes trail-orbit-secondary { to { transform: rotate(-336deg); } }
 
 @media (max-width: 600px) {
 	.level-list { grid-template-columns: 1fr; }
