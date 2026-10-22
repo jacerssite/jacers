@@ -1,17 +1,18 @@
-import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward } from "./types";
+import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, LevelMakerDraft, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward } from "./types";
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_RESET_COST, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
-import { levels } from "./levels";
+import { levels, normalizeNonPrestigeLevels } from "./levels";
 import { ApiError, apiRequest } from "./api";
-import { createMenuButton, createTextButton } from "./ui";
+import { createMenuButton, createPasswordField, createTextButton } from "./ui";
 import { createShipArtMarkup, createCssShipArtMarkup } from "./ship-art";
 import { drawTrailParticles } from "./trail";
 import { createLevelMaker } from "./level-maker";
+import { createTitleBadge } from "./title-style";
 import { loadManagedUsers } from "./managed-users";
 import { createCustomization } from "./customization";
 import { createLeaderboard } from "./leaderboard";
 import { createAccountRecovery } from "./account-recovery";
-import { renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
+import { renderAdminChatFilterTools, renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
 import { createControlNavigation, type ControlSection } from "./owner-panel";
 import { createRouletteFields } from "./roulette-editor";
 import { createChat } from "./chat";
@@ -48,7 +49,11 @@ let asteroidsClaimed = Number(localStorage.getItem("orbit-claims") ?? "0");
 let specialAsteroids = Number(localStorage.getItem("orbit-special-claims") ?? "0");
 let prestigeLevel = Number(localStorage.getItem("orbit-prestige") ?? "0");
 let prestigeMax = Number(localStorage.getItem("orbit-prestige-max") ?? "3");
+let enemiesKilled = Number(localStorage.getItem("orbit-enemies-killed") ?? "0");
+let bossesKilled = Number(localStorage.getItem("orbit-bosses-killed") ?? "0");
 let currentLevel = 0;
+let activeRunProof: { runId: string; levelName: string } | null = null;
+let runProofSequence = 0;
 let levelAsteroids: Asteroid[] = [];
 let levelObstacles: Obstacle[] = [];
 let levelHazards: Hazard[] = [];
@@ -159,6 +164,9 @@ const DEFAULT_CONTROL_BINDINGS: Record<ControlAction, string> = {
     jump: "arrowup",
     down: "arrowdown",
     shoot: "keye",
+    restart: "keyr",
+    back: "backspace",
+    confirm: "enter",
 };
 function readControlBindings(): Record<ControlAction, string> {
     try {
@@ -183,8 +191,51 @@ let onlineSessionVersion = 0;
 let pendingFriendRequests = 0;
 let chatController: ReturnType<typeof createChat> | null = null;
 
+// The game is a single-page app, so the browser's history does not know about
+// the screens rendered by the menus. Keep a small in-app stack so the Backspace
+// control returns to the screen the player actually came from instead of always
+// jumping to the home menu.
+type AppPage = () => void;
+const appPageHistory: AppPage[] = [];
+let currentAppPage: AppPage | null = null;
+let restoringAppPage = false;
+function enterAppPage(page: AppPage) {
+    if (restoringAppPage) {
+        currentAppPage = page;
+        return;
+    }
+    if (currentAppPage === page) return;
+    const existingIndex = appPageHistory.lastIndexOf(page);
+    if (existingIndex >= 0) appPageHistory.splice(existingIndex);
+    else if (currentAppPage) appPageHistory.push(currentAppPage);
+    currentAppPage = page;
+}
+function goToPreviousAppPage() {
+    const previous = appPageHistory.pop();
+    if (!previous) {
+        if (!document.querySelector(".home-screen")) {
+            restoringAppPage = true;
+            showMenu();
+            restoringAppPage = false;
+        }
+        return;
+    }
+    restoringAppPage = true;
+    previous();
+    restoringAppPage = false;
+}
+const gameAppPage: AppPage = () => startGame(currentLevel);
+
 const OWNER_TEST_INVENTORY_AMOUNT = 100000;
+// These helpers only decide which controls to show. The server repeats the
+// same checks, so editing the browser cannot grant a staff permission.
 function hasOwnerAccess() { return currentOnlineUser?.role === "owner"; }
+function hasTesterTools() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester"; }
+function hasModerationTools() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "moderator"; }
+function hasWorkshopTools() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "level-maker"; }
+function roleLabel(role: OnlineUser["role"]) {
+    return role === "owner" ? "OWNER" : role === "admin" ? "ADMIN" : role === "moderator" ? "MOD" : role === "level-maker" ? "LEVEL MAKER" : role === "tester" ? "TESTER" : "PLAYER";
+}
 
 function accountIdentity(user: OnlineUser | null) {
     return user?.username.toLowerCase() ?? null;
@@ -212,12 +263,12 @@ const playerHitboxInsetX = 7;
 const playerHitboxInsetY = 5;
 const playerHitboxWidth = playerWidth - playerHitboxInsetX * 2;
 const playerHitboxHeight = playerHeight - playerHitboxInsetY - 5;
-const showLevelMaker = createLevelMaker({
+const levelMakerRenderer = createLevelMaker({
     powerupLabels,
     configurePortalDistribution,
     showLevelMenu,
     showTesterPanel,
-    canEditBuiltInLevels: () => currentOnlineUser?.role === "owner",
+    canEditBuiltInLevels: () => currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin",
     saveBuiltInLevel: async (index, level) => {
         const result = await apiRequest<{ level: Level; builtinLevelOverrides?: Record<string, Level> }>("/settings/builtin-level-overrides", {
             method: "PUT",
@@ -225,7 +276,10 @@ const showLevelMaker = createLevelMaker({
         });
         builtinLevelOverrides = result.builtinLevelOverrides ?? { ...builtinLevelOverrides, [String(index)]: result.level };
         const existing = levels[index];
-        if (existing) levels[index] = { ...existing, ...result.level, customId: existing.customId, localOnly: existing.localOnly };
+        if (existing) {
+            levels[index] = { ...existing, ...result.level, customId: existing.customId, localOnly: existing.localOnly };
+            normalizeNonPrestigeLevels(levels);
+        }
         return levels[index] ?? result.level;
     },
     startPreview: (index, returnToEditor) => {
@@ -241,8 +295,13 @@ const showLevelMaker = createLevelMaker({
         startGame(index);
     },
 });
+const showLevelMaker = (draft?: LevelMakerDraft) => {
+    const page = draft ? () => showLevelMaker(draft) : showLevelMaker;
+    enterAppPage(page);
+    levelMakerRenderer(draft);
+};
 const prestigeRouteNames = ["Violet Meridian", "Moonfall Circuit", "Amethyst Rift", "Crown of Saturn", "Lilac Nebula", "Oracle's Reach", "Prismatic Grave", "The White Eclipse", "Sovereign Drift", "Astral Citadel", "Veil of Io", "Radiant Ruin", "Dusk Cathedral", "Nova Labyrinth", "Purple Eventide", "The Inverted Sea", "Halo of Ash", "Sable Aurora", "Titan's Throne", "Infinity Crown"];
-const { showCustomization, createShipPreview } = createCustomization({
+const customizationController = createCustomization({
     getLoadout: () => ({ shipColor: selectedShipColor, avatar: selectedAvatar, skin: selectedSkin, trail: selectedTrail }),
     setLoadout: (changes) => {
         if (changes.shipColor !== undefined) { selectedShipColor = changes.shipColor; localStorage.setItem("orbit-ship-color", selectedShipColor); }
@@ -257,9 +316,14 @@ const { showCustomization, createShipPreview } = createCustomization({
     showMenu,
     createPageCounter,
 });
+const showCustomization = () => {
+    enterAppPage(showCustomization);
+    customizationController.showCustomization();
+};
+const createShipPreview = customizationController.createShipPreview;
 
 
-const { showLeaderboard, showLeaderboardPlayerProfile, getRoleBadge, formatAbilityName } = createLeaderboard({
+const leaderboardController = createLeaderboard({
     showAccount,
     showLevelMenu,
     showMenu,
@@ -269,8 +333,27 @@ const { showLeaderboard, showLeaderboardPlayerProfile, getRoleBadge, formatAbili
     createShipPreview,
     formatTime,
 });
+const showLeaderboard = () => {
+    enterAppPage(showLeaderboard);
+    leaderboardController.showLeaderboard();
+};
+const showLeaderboardPlayerProfile = (playerId: string, returnTo: () => void = showLeaderboard) => {
+    const page = () => showLeaderboardPlayerProfile(playerId, returnTo);
+    enterAppPage(page);
+    void leaderboardController.showLeaderboardPlayerProfile(playerId, returnTo);
+};
+const { getRoleBadge, formatAbilityName } = leaderboardController;
 
-const { showRecoveryCodeOnce, showForgotPassword } = createAccountRecovery(showAccount);
+const accountRecoveryController = createAccountRecovery(showAccount);
+const showRecoveryCodeOnce = (code: string, onContinue: () => void) => {
+    const page = () => showRecoveryCodeOnce(code, onContinue);
+    enterAppPage(page);
+    accountRecoveryController.showRecoveryCodeOnce(code, onContinue);
+};
+const showForgotPassword = () => {
+    enterAppPage(showForgotPassword);
+    accountRecoveryController.showForgotPassword();
+};
 
 function readStoredLevels(key: string): Level[] {
     try {
@@ -320,6 +403,7 @@ function loadCustomLevels() {
         prestige: Boolean(level.prestige),
         ...(level.customId ? {} : { customId: `local-${index + 1}` }),
     }));
+    normalizeNonPrestigeLevels(levels);
 }
 
 function getHiddenPortalIndex(level: Level) {
@@ -414,6 +498,8 @@ function refreshProgressStateFromStorage() {
     specialAsteroids = readCount("orbit-special-claims", 0, 0, 100000000);
     prestigeLevel = readCount("orbit-prestige", 0, 0, 100);
     prestigeMax = readCount("orbit-prestige-max", 3, 1, 100);
+    enemiesKilled = readCount("orbit-enemies-killed", 0, 0, 100000000);
+    bossesKilled = readCount("orbit-bosses-killed", 0, 0, 100000000);
     selectedSkin = readCount("orbit-skin", 0, 0, skins.length - 1);
     selectedTrail = readCount("orbit-trail", 0, 0, trails.length - 1);
     selectedAvatar = readCount("orbit-avatar", 0, 0, avatars.length - 1);
@@ -428,10 +514,18 @@ function refreshProgressStateFromStorage() {
     controlBindings = readControlBindings();
 }
 
+const LOCAL_DEVICE_PREFERENCE_KEYS = new Set([
+    "orbit-controls",
+    "orbit-music-volume",
+    "orbit-music-muted",
+    "orbit-music-track",
+    "orbit-reduced-effects",
+    "orbit-global-level-cache",
+]);
+
 function clearLocalAccountData() {
-    const keep = new Set(["orbit-controls", "orbit-music-volume", "orbit-music-muted", "orbit-music-track", "orbit-reduced-effects", "orbit-global-level-cache"]);
     Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-        .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !keep.has(key)))
+        .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !LOCAL_DEVICE_PREFERENCE_KEYS.has(key)))
         .forEach((key) => localStorage.removeItem(key));
     refreshProgressStateFromStorage();
     reloadLocalCustomLevels();
@@ -454,6 +548,7 @@ function reloadLocalCustomLevels() {
         localOnly: !level.customId || level.localOnly,
         ...(level.customId ? {} : { customId: `local-${index + 1}` }),
     }));
+    normalizeNonPrestigeLevels(levels);
     configurePortalDistribution();
 }
 
@@ -539,7 +634,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 return;
             }
             Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-                .filter((key): key is string => Boolean(key?.startsWith("orbit-") && key !== "orbit-global-level-cache"))
+                .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !LOCAL_DEVICE_PREFERENCE_KEYS.has(key)))
                 .forEach((key) => localStorage.removeItem(key));
             Object.entries(progress).forEach(([key, value]) => localStorage.setItem(key, value));
             refreshProgressStateFromStorage();
@@ -620,7 +715,7 @@ async function refreshOnlineState() {
     results.forEach((result) => {
         if (result.status === "rejected") console.error("Could not load part of the online service:", result.reason);
     });
-    if (currentOnlineUser?.role === "tester") {
+    if (currentOnlineUser?.role === "tester" || currentOnlineUser?.role === "admin") {
         const storedOverride = localStorage.getItem("orbit-tester-game-config");
         if (storedOverride) {
             try {
@@ -653,6 +748,7 @@ function applyBuiltinLevelOverrides() {
         if (!base || base.customId || base.localOnly || !override || typeof override !== "object") return;
         levels[levelIndex] = { ...base, ...structuredClone(override), customId: undefined, localOnly: undefined };
     });
+    normalizeNonPrestigeLevels(levels);
     if (levels.length) configurePortalDistribution();
 }
 
@@ -715,6 +811,7 @@ function configurePortalDistribution() {
 export function startApp() {
     refreshProgressStateFromStorage();
     loadCustomLevels();
+    normalizeNonPrestigeLevels(levels);
     configurePortalDistribution();
     document.body.innerHTML = "";
     chatController?.remove();
@@ -726,7 +823,7 @@ export function startApp() {
     void refreshOnlineState().then(() => {
         if (document.querySelector(".home-screen")) showMenu();
     }).catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
-    if (!presenceHeartbeatTimer) presenceHeartbeatTimer = window.setInterval(() => void sendPresenceHeartbeat(), 30_000);
+    if (!presenceHeartbeatTimer) presenceHeartbeatTimer = window.setInterval(() => void sendPresenceHeartbeat(), 10_000);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", () => pressedKeys.clear());
@@ -736,6 +833,7 @@ export function startApp() {
         if ((event.target as HTMLElement).closest("button, select, summary")) playSound("ui");
     });
     document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && currentOnlineUser) void sendPresenceHeartbeat();
         if (!musicContext) return;
         if (document.hidden) void musicContext.suspend();
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
@@ -757,7 +855,7 @@ async function refreshAccountNotices() {
         updateOwnerAccountIndicator();
         if (previousRole && currentOnlineUser && previousRole !== currentOnlineUser.role
             && document.querySelector(".tester-screen")
-            && currentOnlineUser.role !== "owner" && currentOnlineUser.role !== "tester") {
+            && !(hasTesterTools() || hasModerationTools() || hasWorkshopTools())) {
             showMenu();
         }
         if (!currentOnlineUser || accountNoticeOpen) return;
@@ -1056,14 +1154,14 @@ function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "rou
 function updateOwnerAccountIndicator() {
     document.querySelectorAll<HTMLElement>(".pending-friend-badge").forEach((badge) => { badge.textContent = pendingFriendRequests ? String(pendingFriendRequests) : ""; badge.hidden = pendingFriendRequests === 0; });
     const existing = document.querySelector<HTMLElement>(".owner-account-indicator");
-    if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
+    if (currentOnlineUser && (hasTesterTools() || hasModerationTools() || hasWorkshopTools())) {
         const indicator = existing instanceof HTMLButtonElement ? existing : document.createElement("button");
         if (existing && existing !== indicator) existing.remove();
-        indicator.className = `owner-account-indicator ${currentOnlineUser.role === "owner" ? "owner-role" : "tester-role"}`;
+        indicator.className = `owner-account-indicator ${currentOnlineUser.role === "owner" ? "owner-role" : currentOnlineUser.role === "admin" ? "admin-role" : currentOnlineUser.role === "moderator" ? "moderator-role" : currentOnlineUser.role === "level-maker" ? "level-maker-role" : "tester-role"}`;
         indicator.type = "button";
         indicator.textContent = getRoleBadge(currentOnlineUser.role);
         indicator.setAttribute("aria-label", `Open ${currentOnlineUser.role} quick panel for ${currentOnlineUser.username}`);
-        indicator.title = `${currentOnlineUser.role === "owner" ? "Owner" : "Tester"} quick panel — ${currentOnlineUser.username}`;
+        indicator.title = `${roleLabel(currentOnlineUser.role)} quick panel — ${currentOnlineUser.username}`;
         indicator.onclick = () => gameActive ? openRoleQuickPanel() : void showTesterPanel();
         if (!existing || existing !== indicator) document.body.prepend(indicator);
     } else {
@@ -1095,7 +1193,7 @@ function closeRoleQuickPanel() {
 }
 
 function openRoleQuickPanel() {
-    if (!currentOnlineUser || (currentOnlineUser.role !== "owner" && currentOnlineUser.role !== "tester")) return;
+    if (!currentOnlineUser || !hasTesterTools()) return;
     if (roleQuickPanel) return;
     if (portalTravelInProgress) {
         statusLabel.textContent = "Finish the portal transition before opening quick tools.";
@@ -1115,7 +1213,7 @@ function openRoleQuickPanel() {
     panel.className = "role-quick-panel";
     const heading = document.createElement("h2");
     heading.id = "role-quick-title";
-    heading.textContent = `${isOwner ? "Owner" : "Tester"} quick tools`;
+    heading.textContent = `${currentOnlineUser.role === "tester" ? "Tester" : roleLabel(currentOnlineUser.role)} quick tools`;
     const description = document.createElement("p");
     description.textContent = "Paused in this level. These shortcuts change your own test profile; shared rules are managed in the full control center.";
     const status = document.createElement("small");
@@ -1208,7 +1306,7 @@ function openRoleQuickPanel() {
     }, "Clear all enemies and bosses in this level?");
     const footer = document.createElement("div");
     footer.className = "role-quick-footer";
-    const full = actionButton(isOwner ? "Open owner control center" : "Open tester panel", () => {
+    const full = actionButton(isOwner ? "Open owner control center" : "Open control center", () => {
         closeRoleQuickPanel();
         gameActive = false;
         cancelAnimationFrame(animationFrame);
@@ -1235,6 +1333,9 @@ function showMenu() {
         showAccount("Change your temporary password before continuing.");
         return;
     }
+    // The home screen is the root of the in-app navigation stack.
+    appPageHistory.length = 0;
+    currentAppPage = showMenu;
     gameActive = false;
     roleQuickPanel = null;
     roleQuickPanelStartedAt = 0;
@@ -1263,6 +1364,7 @@ function showMenu() {
 }
 
 function showLevelMenu() {
+    enterAppPage(showLevelMenu);
     gameActive = false;
     roleQuickPanel = null;
     roleQuickPanelStartedAt = 0;
@@ -1318,6 +1420,7 @@ function showLevelMenu() {
 }
 
 function showSecretLevels() {
+    enterAppPage(showSecretLevels);
     gameActive = false;
     setMusicScene("secret");
     cancelAnimationFrame(animationFrame);
@@ -1352,6 +1455,7 @@ function formatCooldown(milliseconds: number) {
 }
 
 function showSettings() {
+    enterAppPage(showSettings);
     gameActive = false;
     roleQuickPanel = null;
     setMusicScene("menu");
@@ -1490,7 +1594,16 @@ function showSettings() {
     controlsSection.innerHTML = `<h2>Keyboard controls</h2><p>Choose a key for each action. Your bindings are saved on this device.</p>`;
     const controlsStatus = document.createElement("small");
     controlsStatus.setAttribute("role", "status");
-    const controlLabels: Record<ControlAction, string> = { left: "Move left", right: "Move right", jump: "Jump", down: "Move down", shoot: "Fire cannon" };
+    const controlLabels: Record<ControlAction, string> = {
+        left: "Move left",
+        right: "Move right",
+        jump: "Jump",
+        down: "Move down",
+        shoot: "Fire cannon",
+        restart: "Restart level",
+        back: "Back / exit menu",
+        confirm: "Select level",
+    };
     (Object.keys(controlLabels) as ControlAction[]).forEach((action) => {
         const button = createTextButton(`${controlLabels[action]}: ${formatControlBinding(controlBindings[action])}`, () => {
             button.textContent = `${controlLabels[action]}: Press a key...`;
@@ -1591,17 +1704,17 @@ function showSettings() {
         { id: "progress", title: "Progress & codes", group: "Pilot data", description: "Redeem rewards and review your best times without crowding the flight controls.", panel: progressPanel },
     ];
 
-    if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
+    if (currentOnlineUser && (hasTesterTools() || hasModerationTools() || hasWorkshopTools())) {
         const testerRow = document.createElement("div");
         testerRow.className = "tester-entry";
-        testerRow.innerHTML = `<span><b>${currentOnlineUser.role === "owner" ? "Owner panel" : "Tester tools"}</b><small>Open authorized game testing controls.</small></span>`;
+        testerRow.innerHTML = `<span><b>${roleLabel(currentOnlineUser.role)} panel</b><small>Open the tools authorized for this role.</small></span>`;
         testerRow.append(createTextButton("Open", () => void showTesterPanel()));
         const toolsPanel = document.createElement("section");
         toolsPanel.className = "player-settings-category";
         toolsPanel.dataset.controlSection = "tools";
         toolsPanel.hidden = true;
         toolsPanel.append(testerRow);
-        sections.push({ id: "tools", title: currentOnlineUser.role === "owner" ? "Owner tools" : "Tester tools", group: "Authorized tools", description: "Open the role-specific control center for quick testing and management.", panel: toolsPanel });
+        sections.push({ id: "tools", title: `${roleLabel(currentOnlineUser.role)} tools`, group: "Authorized tools", description: "Open the role-specific control center for quick testing and management.", panel: toolsPanel });
     }
 
     const content = document.createElement("div");
@@ -1713,6 +1826,7 @@ function createProgressArea() {
 }
 
 function showCredits() {
+    enterAppPage(showCredits);
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
     menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
     const updates = document.createElement("section");
@@ -1846,14 +1960,15 @@ function showCredits() {
 }
 
 function showAccount(initialMessage = "") {
+    enterAppPage(showAccount);
     let registrationMode = false;
     const render = (messageText = initialMessage) => {
         const menu = document.createElement("main");
         menu.className = "menu-screen account-screen";
-        menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${currentOnlineUser ? "Your" : registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">${currentOnlineUser ? "Your account is signed in on this device." : "Choose a unique username, email, and password. Passwords are salted and hashed on the server."}</p>`;
+        menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${currentOnlineUser ? "Your" : registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">${currentOnlineUser ? "Your account is signed in on this device." : "Choose a unique username and password. Email is optional and can be added later."}</p>`;
         if (currentOnlineUser) {
             const signedIn = document.createElement("p");
-            signedIn.textContent = `Signed in as ${currentOnlineUser.username}${currentOnlineUser.role === "owner" ? " / OWNER" : currentOnlineUser.role === "tester" ? " / TESTER" : ""}.`;
+            signedIn.textContent = `Signed in as ${currentOnlineUser.username} / ${roleLabel(currentOnlineUser.role)}.`;
             if (messageText) {
                 const message = document.createElement("small");
                 message.className = "online-service-status";
@@ -1870,6 +1985,8 @@ function showAccount(initialMessage = "") {
             [
                 ["Asteroids", String(asteroidsClaimed)],
                 ["Special currency", String(specialAsteroids)],
+                ["Enemies defeated", String(enemiesKilled)],
+                ["Bosses defeated", String(bossesKilled)],
                 ["Prestige", `${prestigeLevel} / ${prestigeMax}`],
                 ["Routes cleared", `${getCompletedLevelCount()} / ${levels.length}`],
                 ["Normal routes", `${getNormalRouteCompletionCount()} / ${getNormalRouteCount()}`],
@@ -1963,6 +2080,105 @@ function showAccount(initialMessage = "") {
                 } finally { friendRequestsInput.disabled = !currentOnlineUser; }
             });
             friendRequestsRow.append(friendRequestsInput);
+            const readReceiptsRow = document.createElement("label");
+            readReceiptsRow.className = "account-presence-setting";
+            readReceiptsRow.innerHTML = `<span><b>Show read receipts</b><small>Let friends see when you read their direct messages.</small></span>`;
+            const readReceiptsInput = document.createElement("input");
+            readReceiptsInput.type = "checkbox";
+            readReceiptsInput.checked = currentOnlineUser.readReceipts !== false;
+            readReceiptsInput.setAttribute("aria-label", "Show read receipts");
+            const readReceiptsStatus = document.createElement("small");
+            readReceiptsStatus.className = "presence-setting-status";
+            readReceiptsStatus.setAttribute("role", "status");
+            const typingIndicatorsRow = document.createElement("label");
+            typingIndicatorsRow.className = "account-presence-setting";
+            typingIndicatorsRow.innerHTML = `<span><b>Show typing indicators</b><small>Share and see when friends are typing in a direct chat.</small></span>`;
+            const typingIndicatorsInput = document.createElement("input");
+            typingIndicatorsInput.type = "checkbox";
+            typingIndicatorsInput.checked = currentOnlineUser.typingIndicators !== false;
+            typingIndicatorsInput.setAttribute("aria-label", "Show typing indicators");
+            const typingIndicatorsStatus = document.createElement("small");
+            typingIndicatorsStatus.className = "presence-setting-status";
+            typingIndicatorsStatus.setAttribute("role", "status");
+            const saveChatPreferences = async (status: HTMLElement, previousRead: boolean, previousTyping: boolean) => {
+                readReceiptsInput.disabled = true;
+                typingIndicatorsInput.disabled = true;
+                status.textContent = "Saving chat privacy settings...";
+                try {
+                    const result = await apiRequest<{ readReceipts: boolean; typingIndicators: boolean }>("/account/chat-preferences", {
+                        method: "PUT",
+                        body: JSON.stringify({ readReceipts: readReceiptsInput.checked, typingIndicators: typingIndicatorsInput.checked }),
+                    });
+                    if (currentOnlineUser) setOnlineUser({ ...currentOnlineUser, readReceipts: result.readReceipts, typingIndicators: result.typingIndicators });
+                    status.textContent = "Chat privacy settings saved.";
+                } catch (error) {
+                    readReceiptsInput.checked = previousRead;
+                    typingIndicatorsInput.checked = previousTyping;
+                    status.textContent = error instanceof Error ? error.message : "Could not save chat privacy settings.";
+                } finally {
+                    readReceiptsInput.disabled = !currentOnlineUser;
+                    typingIndicatorsInput.disabled = !currentOnlineUser;
+                }
+            };
+            readReceiptsInput.addEventListener("change", () => void saveChatPreferences(readReceiptsStatus, !readReceiptsInput.checked, typingIndicatorsInput.checked));
+            typingIndicatorsInput.addEventListener("change", () => void saveChatPreferences(typingIndicatorsStatus, readReceiptsInput.checked, !typingIndicatorsInput.checked));
+            readReceiptsRow.append(readReceiptsInput);
+            typingIndicatorsRow.append(typingIndicatorsInput);
+            let humanVerificationSection: HTMLElement | null = null;
+            if (currentOnlineUser.role === "player" && currentOnlineUser.humanVerified === false) {
+                humanVerificationSection = document.createElement("section");
+                humanVerificationSection.className = "human-verification-setting";
+                const heading = document.createElement("b");
+                heading.textContent = "Human verification required";
+                const copy = document.createElement("small");
+                copy.textContent = "Complete this quick check before starting online levels.";
+                const question = document.createElement("small");
+                question.className = "human-check-status";
+                question.textContent = "Loading human check...";
+                const answer = document.createElement("input");
+                answer.inputMode = "numeric";
+                answer.maxLength = 3;
+                answer.placeholder = "Answer";
+                answer.disabled = true;
+                const verify = document.createElement("button");
+                verify.type = "button";
+                verify.className = "menu-button";
+                verify.textContent = "Verify and unlock online play";
+                verify.disabled = true;
+                const status = document.createElement("small");
+                status.setAttribute("role", "status");
+                let challenge: { token: string; question: string } | null = null;
+                void apiRequest<{ token: string; question: string }>("/auth/human-challenge")
+                    .then((nextChallenge) => {
+                        challenge = nextChallenge;
+                        question.textContent = nextChallenge.question;
+                        answer.disabled = false;
+                        verify.disabled = false;
+                    })
+                    .catch((error) => { question.textContent = error instanceof Error ? error.message : "Human check unavailable."; });
+                const verificationForm = document.createElement("div");
+                verificationForm.className = "human-verification-form";
+                verificationForm.append(question, answer, verify, status);
+                verify.addEventListener("click", async () => {
+                    if (!challenge) return;
+                    verify.disabled = true;
+                    status.textContent = "Checking...";
+                    try {
+                        await apiRequest<{ humanVerified: boolean }>("/account/human-verify", {
+                            method: "POST",
+                            body: JSON.stringify({ humanChallenge: { token: challenge.token, answer: answer.value } }),
+                        });
+                        if (currentOnlineUser) setOnlineUser({ ...currentOnlineUser, humanVerified: true });
+                        heading.textContent = "Human verification complete";
+                        copy.textContent = "Online levels are unlocked for this account.";
+                        verificationForm.remove();
+                    } catch (error) {
+                        status.textContent = error instanceof Error ? error.message : "Human verification failed.";
+                        verify.disabled = false;
+                    }
+                });
+                humanVerificationSection.append(heading, copy, verificationForm);
+            }
             let leaderboardRow: HTMLElement | null = null;
             let leaderboardStatus: HTMLElement | null = null;
             if (currentOnlineUser.role === "player") {
@@ -2016,11 +2232,20 @@ function showAccount(initialMessage = "") {
             });
             const savedTitle = localStorage.getItem("orbit-title") ?? "";
             titleSelect.value = earnedTitles.some((title) => title.id === savedTitle) ? savedTitle : "";
+            const titlePreview = document.createElement("span");
+            titlePreview.className = "account-title-preview";
+            const updateTitlePreview = () => {
+                titlePreview.replaceChildren();
+                const selectedTitle = earnedTitles.find((title) => title.id === titleSelect.value);
+                if (selectedTitle) titlePreview.append(createTitleBadge(selectedTitle.name, selectedTitle));
+            };
+            updateTitlePreview();
             const titleStatus = document.createElement("small");
             titleStatus.className = "presence-setting-status";
             titleStatus.setAttribute("role", "status");
             titleSelect.addEventListener("change", () => {
                 localStorage.setItem("orbit-title", titleSelect.value);
+                updateTitlePreview();
                 titleStatus.textContent = "Saving pilot title...";
                 void syncAccountProgress("save", true).then(() => {
                     titleStatus.textContent = "Pilot title saved to your account.";
@@ -2029,12 +2254,12 @@ function showAccount(initialMessage = "") {
                     console.error("Could not sync selected pilot title:", error);
                 });
             });
-            titleRow.append(titleSelect);
+            titleRow.append(titleSelect, titlePreview);
             const saveProfile = document.createElement("button");
             saveProfile.className = "menu-button";
             saveProfile.type = "submit";
             saveProfile.textContent = "Save profile";
-            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, friendRequestsRow, friendRequestsStatus, ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
+            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, friendRequestsRow, friendRequestsStatus, readReceiptsRow, readReceiptsStatus, typingIndicatorsRow, typingIndicatorsStatus, ...(humanVerificationSection ? [humanVerificationSection] : []), ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
             profileForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 saveProfile.disabled = true;
@@ -2072,7 +2297,7 @@ function showAccount(initialMessage = "") {
                 input.minLength = 10;
                 input.maxLength = 128;
                 input.required = true;
-                fieldLabel.append(input);
+                fieldLabel.append(createPasswordField(input));
                 passwordForm.append(fieldLabel);
                 return input;
             });
@@ -2161,7 +2386,7 @@ function showAccount(initialMessage = "") {
                     const incomingHeading = document.createElement("h3"); incomingHeading.textContent = "Requests for you"; inboxContent.append(incomingHeading);
                     data.incoming.forEach((request) => {
                         const row = document.createElement("article"); row.className = "account-inbox-row";
-                        const label = document.createElement("span"); label.textContent = `${request.username} ${request.role === "owner" ? "★" : request.role === "tester" ? "T" : ""} · sent ${request.createdAt ? new Date(request.createdAt).toLocaleString() : "recently"}`;
+                        const label = document.createElement("span"); label.textContent = `${request.username} / ${roleLabel(request.role)} · sent ${request.createdAt ? new Date(request.createdAt).toLocaleString() : "recently"}`;
                         const accept = createTextButton("Accept", async () => { await acceptFriendRequest(request.id); await drawInbox(); });
                         const decline = createTextButton("Decline", async () => { await declineFriendRequest(request.id); await drawInbox(); });
                         const block = createTextButton("Block", async () => { await blockUser(request.userId); await drawInbox(); });
@@ -2221,7 +2446,7 @@ function showAccount(initialMessage = "") {
                 currentPassword.type = "password";
                 currentPassword.autocomplete = "current-password";
                 currentPassword.required = true;
-                currentPasswordLabel.append(currentPassword);
+                currentPasswordLabel.append(createPasswordField(currentPassword));
                 const makeCode = document.createElement("button");
                 makeCode.className = "menu-button";
                 makeCode.type = "submit";
@@ -2258,7 +2483,7 @@ function showAccount(initialMessage = "") {
                     });
             }
             menu.append(dashboard);
-            void apiRequest<{ role: "player" | "tester" | "owner"; nextUsernameChangeAt: string | null; mustChangePassword?: boolean }>("/account/profile")
+            void apiRequest<{ role: OnlineUser["role"]; nextUsernameChangeAt: string | null; mustChangePassword?: boolean }>("/account/profile")
                 .then((profile) => {
                     if (!menu.isConnected) return;
                     if (profile.role === "owner") {
@@ -2313,18 +2538,59 @@ function showAccount(initialMessage = "") {
             usernameLabel.append(username);
             let email: HTMLInputElement | null = null;
             let emailLabel: HTMLLabelElement | null = null;
+            let humanChallenge: { token: string; question: string } | null = null;
+            let humanAnswer: HTMLInputElement | null = null;
+            let humanChallengeStatus: HTMLElement | null = null;
+            let botTrap: HTMLInputElement | null = null;
+            let humanLabel: HTMLLabelElement | null = null;
+            let trapLabel: HTMLLabelElement | null = null;
             if (registrationMode) {
                 emailLabel = document.createElement("label");
-                emailLabel.textContent = "Email address";
+                emailLabel.textContent = "Email address (optional)";
                 email = document.createElement("input");
                 email.name = "email";
                 email.type = "email";
                 email.autocomplete = "email";
-                email.required = true;
+                email.required = false;
                 email.maxLength = 254;
                 email.placeholder = "you@example.com";
                 email.title = "Enter a valid email address.";
                 emailLabel.append(email);
+                humanLabel = document.createElement("label");
+                humanLabel.textContent = "Human check";
+                humanAnswer = document.createElement("input");
+                humanAnswer.name = "human-answer";
+                humanAnswer.inputMode = "numeric";
+                humanAnswer.autocomplete = "off";
+                humanAnswer.maxLength = 3;
+                humanAnswer.placeholder = "Loading check...";
+                humanAnswer.disabled = true;
+                humanLabel.append(humanAnswer);
+                humanChallengeStatus = document.createElement("small");
+                humanChallengeStatus.className = "human-check-status";
+                humanChallengeStatus.textContent = "Loading a quick human check...";
+                trapLabel = document.createElement("label");
+                trapLabel.className = "bot-trap";
+                trapLabel.textContent = "Website";
+                botTrap = document.createElement("input");
+                botTrap.name = "website";
+                botTrap.tabIndex = -1;
+                botTrap.autocomplete = "off";
+                botTrap.setAttribute("aria-hidden", "true");
+                trapLabel.append(botTrap);
+                void apiRequest<{ token: string; question: string }>("/auth/human-challenge")
+                    .then((challenge) => {
+                        humanChallenge = challenge;
+                        if (humanAnswer) {
+                            humanAnswer.disabled = false;
+                            humanAnswer.required = true;
+                            humanAnswer.placeholder = "Answer";
+                        }
+                        if (humanChallengeStatus) humanChallengeStatus.textContent = challenge.question;
+                    })
+                    .catch(() => {
+                        if (humanChallengeStatus) humanChallengeStatus.textContent = "Human check is unavailable right now. You can create the account, then verify it in Player settings before playing online.";
+                    });
             }
             const passwordLabel = document.createElement("label");
             passwordLabel.textContent = "Password";
@@ -2335,7 +2601,7 @@ function showAccount(initialMessage = "") {
             password.minLength = 10;
             password.maxLength = 128;
             password.required = true;
-            passwordLabel.append(password);
+            passwordLabel.append(createPasswordField(password));
             const message = document.createElement("small");
             message.className = "online-service-status";
             message.setAttribute("role", "status");
@@ -2345,20 +2611,27 @@ function showAccount(initialMessage = "") {
             submit.type = "submit";
             submit.textContent = registrationMode ? "Create account" : "Sign in";
             const switchMode = createTextButton(registrationMode ? "I already have an account" : "Create a new account", () => { registrationMode = !registrationMode; render(); });
-            form.append(usernameLabel, ...(emailLabel ? [emailLabel] : []), passwordLabel, submit, message);
+            form.append(usernameLabel, ...(emailLabel ? [emailLabel] : []), ...(humanLabel ? [humanLabel] : []), ...(humanChallengeStatus ? [humanChallengeStatus] : []), ...(trapLabel ? [trapLabel] : []), passwordLabel, submit, message);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 submit.disabled = true;
                 message.textContent = "Connecting to the account service...";
                 try {
                     const wasRegistration = registrationMode;
-                    const credentials: Record<string, string> = { username: username.value, password: password.value };
+                    const credentials: Record<string, unknown> = { username: username.value, password: password.value };
                     if (wasRegistration && email) credentials.email = email.value;
+                    if (wasRegistration && botTrap) credentials.website = botTrap.value;
+                    if (wasRegistration && humanChallenge && humanAnswer) credentials.humanChallenge = { token: humanChallenge.token, answer: humanAnswer.value };
                     const response = await apiRequest<{ user: OnlineUser; recoveryCode?: string }>(`/auth/${wasRegistration ? "register" : "login"}`, {
                         method: "POST",
                         body: JSON.stringify(credentials),
                     });
                     setOnlineUser(response.user);
+                    if (wasRegistration) {
+                        // Guest rewards and unlocks must never become the new
+                        // account's progression. Keep device preferences only.
+                        clearLocalAccountData();
+                    }
                     void sendPresenceHeartbeat();
                     updateOwnerAccountIndicator();
                     let progressWarning = "";
@@ -2403,6 +2676,9 @@ const secondaryControlKeys: Record<ControlAction, string[]> = {
     jump: ["keyw", "space"],
     down: ["keys"],
     shoot: [],
+    restart: [],
+    back: [],
+    confirm: [],
 };
 function controlKeysFor(action: ControlAction) {
     return controlBindings[action] === DEFAULT_CONTROL_BINDINGS[action]
@@ -2411,7 +2687,7 @@ function controlKeysFor(action: ControlAction) {
 }
 
 function getInventory(): Record<PowerupKind, number> {
-    if (hasOwnerAccess()) return { shield: OWNER_TEST_INVENTORY_AMOUNT, boost: OWNER_TEST_INVENTORY_AMOUNT, rapid: OWNER_TEST_INVENTORY_AMOUNT, cannon: OWNER_TEST_INVENTORY_AMOUNT, star: OWNER_TEST_INVENTORY_AMOUNT };
+    if (hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester") return { shield: OWNER_TEST_INVENTORY_AMOUNT, boost: OWNER_TEST_INVENTORY_AMOUNT, rapid: OWNER_TEST_INVENTORY_AMOUNT, cannon: OWNER_TEST_INVENTORY_AMOUNT, star: OWNER_TEST_INVENTORY_AMOUNT };
     try { return { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0, ...JSON.parse(localStorage.getItem("orbit-powerups") ?? "{}") }; }
     catch { return { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; }
 }
@@ -2427,10 +2703,18 @@ function canActivatePowerup(kind: PowerupKind) {
 }
 
 function isStarInvincible() { return starPowerupActive && gameConfig.powerupRules.rainbowStarInvincible; }
+function isStarContactDamageActive() { return starPowerupActive && gameConfig.powerupRules.rainbowStarDefeatsEnemies; }
+function getMovementMultiplier() {
+    const boostMultiplier = boostTimer > 0 ? gameConfig.powerupEffects.boost.movementMultiplier : 1;
+    const configuredStarMultiplier = gameConfig.powerupEffects.star.movementMultiplier ?? DEFAULT_GAME_CONFIG.powerupEffects.star.movementMultiplier ?? 1;
+    const starMultiplier = starPowerupActive && Number.isFinite(configuredStarMultiplier) ? Math.max(1, configuredStarMultiplier) : 1;
+    return boostMultiplier * starMultiplier;
+}
 
 function saveInventory(inventory: Record<PowerupKind, number>) { localStorage.setItem("orbit-powerups", JSON.stringify(inventory)); }
 
 function showShop() {
+    enterAppPage(showShop);
     gameActive = false;
     cancelAnimationFrame(animationFrame);
     const menu = document.createElement("main");
@@ -2832,6 +3116,7 @@ function getRouletteReward(type: keyof RouletteTier["chances"], tier: RouletteTi
 }
 
 function showDropRates() {
+    enterAppPage(showDropRates);
     gameActive = false;
     cancelAnimationFrame(animationFrame);
     const menu = document.createElement("main");
@@ -2943,9 +3228,10 @@ function createPageCounter() {
 }
 
 function showTesterLogin() {
+    enterAppPage(showTesterLogin);
     const menu = document.createElement("main");
     menu.className = "menu-screen tester-screen";
-    menu.innerHTML = `<p class="eyebrow">FLIGHT SYSTEMS / OWNER LOGIN</p><h1>Sign in to <em>manage</em></h1><p class="menu-copy">Global game settings and workshop levels can only be changed by the owner account.</p>`;
+    menu.innerHTML = `<p class="eyebrow">FLIGHT SYSTEMS / STAFF LOGIN</p><h1>Sign in to <em>manage</em></h1><p class="menu-copy">Sign in with an authorized owner, admin, moderator, tester, or level-maker account to open its permitted tools.</p>`;
     const form = document.createElement("form");
     form.className = "tester-login";
     const username = document.createElement("input");
@@ -2962,12 +3248,15 @@ function showTesterLogin() {
     const submit = document.createElement("button");
     submit.className = "menu-button";
     submit.type = "submit";
-    submit.textContent = "Sign in as owner";
-    form.append(username, password, submit, message);
+    submit.textContent = "Sign in";
+    const passwordField = document.createElement("label");
+    passwordField.textContent = "Password";
+    passwordField.append(createPasswordField(password));
+    form.append(username, passwordField, submit, message);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
         submit.disabled = true;
-        message.textContent = "Checking owner account...";
+        message.textContent = "Checking staff account...";
         try {
             const response = await apiRequest<{ user: OnlineUser }>("/auth/login", {
                 method: "POST",
@@ -2976,15 +3265,15 @@ function showTesterLogin() {
             setOnlineUser(response.user);
             void sendPresenceHeartbeat();
             updateOwnerAccountIndicator();
-            if (response.user.role !== "owner") {
-                message.textContent = "This account does not have owner access.";
+            if (!(response.user.role === "owner" || response.user.role === "admin" || response.user.role === "moderator" || response.user.role === "level-maker" || response.user.role === "tester")) {
+                message.textContent = "This account does not have staff access.";
                 submit.disabled = false;
                 return;
             }
             await syncAccountProgress("load");
             await showTesterPanel();
         } catch (error) {
-            message.textContent = error instanceof Error ? error.message : "The owner account could not be verified.";
+            message.textContent = error instanceof Error ? error.message : "The staff account could not be verified.";
             submit.disabled = false;
         }
     });
@@ -3009,6 +3298,7 @@ function readTesterSetting(key: string, fallback: number, world?: "normal" | "pr
 }
 
 async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlanet) {
+    enterAppPage(showTesterPanel);
     let user = currentOnlineUser;
     try {
         if (!user) user = (await apiRequest<{ user: OnlineUser | null }>("/auth/session")).user;
@@ -3017,18 +3307,24 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         console.error("Could not verify owner account:", error);
         return;
     }
-    if (user?.role !== "owner" && user?.role !== "tester") {
+    if (!user || !(user.role === "owner" || user.role === "admin" || user.role === "moderator" || user.role === "level-maker" || user.role === "tester")) {
         showTesterLogin();
         return;
     }
     setOnlineUser(user);
     updateOwnerAccountIndicator();
     const isOwner = user.role === "owner";
+    const isAdmin = user.role === "admin";
+    const isModerator = user.role === "moderator";
+    const isLevelMaker = user.role === "level-maker";
+    const canTest = isOwner || isAdmin || user.role === "tester";
+    const canModerate = isOwner || isAdmin || isModerator;
+    const canWorkshop = isOwner || isAdmin || isLevelMaker;
     const menu = document.createElement("main");
     menu.className = "menu-screen tester-screen";
     const pageHeader = document.createElement("div");
     pageHeader.className = "tester-console-header";
-    pageHeader.innerHTML = `<div><p class="eyebrow">FLIGHT SYSTEMS / ${isOwner ? "OWNER" : "TESTER"}</p><h1>Control <em>center</em></h1><p class="menu-copy">${isOwner ? "Manage your game and pilots from one place." : "Test game settings and progression on this device."}</p></div><span class="tester-scope-badge">${isOwner ? "OWNER ACCESS" : "LOCAL TEST MODE"}</span>`;
+    pageHeader.innerHTML = `<div><p class="eyebrow">FLIGHT SYSTEMS / ${roleLabel(user.role)}</p><h1>Control <em>center</em></h1><p class="menu-copy">${isOwner ? "Manage your game and pilots from one place." : isAdmin ? "Manage approved content, levels, messages, and local test tools." : isModerator ? "Review accounts and enforce bans without access to player rewards." : isLevelMaker ? "Build and playtest workshop levels." : "Test game settings and progression on this device."}</p></div><span class="tester-scope-badge">${isOwner ? "OWNER ACCESS" : user.role === "tester" ? "LOCAL TEST MODE" : `${roleLabel(user.role)} ACCESS`}</span>`;
     const worldTabs = document.createElement("nav");
     worldTabs.className = "tester-world-tabs";
     worldTabs.setAttribute("aria-label", "World settings");
@@ -3051,6 +3347,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const messageManagement = document.createElement("section");
     messageManagement.className = "tester-player-management";
     messageManagement.hidden = true;
+    const chatFilterManagement = document.createElement("section");
+    chatFilterManagement.className = "tester-player-management";
+    chatFilterManagement.hidden = true;
     const updateLogManagement = document.createElement("section");
     updateLogManagement.className = "tester-player-management";
     updateLogManagement.hidden = true;
@@ -3062,7 +3361,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const heading = document.createElement("h2");
         heading.textContent = "Profile titles";
         const description = document.createElement("p");
-        description.textContent = "Create titles with routes, Golden Body, prestige, or roulette requirements. Titles are earned when a pilot reaches the requirement, then can be selected in Account settings.";
+        description.textContent = "Create titles with route, Golden Body, prestige, or roulette requirements. Add an optional color and animation so rare titles stand out on profiles.";
         const list = document.createElement("div");
         list.className = "title-management-list";
         const status = document.createElement("small");
@@ -3075,6 +3374,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 type: row.querySelector<HTMLSelectElement>("[data-title-requirement]")!.value as "routes" | "golden" | "prestige" | "roulette" | "locked",
                 amount: Number(row.querySelector<HTMLInputElement>("[data-title-requirement-amount]")!.value),
             },
+            ...(row.querySelector<HTMLInputElement>("[data-title-color]")!.value.trim() ? { color: row.querySelector<HTMLInputElement>("[data-title-color]")!.value.trim() } : {}),
+            ...(row.querySelector<HTMLSelectElement>("[data-title-animation]")!.value !== "none" ? { animation: row.querySelector<HTMLSelectElement>("[data-title-animation]")!.value as "pulse" | "shimmer" | "rainbow" } : {}),
         }));
         profileTitles.forEach((title, index) => {
             const row = document.createElement("div");
@@ -3092,6 +3393,19 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             name.required = true;
             name.dataset.titleName = String(index);
             name.setAttribute("aria-label", `Title ${index + 1} name`);
+            const color = document.createElement("input");
+            color.type = "text";
+            color.value = title.color ?? "";
+            color.placeholder = "#f6c46e";
+            color.maxLength = 7;
+            color.pattern = "#[0-9a-fA-F]{6}";
+            color.dataset.titleColor = String(index);
+            color.setAttribute("aria-label", `Title ${index + 1} color`);
+            const animation = document.createElement("select");
+            animation.dataset.titleAnimation = String(index);
+            animation.setAttribute("aria-label", `Title ${index + 1} animation`);
+            [["none", "No animation"], ["pulse", "Pulse glow"], ["shimmer", "Shimmer"], ["rainbow", "Rainbow shift"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; animation.append(option); });
+            animation.value = title.animation ?? "none";
             const routes = document.createElement("input");
             routes.type = "number";
             routes.min = "0";
@@ -3122,7 +3436,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
                 drawTitleManagement();
             });
-            row.append(id, name, routes, requirement, requirementAmount, remove);
+            row.append(id, name, color, animation, routes, requirement, requirementAmount, remove);
             list.append(row);
         });
         const add = createTextButton("Add title", () => {
@@ -3379,6 +3693,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     addEffectInput("Rapid Fire duration (seconds)", "rapid-duration", gameConfig.powerupEffects.rapid.durationSeconds, 1, 300);
     addEffectInput("Cannon duration (seconds, 0 = permanent)", "cannon-duration", gameConfig.powerupEffects.cannon.durationSeconds, 0, 300);
     addEffectInput("Rainbow Star duration (seconds)", "star-duration", gameConfig.powerupEffects.star.durationSeconds, 1, 300);
+    addEffectInput("Rainbow Star movement multiplier", "star-multiplier", gameConfig.powerupEffects.star.movementMultiplier ?? DEFAULT_GAME_CONFIG.powerupEffects.star.movementMultiplier!, 1, 4, 0.1);
     const addRuleToggle = (labelText: string, key: "oneActiveAtATime" | "rainbowStarInvincible" | "rainbowStarDefeatsEnemies") => {
         const label = document.createElement("label");
         label.append(document.createTextNode(labelText));
@@ -3392,7 +3707,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     };
     addRuleToggle("Allow only one active power-up", "oneActiveAtATime");
     addRuleToggle("Rainbow Star grants invincibility", "rainbowStarInvincible");
-    addRuleToggle("Rainbow Star defeats enemies", "rainbowStarDefeatsEnemies");
+    addRuleToggle("Rainbow Star defeats enemies on contact", "rainbowStarDefeatsEnemies");
     const limitHeading = document.createElement("p");
     limitHeading.className = "setting-title";
     limitHeading.textContent = "Per-level power-up limits";
@@ -3661,12 +3976,22 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             savePortalAssignments.disabled = true;
             portalStatus.textContent = "Saving portal placement for every player...";
             try {
+                const previousAssignments = { ...portalAssignments };
                 const response = await apiRequest<{ portalAssignments: Record<string, string> }>("/settings/portal-assignments", {
                     method: "PUT",
                     body: JSON.stringify({ assignments }),
                 });
                 portalAssignments = response.portalAssignments;
+                ["eclipse", "nebula", "archive", "stellar-sanctum", "quantum-depths", "infinity-spiral"].forEach((secretId) => {
+                    if (previousAssignments[secretId] !== response.portalAssignments[secretId]) localStorage.removeItem(`orbit-portal-location-${secretId}`);
+                });
                 configurePortalDistribution();
+                renderPortalObjects();
+                levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => {
+                    const level = levels[Number(input.dataset.level)];
+                    const metadata = input.parentElement?.querySelector<HTMLElement>(".tester-level-meta");
+                    if (level && metadata) metadata.textContent = `${level.portals?.length || level.secretPortals?.length ? "PORTAL" : "NO PORTAL"} / RAINBOW STAR ${getConfiguredRainbowStarChance(Boolean(level.prestige))}%`;
+                });
                 portalStatus.textContent = "Portal placement saved for every player.";
             } catch (error) {
                 portalStatus.textContent = error instanceof Error ? error.message : "Could not save portal placement.";
@@ -3725,7 +4050,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         });
         remove.classList.add("danger");
         row.append(name);
-        if (isOwner) row.append(remove);
+        if (canWorkshop) row.append(remove);
         sharedLevels.append(row);
     });
     form.append(sharedLevels, workshopStatus);
@@ -3808,6 +4133,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         nextConfig.powerupEffects.rapid.durationSeconds = readTesterSetting("effect.rapid-duration", nextConfig.powerupEffects.rapid.durationSeconds);
         nextConfig.powerupEffects.cannon.durationSeconds = readTesterSetting("effect.cannon-duration", nextConfig.powerupEffects.cannon.durationSeconds);
         nextConfig.powerupEffects.star.durationSeconds = readTesterSetting("effect.star-duration", nextConfig.powerupEffects.star.durationSeconds);
+        nextConfig.powerupEffects.star.movementMultiplier = readTesterSetting("effect.star-multiplier", nextConfig.powerupEffects.star.movementMultiplier ?? DEFAULT_GAME_CONFIG.powerupEffects.star.movementMultiplier!);
         (["oneActiveAtATime", "rainbowStarInvincible", "rainbowStarDefeatsEnemies"] as const).forEach((key) => {
             const draft = testerSettingsDraft.get(`rule.${key}`);
             if (draft !== undefined) nextConfig.powerupRules[key] = draft === "1";
@@ -3897,7 +4223,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         return panel;
     };
     const roulettePanel = settingPanel("roulette", [rouletteSettings]);
-    const sections: ControlSection[] = [
+    let sections: ControlSection[] = [
         { id: "rewards", title: "World chances & rewards", group: "Game settings", description: "Tune world drops, rarity chances, power-up spawns, and reward ranges separately for each world.", panel: settingPanel("rewards", [rewardSettings]) },
         { id: "abilities", title: "Power-ups & enemies", group: "Game settings", description: "Set power-up strength, limits, and enemy attack behavior.", panel: settingPanel("abilities", [effectSettings]) },
         { id: "roulette", title: "Roulette & spinning", group: "Game settings", description: "Configure wheel buy-ins, spin prize chances, and asteroid rewards.", panel: roulettePanel },
@@ -3907,6 +4233,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         { id: "workshop", title: "Level workshop", group: "Your test profile", description: isOwner ? "Build routes or manage shared workshop levels." : "Playtest routes. Publishing or deleting shared levels requires owner access.", panel: settingPanel("workshop", [customTitle, sharedLevels, workshopStatus, openMaker]) },
         { id: "reset", title: "Device reset", group: "Your test profile", description: "Reset this device's game data without deleting shared settings.", panel: settingPanel("reset", [resetTitle, resetPanel]) },
     ];
+    if (!canTest) sections = sections.filter((section) => section.id === "workshop");
+    if (!canWorkshop) sections = sections.filter((section) => section.id !== "workshop");
+    worldTabs.hidden = !canTest;
     const settingsIds = new Set(sections.map((section) => section.id));
     const saveIds = new Set(["rewards", "abilities", "profile", "cosmetics", "levels"]);
     const initialized = new Set<string>();
@@ -3923,11 +4252,16 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             panel.replaceChildren(message, retry);
         });
     };
+    if (canModerate) sections.push(
+        { id: "players", title: "Player accounts", group: isOwner ? "Owner management" : "Moderation", description: isOwner ? "Review accounts, progress, roles, and access." : "Review accounts and enforce bans without editing rewards or saved progress.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement, { canEditProfiles: isOwner, canManageRoles: isOwner, canManageSensitive: isOwner })) },
+    );
+    if (isAdmin || isOwner) sections.push(
+        { id: "codes", title: "Reward codes", group: "Content management", description: "Create and manage redeemable asteroid, power-up, cosmetic, and title rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement, profileTitles)) },
+        { id: "messages", title: "Messages", group: "Content management", description: "Send announcements and review message history.", panel: messageManagement, onOpen: () => loadOnce("messages", messageManagement, () => renderAdminMessageTools(messageManagement)) },
+        { id: "updates", title: "Update log", group: "Content management", description: "Publish the changes shown to players in Credits.", panel: updateLogManagement, onOpen: () => loadOnce("updates", updateLogManagement, () => renderAdminUpdateLog(updateLogManagement, updateLogEntries, (entries) => { updateLogEntries = entries; })) },
+    );
     if (isOwner) sections.push(
-        { id: "players", title: "Player accounts", group: "Owner management", description: "Review accounts, progress, roles, and access.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement)) },
-        { id: "codes", title: "Reward codes", group: "Owner management", description: "Create and manage redeemable asteroid, power-up, cosmetic, and title rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement, profileTitles)) },
-        { id: "messages", title: "Messages", group: "Owner management", description: "Send announcements and review message history.", panel: messageManagement, onOpen: () => loadOnce("messages", messageManagement, () => renderAdminMessageTools(messageManagement)) },
-        { id: "updates", title: "Update log", group: "Owner management", description: "Publish the changes shown to players in Credits.", panel: updateLogManagement, onOpen: () => loadOnce("updates", updateLogManagement, () => renderAdminUpdateLog(updateLogManagement, updateLogEntries, (entries) => { updateLogEntries = entries; })) },
+        { id: "chat-filter", title: "Chat word filter", group: "Owner management", description: "Mask hateful and abusive words in global and direct messages.", panel: chatFilterManagement, onOpen: () => loadOnce("chat-filter", chatFilterManagement, () => renderAdminChatFilterTools(chatFilterManagement)) },
         { id: "titles", title: "Profile titles", group: "Owner management", description: "Create shared titles with route, Golden Body, prestige, or roulette requirements.", panel: titleManagement },
     );
     const content = document.createElement("div");
@@ -3940,7 +4274,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const sectionDescription = document.createElement("p");
     sectionHeader.append(sectionGroup, sectionTitle, sectionDescription);
     form.replaceChildren(...sections.filter((section) => settingsIds.has(section.id)).map((section) => section.panel), saveFooter);
-    content.append(sectionHeader, worldTabs, form, accountManagement, codeManagement, messageManagement, updateLogManagement, titleManagement);
+    content.append(sectionHeader, worldTabs, form, accountManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
     const navigation = createControlNavigation(sections, (section) => selectSection(section.id));
     function selectSection(id: string) {
         const selected = sections.find((section) => section.id === id);
@@ -3966,7 +4300,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const previousSection = localStorage.getItem("orbit-owner-panel-tab");
     const legacySections: Record<string, string> = { General: "profile", Economy: "rewards", Abilities: "abilities", Cosmetics: "cosmetics", Levels: "levels", Prestige: "profile", Workshop: "workshop", roulette: "roulette" };
     const initialSection = previousSection ? legacySections[previousSection] ?? previousSection : "rewards";
-    selectSection(sections.some((section) => section.id === initialSection) ? initialSection : "rewards");
+    selectSection(sections.some((section) => section.id === initialSection) ? initialSection : sections[0]?.id ?? "players");
 }
 
 function moveActorOutOfObstacles<T extends { x: number; y: number }>(actor: T, width: number, height: number): T | null {
@@ -4056,6 +4390,7 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
         && isRecord(effects.rapid) && Number.isFinite(effects.rapid.durationSeconds)
         && isRecord(effects.cannon) && Number.isFinite(effects.cannon.durationSeconds)
         && isRecord(effects.star) && Number.isFinite(effects.star.durationSeconds)
+        && (effects.star.movementMultiplier === undefined || (Number.isFinite(effects.star.movementMultiplier) && effects.star.movementMultiplier >= 1 && effects.star.movementMultiplier <= 4))
         && typeof rules.oneActiveAtATime === "boolean"
         && typeof rules.rainbowStarInvincible === "boolean"
         && typeof rules.rainbowStarDefeatsEnemies === "boolean"
@@ -4086,6 +4421,8 @@ function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
         const requirement = candidate.requirement;
         if (typeof candidate.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(candidate.id) || ids.has(candidate.id)
             || typeof candidate.name !== "string" || !candidate.name.trim() || candidate.name.trim().length > 50 || /[<>]/.test(candidate.name)
+            || candidate.color !== undefined && (typeof candidate.color !== "string" || !/^#[0-9a-f]{6}$/i.test(candidate.color))
+            || candidate.animation !== undefined && !["none", "pulse", "shimmer", "rainbow"].includes(candidate.animation)
             || typeof candidate.routes !== "number" || !Number.isSafeInteger(candidate.routes) || candidate.routes < 0 || candidate.routes > 100000
             || requirement !== undefined && (typeof requirement !== "object" || !["routes", "golden", "prestige", "roulette", "locked"].includes(requirement.type) || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000)) return false;
         ids.add(candidate.id);
@@ -4306,8 +4643,8 @@ function updateSecretBossRoom() {
     const roomWidth = room.clientWidth || 680;
     const leftHeld = pressedKeys.has("arrowleft") || pressedKeys.has("a");
     const rightHeld = pressedKeys.has("arrowright") || pressedKeys.has("d");
-    if (leftHeld) playerX -= 5 * currentFrameScale * (boostTimer > 0 ? gameConfig.powerupEffects.boost.movementMultiplier : 1);
-    if (rightHeld) playerX += 5 * currentFrameScale * (boostTimer > 0 ? gameConfig.powerupEffects.boost.movementMultiplier : 1);
+    if (leftHeld) playerX -= 5 * currentFrameScale * getMovementMultiplier();
+    if (rightHeld) playerX += 5 * currentFrameScale * getMovementMultiplier();
     playerX = Math.max(24, Math.min(roomWidth - playerWidth - 24, playerX));
     previousPlayerY = playerY;
     verticalSpeed += gravity * currentFrameScale;
@@ -4340,8 +4677,12 @@ function updateSecretBossRoom() {
         if (!secretBoss.defeated) {
             const bossBox = { x: secretBoss.x, y: secretBoss.y, width: 128, height: SECRET_BOSS_HEIGHT };
             if (intersects(playerBox(), bossBox)) {
-                const landedOnHead = verticalSpeed >= 0 && previousPlayerY + playerHeight <= bossBox.y + 18;
-                if (landedOnHead) {
+                if (isStarContactDamageActive()) {
+                    while (secretBoss && !secretBoss.defeated) damageSecretBoss();
+                    statusLabel.textContent = "Rainbow Star shattered the Void Warden on contact.";
+                } else {
+                    const landedOnHead = verticalSpeed >= 0 && previousPlayerY + playerHeight <= bossBox.y + 18;
+                    if (landedOnHead) {
                     damageSecretBoss();
                     playerY = bossBox.y - playerHeight;
                     verticalSpeed = jumpPower * 0.65;
@@ -4349,15 +4690,16 @@ function updateSecretBossRoom() {
                     roomPlayer?.classList.add("ground-pound");
                     window.setTimeout(() => roomPlayer?.classList.remove("ground-pound"), 180);
                     statusLabel.textContent = "Void Warden crushed. Ground pound landed!";
-                } else if (isStarInvincible()) {
-                    playerX = Math.max(20, Math.min(secretBoss.x - playerWidth - 8, room.clientWidth - playerWidth - 20));
-                    statusLabel.textContent = "Rainbow Star absorbed the Void Warden impact.";
-                } else if (shieldCharges > 0) {
-                    shieldCharges--;
-                    playerX = secretBoss.x - playerWidth - 8;
-                    statusLabel.textContent = "Shield absorbed the Void Warden impact.";
-                } else {
-                    showGameOver("The Void Warden crushed your hull.");
+                    } else if (isStarInvincible()) {
+                        playerX = Math.max(20, Math.min(secretBoss.x - playerWidth - 8, room.clientWidth - playerWidth - 20));
+                        statusLabel.textContent = "Rainbow Star absorbed the Void Warden impact.";
+                    } else if (shieldCharges > 0) {
+                        shieldCharges--;
+                        playerX = secretBoss.x - playerWidth - 8;
+                        statusLabel.textContent = "Shield absorbed the Void Warden impact.";
+                    } else {
+                        showGameOver("The Void Warden crushed your hull.");
+                    }
                 }
             }
             if (shootingHeld || controlKeysFor("shoot").some((key) => pressedKeys.has(key))) shootSecretBoss();
@@ -4409,6 +4751,7 @@ function damageSecretBoss() {
         return;
     }
     secretBoss.defeated = true;
+    recordKill("boss");
     bossElement?.classList.add("defeated");
     if (room) createEnemyExplosion(room, secretBoss.x + 64, secretBoss.y + SECRET_BOSS_HEIGHT / 2, "#6ecbff");
     const keyId = currentSecretPortalTarget;
@@ -4527,9 +4870,40 @@ function showPlanetaryTransition(text: string) {
     const transition = document.createElement("div"); transition.className = "planet-transition prestige"; transition.innerHTML = `<span>${text}</span>`; document.body.append(transition); window.setTimeout(() => transition.remove(), 1100);
 }
 
+async function requestRunProof(levelName: string, sequence: number) {
+    try {
+        const response = await apiRequest<{ runId: string }>('/runs/start', {
+            method: "POST",
+            body: JSON.stringify({ level: levelName }),
+        });
+        if (sequence !== runProofSequence || levels[currentLevel]?.name !== levelName || typeof response.runId !== "string") return;
+        activeRunProof = { runId: response.runId, levelName };
+    } catch (error) {
+        if (sequence === runProofSequence) console.warn("Online run verification is unavailable:", error);
+    }
+}
+
+function getRunProofId(levelName: string) {
+    return activeRunProof?.levelName === levelName ? activeRunProof.runId : undefined;
+}
+
+async function waitForRunProof(levelName: string, timeoutMs = 3000) {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+        const proofId = getRunProofId(levelName);
+        if (proofId) return proofId;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 40));
+    }
+    return getRunProofId(levelName);
+}
+
 function startGame(levelIndex = currentLevel) {
     const level = levels[levelIndex];
     if (!level) return;
+    if (!isLevelMakerPreview && currentOnlineUser?.role === "player" && currentOnlineUser.humanVerified === false) {
+        showAccount("Complete the human check in Player settings before playing online levels.");
+        return;
+    }
     if (isPrestigeRouteLocked(level)) {
         const required = Math.min(level.prestigeRequirement ?? 1, prestigeMax);
         const screen = document.createElement("main");
@@ -4573,12 +4947,16 @@ function startGame(levelIndex = currentLevel) {
     setMusicScene(level.secret ? "secret" : level.boss ? "boss" : level.prestige ? "prestige" : "normal");
     cancelPortalTransit();
     currentLevel = levelIndex;
+    enterAppPage(gameAppPage);
     if (currentOnlineUser && !level.localOnly && !level.customId) {
         localStorage.setItem("orbit-last-level", level.name);
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
     playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; enemyAttackTimer = 0; miniBossAttackTimer = 0; bossAttackTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    activeRunProof = null;
+    const proofSequence = ++runProofSequence;
+    if (!isLevelMakerPreview && currentOnlineUser) void requestRunProof(level.name, proofSequence);
     chatController?.setGameActive(true);
     document.body.innerHTML = "";
     createGameShell(); createPlayer(); createWorldObjects(); createTrail(false); createControls(); startGameLoop();
@@ -4659,7 +5037,7 @@ function showWinScreen() {
     document.body.replaceChildren(screen);
 }
 
-async function submitLeaderboardRun(status: HTMLElement, levelName: string, timeMs: number, abilities: string[], submitOwner = false) {
+async function submitLeaderboardRun(status: HTMLElement, levelName: string, timeMs: number, abilities: string[], submitOwner = false, proofId?: string) {
     try {
         const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
         setOnlineUser(session.user);
@@ -4675,9 +5053,14 @@ async function submitLeaderboardRun(status: HTMLElement, levelName: string, time
             status.textContent = "Leaderboard submission is turned off in your account settings. This run was not submitted.";
             return;
         }
+        proofId ??= await waitForRunProof(levelName);
+        if (!proofId) {
+            status.textContent = "This run could not be verified online. Start the level again while connected to submit it.";
+            return;
+        }
         const result = await apiRequest<{ entry: OnlineLeaderboardEntry | null; improved: boolean; ignored?: boolean; reason?: string }>("/runs", {
             method: "POST",
-            body: JSON.stringify({ level: levelName, timeMs, abilities, ...(submitOwner ? { submitOwner: true } : {}) }),
+            body: JSON.stringify({ level: levelName, timeMs, abilities, proofId, ...(submitOwner ? { submitOwner: true } : {}) }),
         });
         if (result.ignored) {
             status.textContent = result.reason === "opted-out"
@@ -4702,8 +5085,15 @@ function showGameOver(reason = "Your hull took a hit.") {
     const screen = document.createElement("main");
     screen.className = "win-screen game-over-screen";
     screen.innerHTML = `<p class="eyebrow">SIGNAL LOST</p><h1>Hull <em>breach</em></h1><p class="menu-copy">${reason} The sector is still waiting.</p>`;
-    if (isLevelMakerPreview) screen.append(createMenuButton("Retry playtest", () => startGame(currentLevel)), createTextButton("Back to level maker", () => showLevelMenu()));
-    else screen.append(createMenuButton("Retry sector", () => startGame(currentLevel)), createTextButton("Mission select", showLevelMenu), createPageCounter());
+    const quickRestart = createMenuButton(isLevelMakerPreview ? "Quick restart playtest" : "Quick restart", () => startGame(currentLevel));
+    quickRestart.setAttribute("aria-label", "Quickly restart the current level");
+    screen.append(quickRestart);
+    const restartHint = document.createElement("small");
+    restartHint.className = "restart-hint";
+    restartHint.textContent = `Press ${formatControlBinding(controlBindings.restart)} to restart instantly`;
+    screen.append(restartHint);
+    if (isLevelMakerPreview) screen.append(createTextButton("Back to level maker", () => showLevelMenu()));
+    else screen.append(createTextButton("Mission select", showLevelMenu), createPageCounter());
     document.body.replaceChildren(screen);
 }
 
@@ -4754,6 +5144,36 @@ function createPlayer() {
     updatePlayerPosition();
 }
 
+function renderPortalObjects() {
+    world.querySelectorAll<HTMLElement>(".secret-portal, .portal").forEach((element) => element.remove());
+    const level = levels[currentLevel];
+    if (!level || level.secret) return;
+    const secretPortals = getActiveSecretPortals(level);
+    secretPortals.forEach((portal, portalIndex) => {
+        const element = document.createElement("div");
+        element.className = "secret-portal";
+        element.textContent = "⚡";
+        element.style.left = `${140 + portal.index * TILE_WIDTH}px`;
+        element.style.top = `${portal.y ?? PORTAL_Y}px`;
+        element.setAttribute("aria-label", `Hidden portal to ${portal.secretId}`);
+        element.dataset.portalIndex = portalIndex.toString();
+        element.dataset.secretId = portal.secretId;
+        world.append(element);
+    });
+    const secretPortalIndexes = new Set(secretPortals.map((portal) => portal.index));
+    (level.portals ?? []).forEach((index, portalIndex) => {
+        if (secretPortalIndexes.has(index)) return;
+        const element = document.createElement("div");
+        element.className = "portal";
+        element.textContent = "↔";
+        element.style.left = `${140 + index * TILE_WIDTH}px`;
+        element.style.top = `${PORTAL_Y}px`;
+        element.setAttribute("aria-label", "Hidden level portal");
+        element.dataset.portalIndex = portalIndex.toString();
+        world.append(element);
+    });
+}
+
 function createWorldObjects() {
     createSpaceBackdrop();
     createMapBoundaries();
@@ -4779,37 +5199,7 @@ function createWorldObjects() {
 createLevelKeyObject();
     if (inFlippedRoute && !flippedRouteKeyCollected) { const routeKey = document.createElement("div"); routeKey.className = "level-key flipped-route-key"; routeKey.textContent = "⚿"; routeKey.style.left = `${140 + Math.min(levels[currentLevel].length - 2, Math.max(2, levels[currentLevel].flippedRoute?.key ?? levels[currentLevel].length - 3)) * TILE_WIDTH}px`; routeKey.style.top = `${flippedRouteKeyY}px`; routeKey.setAttribute("aria-label", "Flipped planet exit key"); world.append(routeKey); }
     
-    // Secret portals - one per secret level, placed in hard-to-reach/obscured locations (y=80, reveal radius 50px)
-    const secretPortals = levels[currentLevel].secret ? [] : getActiveSecretPortals(levels[currentLevel]);
-    secretPortals.forEach((portal, portalIndex) => {
-        const element = document.createElement("div");
-        element.className = "secret-portal";
-        element.textContent = "⚡";
-        element.style.left = `${140 + portal.index * TILE_WIDTH}px`;
-        element.style.top = `${portal.y ?? PORTAL_Y}px`;
-        element.setAttribute("aria-label", `Hidden portal to ${portal.secretId}`);
-        element.dataset.portalIndex = portalIndex.toString();
-        element.dataset.secretId = portal.secretId;
-        world.append(element);
-    });
-    
-    // Regular portals (for flipped route travel) - not in secret levels
-    const isSecretLevel = levels[currentLevel].secret === true;
-    if (!isSecretLevel) {
-        const portals = levels[currentLevel].portals ?? [];
-        const secretPortalIndexes = new Set(secretPortals.map((portal) => portal.index));
-        portals.forEach((index, portalIndex) => { 
-            if (secretPortalIndexes.has(index)) return;
-            const element = document.createElement("div"); 
-            element.className = "portal";
-            element.textContent = "↔";
-            element.style.left = `${140 + index * TILE_WIDTH}px`; 
-            element.style.top = "175px"; 
-            element.setAttribute("aria-label", "Hidden level portal"); 
-            element.dataset.portalIndex = portalIndex.toString();
-            world.append(element); 
-        });
-    }
+    renderPortalObjects();
     
     // Only show boss if unlocked (key obtained or no key required)
     const bossUnlocked = !levelKey || levelKey.collected || levels[currentLevel].secret;
@@ -4980,7 +5370,7 @@ function createControls() {
     controls.append(createButton("left", "←", moveLeft), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createButton("right", "→", moveRight), createHoldButton("shoot", "✦", shoot), createButton("restart", "↻", () => startGame(currentLevel)), createButton("exit", "Exit", showLevelMenu));
     const hint = document.createElement("small");
     hint.className = "controls-key-hint";
-    hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · R restart`;
+    hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · Restart ${formatControlBinding(controlBindings.restart)} · Back ${formatControlBinding(controlBindings.back)}`;
     controls.append(hint);
     document.querySelector(".game-footer")?.append(controls);
 }
@@ -5006,23 +5396,36 @@ function createHoldButton(className: string, text: string, action: () => void) {
 function handleKeyDown(event: KeyboardEvent) {
     const targetElement = event.target instanceof HTMLElement ? event.target : null;
     if (targetElement?.matches("input, textarea, select, [contenteditable]")) return;
-    if (event.code === "Backspace" && !gameActive && !targetElement?.matches("input, textarea, select")) {
+    const key = event.code.toLowerCase();
+    if (controlKeysFor("back").includes(key)) {
         event.preventDefault();
-        if (!document.querySelector(".home-screen")) showMenu();
+        if (gameActive) {
+            gameActive = false;
+            chatController?.setGameActive(false);
+            cancelAnimationFrame(animationFrame);
+            pressedKeys.clear();
+            cancelPortalTransit();
+            resetFlippedVisualState();
+        }
+        goToPreviousAppPage();
         return;
     }
-    if (event.code === "Enter" && !gameActive && document.querySelector(".level-menu")) {
+    if (controlKeysFor("confirm").includes(key) && !gameActive && document.querySelector(".level-menu")) {
         const firstAvailable = document.querySelector<HTMLButtonElement>(".level-list .level-button:not([disabled])");
         if (firstAvailable) { event.preventDefault(); firstAvailable.click(); }
         return;
     }
-    if (!gameActive) return;
-    if (event.code === "KeyR") {
+    if (controlKeysFor("restart").includes(key) && !gameActive && document.querySelector(".game-over-screen")) {
         event.preventDefault();
         startGame(currentLevel);
         return;
     }
-    const key = event.code.toLowerCase();
+    if (!gameActive) return;
+    if (controlKeysFor("restart").includes(key)) {
+        event.preventDefault();
+        startGame(currentLevel);
+        return;
+    }
     const action = (Object.keys(controlBindings) as ControlAction[]).find((item) => controlKeysFor(item).includes(key));
     if (!action) return;
     event.preventDefault();
@@ -5042,13 +5445,12 @@ function handleKeyUp(event: KeyboardEvent) {
 function updateHeldMovement() {
     const direction = Number(controlKeysFor("right").some((key) => pressedKeys.has(key))) - Number(controlKeysFor("left").some((key) => pressedKeys.has(key)));
     if (!direction) return;
-    const boost = boostTimer > 0 ? gameConfig.powerupEffects.boost.movementMultiplier : 1;
-    playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH, playerX + direction * 4 * currentFrameScale * boost));
+    playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH, playerX + direction * 4 * currentFrameScale * getMovementMultiplier()));
     trailMovementFrames = 8;
     gameStarted = true;
 }
-function moveLeft(distance = 38) { if (portalTravelInProgress) return; playerX = Math.max(20, playerX - distance * (boostTimer > 0 ? gameConfig.powerupEffects.boost.movementMultiplier : 1)); trailMovementFrames = 8; gameStarted = true; updatePlayerPosition(); }
-function moveRight(distance = 38) { if (portalTravelInProgress) return; playerX = Math.min(levels[currentLevel].length * TILE_WIDTH, playerX + distance * (boostTimer > 0 ? gameConfig.powerupEffects.boost.movementMultiplier : 1)); trailMovementFrames = 8; gameStarted = true; updatePlayerPosition(); }
+function moveLeft(distance = 38) { if (portalTravelInProgress) return; playerX = Math.max(20, playerX - distance * getMovementMultiplier()); trailMovementFrames = 8; gameStarted = true; updatePlayerPosition(); }
+function moveRight(distance = 38) { if (portalTravelInProgress) return; playerX = Math.min(levels[currentLevel].length * TILE_WIDTH, playerX + distance * getMovementMultiplier()); trailMovementFrames = 8; gameStarted = true; updatePlayerPosition(); }
 function playerBox(): Box {
     return {
         x: playerX + playerHitboxInsetX,
@@ -5314,6 +5716,7 @@ function updateProjectiles() {
             const enemy = secretBossRoomActive ? undefined : levelEnemies.find((item) => !item.defeated && intersects(box, { x: item.x, y: item.y, width: 48, height: 48 }));
             if (enemy) {
                 enemy.defeated = true;
+                recordKill("enemy");
                 document.querySelectorAll(".enemy")[levelEnemies.indexOf(enemy)]?.classList.add("defeated");
                 createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
                 projectile.element.remove();
@@ -5326,6 +5729,7 @@ function updateProjectiles() {
                 projectile.element.remove();
                 if (miniBoss.health <= 0) {
                     miniBoss.defeated = true;
+                    recordKill("enemy");
                     document.querySelectorAll(".mini-boss")[levelMiniBosses.indexOf(miniBoss)]?.classList.add("defeated");
                     createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
                     statusLabel.textContent = "Cannon fire shattered the mini-boss.";
@@ -5376,6 +5780,14 @@ function createEnemyExplosion(container: HTMLElement, x: number, y: number, colo
     }
     container.append(burst);
     window.setTimeout(() => burst.remove(), reducedEffects ? 360 : 720);
+}
+function recordKill(kind: "enemy" | "boss") {
+    const key = kind === "boss" ? "orbit-bosses-killed" : "orbit-enemies-killed";
+    const current = kind === "boss" ? bossesKilled : enemiesKilled;
+    const next = Math.min(100000000, Math.max(0, current + 1));
+    if (kind === "boss") bossesKilled = next;
+    else enemiesKilled = next;
+    localStorage.setItem(key, String(next));
 }
 function intersects(first: Box, second: Box) { return first.x < second.x + second.width && first.x + first.width > second.x && first.y < second.y + second.height && first.y + first.height > second.y; }
 
@@ -5455,12 +5867,21 @@ if (portalTravelInProgress) return;
     levelEnemies.forEach((enemy, index) => {
         if (enemy.defeated) return;
         const enemyBox = { x: enemy.x, y: enemy.y, width: 48, height: 48 };
-        const touchingEnemy = !isStarInvincible() && intersects(playerBox(), enemyBox);
+        const touchingEnemy = intersects(playerBox(), enemyBox);
+        if (touchingEnemy && isStarContactDamageActive()) {
+            enemy.defeated = true;
+            recordKill("enemy");
+            createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
+            document.querySelectorAll(".enemy")[index]?.classList.add("defeated");
+            statusLabel.textContent = "Rainbow Star contact hit. Sentry disabled.";
+            return;
+        }
         const landedOnHead = touchingEnemy && (shipFlipped
             ? verticalSpeed < 0 && previousPlayerY >= enemy.y + enemyBox.height - 15
             : verticalSpeed >= 0 && previousPlayerY + playerHitboxInsetY + playerHitboxHeight <= enemy.y + 15);
         if (landedOnHead) {
             enemy.defeated = true;
+            recordKill("enemy");
             createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
             playerY = shipFlipped ? enemy.y + enemyBox.height - playerHitboxInsetY : enemy.y - playerHitboxInsetY - playerHitboxHeight;
             verticalSpeed = shipFlipped ? Math.abs(jumpPower) * 0.58 : jumpPower * 0.58;
@@ -5470,14 +5891,23 @@ if (portalTravelInProgress) return;
             statusLabel.textContent = inFlippedRoute ? "Dark sentry crushed. Ground pound dominates." : "Sentry disabled. Nice landing.";
             document.querySelectorAll(".enemy")[index]?.classList.add("defeated");
         } else if (touchingEnemy) {
-            if (shieldCharges > 0) { shieldCharges--; playerX = enemy.x - playerHitboxInsetX - playerHitboxWidth - 8; statusLabel.textContent = "Shield absorbed the sentry impact."; }
+            if (isStarInvincible()) { playerX = Math.max(20, enemy.x - playerHitboxInsetX - playerHitboxWidth - 8); statusLabel.textContent = "Rainbow Star absorbed the sentry impact."; }
+            else if (shieldCharges > 0) { shieldCharges--; playerX = enemy.x - playerHitboxInsetX - playerHitboxWidth - 8; statusLabel.textContent = "Shield absorbed the sentry impact."; }
             else showGameOver("You hit a sentry head-on.");
         }
     });
     levelMiniBosses.forEach((miniBoss, index) => {
         if (miniBoss.defeated) return;
         const miniBox = { x: miniBoss.x, y: miniBoss.y, width: 70, height: 70 };
-        const touching = !isStarInvincible() && intersects(playerBox(), miniBox);
+        const touching = intersects(playerBox(), miniBox);
+        if (touching && isStarContactDamageActive()) {
+            miniBoss.defeated = true;
+            recordKill("enemy");
+            document.querySelectorAll(".mini-boss")[index]?.classList.add("defeated");
+            createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
+            statusLabel.textContent = "Rainbow Star contact hit. Dark Knight shattered.";
+            return;
+        }
         const stomped = touching && (shipFlipped
             ? verticalSpeed < 0 && previousPlayerY >= miniBoss.y + miniBox.height - 18
             : verticalSpeed >= 0 && previousPlayerY + playerHitboxInsetY + playerHitboxHeight <= miniBoss.y + 18);
@@ -5492,6 +5922,7 @@ if (portalTravelInProgress) return;
             window.setTimeout(() => document.querySelectorAll(".mini-boss")[index]?.classList.remove("hit"), 180);
             if (miniBoss.health <= 0) {
                 miniBoss.defeated = true;
+                recordKill("enemy");
                 document.querySelectorAll(".mini-boss")[index]?.classList.add("defeated");
                 createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
                 statusLabel.textContent = inFlippedRoute ? "Dark Knight crushed. Ground pound supremacy!" : "Dark Knight shattered. The route is clear.";
@@ -5499,12 +5930,22 @@ if (portalTravelInProgress) return;
                 statusLabel.textContent = inFlippedRoute ? `Dark Knight staggered. ${miniBoss.health} hit remaining.` : `Dark Knight damaged. ${miniBoss.health} hit remaining.`;
             }
         } else if (touching) {
-            if (shieldCharges > 0) { shieldCharges--; playerX = miniBoss.x - playerHitboxInsetX - playerHitboxWidth - 8; statusLabel.textContent = "Shield absorbed the mini-boss impact."; }
+            if (isStarInvincible()) { playerX = Math.max(20, miniBoss.x - playerHitboxInsetX - playerHitboxWidth - 8); statusLabel.textContent = "Rainbow Star absorbed the mini-boss impact."; }
+            else if (shieldCharges > 0) { shieldCharges--; playerX = miniBoss.x - playerHitboxInsetX - playerHitboxWidth - 8; statusLabel.textContent = "Shield absorbed the mini-boss impact."; }
             else showGameOver("A Dark Knight slammed into your hull.");
         }
     });
     levelAsteroids.forEach((asteroid, index) => { if (!asteroid.claimed && Math.abs(playerX + 24 - asteroid.x) < 42 && Math.abs(playerY + 28 - asteroid.y) < 58) { asteroid.claimed = true; const claimedAsteroids = getClaimedAsteroids(currentLevel); claimedAsteroids.add(index); saveClaimedAsteroids(currentLevel, claimedAsteroids); if (asteroid.special) { specialAsteroids++; localStorage.setItem("orbit-special-claims", String(specialAsteroids)); } else { asteroidsClaimed++; localStorage.setItem("orbit-claims", String(asteroidsClaimed)); } claimLabel.textContent = `${levelAsteroids.filter((item) => item.claimed).length} / ${levelAsteroids.length}`; statusLabel.textContent = asteroid.special ? "Special asteroid secured. Spend it in the roll wheel." : "Asteroid claimed. This one is secured permanently."; document.querySelectorAll(".asteroid")[index]?.classList.add("claimed"); } });
-    if (boss && playerX > boss.x - 120 && !boss.defeated) { playerX = boss.x - 125; statusLabel.textContent = "Titan Core blocks the beacon. Claim asteroids to break it."; updatePlayerPosition(); }
+    if (boss && playerX > boss.x - 120 && !boss.defeated) {
+        if (isStarContactDamageActive()) {
+            while (boss && !boss.defeated) damageBoss();
+            statusLabel.textContent = "Rainbow Star shattered the Titan Core on contact.";
+        } else {
+            playerX = boss.x - 125;
+            statusLabel.textContent = "Titan Core blocks the beacon. Claim asteroids to break it.";
+            updatePlayerPosition();
+        }
+    }
     // Check win condition: for prestige levels, require flipped route key; for others, just need key/unlocked
     const isPrestigeLevel = levels[currentLevel].prestige === true;
     const hasWinKey = isPrestigeLevel ? flippedRouteKeyCollected : (!endGoalLocked);
@@ -5536,6 +5977,7 @@ function activatePowerup(kind: PowerupKind) {
     } else if (kind === "star") { 
         starPowerupActive = true;
         const durationSeconds = gameConfig.powerupEffects.star.durationSeconds;
+        const movementMultiplier = gameConfig.powerupEffects.star.movementMultiplier ?? DEFAULT_GAME_CONFIG.powerupEffects.star.movementMultiplier ?? 1;
         starPowerupTimer = durationSeconds * 60;
         // Create rainbow star visual effect on player
         if (!starPowerupElement) {
@@ -5546,26 +5988,9 @@ function activatePowerup(kind: PowerupKind) {
         }
         starPowerupElement.style.display = "grid";
         playerLabel.classList.toggle("star-invincible", gameConfig.powerupRules.rainbowStarInvincible);
-        statusLabel.textContent = `RAINBOW STAR ACTIVE! Your ship is rainbow and invincible for ${durationSeconds} seconds!`;
-        // Kill all enemies instantly when the owner enables that Star rule.
-        if (gameConfig.powerupRules.rainbowStarDefeatsEnemies) levelEnemies.forEach((enemy, index) => {
-            if (enemy.defeated) return;
-            enemy.defeated = true;
-            document.querySelectorAll(".enemy")[index]?.classList.add("defeated");
-            createEnemyExplosion(world, enemy.x + 24, enemy.y + 24);
-        });
-        if (gameConfig.powerupRules.rainbowStarDefeatsEnemies) levelMiniBosses.forEach((miniBoss, index) => {
-            if (miniBoss.defeated) return;
-            miniBoss.defeated = true;
-            document.querySelectorAll(".mini-boss")[index]?.classList.add("defeated");
-            createEnemyExplosion(world, miniBoss.x + 35, miniBoss.y + 35, "#b991ff");
-        });
-        if (gameConfig.powerupRules.rainbowStarDefeatsEnemies && boss && !boss.defeated) {
-            boss.defeated = true;
-            document.querySelector(".boss")?.classList.add("defeated");
-            createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657");
-        }
-        if (gameConfig.powerupRules.rainbowStarDefeatsEnemies && secretBoss && !secretBoss.defeated) while (secretBoss && !secretBoss.defeated) damageSecretBoss();
+        statusLabel.textContent = gameConfig.powerupRules.rainbowStarInvincible
+            ? `RAINBOW STAR ACTIVE! Invincible for ${durationSeconds} seconds at ${movementMultiplier}x movement. Touch enemies to defeat them.`
+            : `RAINBOW STAR ACTIVE for ${durationSeconds} seconds at ${movementMultiplier}x movement. Touch enemies to defeat them.`;
     } 
     updatePowerupHud(); 
 }
@@ -5592,7 +6017,7 @@ function updatePowerupHud() {
     }); 
     playerLabel.classList.toggle("shielded", shieldCharges > 0); 
 }
-function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); window.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; bossElement?.classList.add("defeated"); createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
+function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); window.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; recordKill("boss"); bossElement?.classList.add("defeated"); createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
 
 function getNormalRouteCount() { return levels.filter((level) => !level.secret && !level.prestige).length; }
 function getNormalRouteCompletionCount() { return levels.filter((level, index) => !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }

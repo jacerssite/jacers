@@ -14,7 +14,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
     const heading = document.createElement("h2");
     heading.textContent = "Redemption codes";
     const description = document.createElement("p");
-    description.textContent = "Codes are shown once when created. Rewards can grant asteroids, power-ups, cosmetics, or titles; limits are enforced on the server.";
+    description.textContent = "Codes are shown once when created. Rewards can grant asteroids, power-ups, cosmetics, or titles; limits are enforced on the server. Total uses can be unlimited.";
     const status = document.createElement("small");
     status.setAttribute("role", "status");
     const form = document.createElement("form");
@@ -93,6 +93,17 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
     const maxUses = createInput("Total use limit", "number", "100");
     maxUses.min = "1";
     maxUses.max = "1000000";
+    maxUses.required = true;
+    const unlimitedUsesLabel = document.createElement("label");
+    const unlimitedUses = document.createElement("input");
+    unlimitedUses.type = "checkbox";
+    unlimitedUses.setAttribute("aria-label", "Unlimited total uses");
+    unlimitedUsesLabel.append(unlimitedUses, document.createTextNode(" Unlimited total uses"));
+    form.append(unlimitedUsesLabel);
+    unlimitedUses.addEventListener("change", () => {
+        maxUses.disabled = unlimitedUses.checked;
+        maxUses.required = !unlimitedUses.checked;
+    });
     const perPlayerLimit = createInput("Uses per player", "number", "1");
     perPlayerLimit.min = "1";
     perPlayerLimit.max = "1000";
@@ -119,7 +130,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
                         if (type === "title") return { type, titleId: titleId.value } satisfies CodeReward;
                         return { type: type as "skin" | "trail" | "avatar", index: Number(detailSelect.value) } satisfies CodeReward;
                     })(),
-                    maxUses: Number(maxUses.value),
+                    maxUses: unlimitedUses.checked ? null : Number(maxUses.value),
                     perPlayerLimit: Number(perPlayerLimit.value),
                     expiresAt: expiresAt.value ? new Date(expiresAt.value).toISOString() : undefined,
                 }),
@@ -133,9 +144,153 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
             create.disabled = false;
         }
     });
+    const showEditForm = (entry: { id: string; maxUses: number | null; perPlayerLimit: number; reward: CodeReward | number; enabled: boolean; expiresAt: string | null }, row: HTMLElement) => {
+        if (row.querySelector(".redemption-code-edit")) return;
+        const editForm = document.createElement("form");
+        editForm.className = "account-profile-form redemption-code-edit";
+        const editInput = (labelText: string, type: string, value = "") => {
+            const label = document.createElement("label");
+            label.append(document.createTextNode(labelText));
+            const input = document.createElement("input");
+            input.type = type;
+            input.value = value;
+            label.append(input);
+            editForm.append(label);
+            return input;
+        };
+        const initialReward: CodeReward = typeof entry.reward === "number" ? { type: "claims", amount: entry.reward } : entry.reward;
+        const editRewardType = document.createElement("select");
+        rewardTypeOptions.forEach(([value, labelText]) => {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = labelText;
+            editRewardType.append(option);
+        });
+        editRewardType.value = initialReward.type;
+        const editRewardTypeLabel = document.createElement("label");
+        editRewardTypeLabel.append(document.createTextNode("Reward type"), editRewardType);
+        editForm.append(editRewardTypeLabel);
+        const editDetails = document.createElement("div");
+        editDetails.className = "reward-code-details";
+        editForm.append(editDetails);
+        const editAmount = document.createElement("input");
+        editAmount.type = "number";
+        editAmount.step = "1";
+        const editAmountLabel = document.createElement("label");
+        editAmountLabel.append(document.createTextNode("Reward amount"), editAmount);
+        editDetails.append(editAmountLabel);
+        const editDetailSelect = document.createElement("select");
+        const editDetailLabel = document.createElement("label");
+        editDetailLabel.append(document.createTextNode("Reward"), editDetailSelect);
+        editDetails.append(editDetailLabel);
+        const editTitleId = document.createElement("select");
+        const editNoTitle = document.createElement("option");
+        editNoTitle.value = "";
+        editNoTitle.textContent = "Choose a title";
+        editTitleId.append(editNoTitle);
+        availableTitles.forEach((title) => {
+            const option = document.createElement("option");
+            option.value = title.id;
+            option.textContent = `${title.name} (${title.id})`;
+            editTitleId.append(option);
+        });
+        const editTitleLabel = document.createElement("label");
+        editTitleLabel.append(document.createTextNode("Title"), editTitleId);
+        editDetails.append(editTitleLabel);
+        const redrawEditReward = () => {
+            const type = editRewardType.value;
+            editAmountLabel.hidden = !["claims", "specialClaims", "powerup"].includes(type);
+            editAmount.min = type === "powerup" ? "1" : "0";
+            editAmount.max = type === "powerup" ? "1000" : "1000000";
+            editDetailLabel.hidden = !["powerup", "skin", "trail", "avatar"].includes(type);
+            editTitleLabel.hidden = type !== "title";
+            editDetailSelect.replaceChildren();
+            if (type === "powerup") Object.entries(powerupLabels).forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; editDetailSelect.append(option); });
+            if (type === "skin") skins.forEach((item, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `${item.name} (#${index})`; editDetailSelect.append(option); });
+            if (type === "trail") trails.forEach((item, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `${item.name} (#${index})`; editDetailSelect.append(option); });
+            if (type === "avatar") avatars.forEach((item, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `${item.name} (#${index})`; editDetailSelect.append(option); });
+        };
+        if (initialReward.type === "claims" || initialReward.type === "specialClaims" || initialReward.type === "powerup") editAmount.value = String(initialReward.amount);
+        redrawEditReward();
+        if (initialReward.type === "powerup") editDetailSelect.value = initialReward.kind;
+        if (initialReward.type === "skin" || initialReward.type === "trail" || initialReward.type === "avatar") editDetailSelect.value = String(initialReward.index);
+        if (initialReward.type === "title") editTitleId.value = initialReward.titleId;
+        editRewardType.addEventListener("change", redrawEditReward);
+        const editMaxUses = editInput("Total use limit", "number", entry.maxUses === null ? "" : String(entry.maxUses));
+        editMaxUses.min = "1";
+        editMaxUses.max = "1000000";
+        editMaxUses.required = entry.maxUses !== null;
+        const editUnlimitedLabel = document.createElement("label");
+        const editUnlimited = document.createElement("input");
+        editUnlimited.type = "checkbox";
+        editUnlimited.checked = entry.maxUses === null;
+        editUnlimited.setAttribute("aria-label", "Unlimited total uses");
+        editUnlimitedLabel.append(editUnlimited, document.createTextNode(" Unlimited total uses"));
+        editForm.append(editUnlimitedLabel);
+        editMaxUses.disabled = editUnlimited.checked;
+        editUnlimited.addEventListener("change", () => {
+            editMaxUses.disabled = editUnlimited.checked;
+            editMaxUses.required = !editUnlimited.checked;
+        });
+        const editPerPlayerLimit = editInput("Uses per player", "number", String(entry.perPlayerLimit));
+        editPerPlayerLimit.min = "1";
+        editPerPlayerLimit.max = "1000";
+        const editExpiresAt = editInput("Expires at (optional)", "datetime-local");
+        if (entry.expiresAt) {
+            const expires = new Date(entry.expiresAt);
+            if (Number.isFinite(expires.getTime())) {
+                editExpiresAt.value = new Date(expires.getTime() - expires.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+            }
+        }
+        const editEnabledLabel = document.createElement("label");
+        const editEnabled = document.createElement("input");
+        editEnabled.type = "checkbox";
+        editEnabled.checked = entry.enabled;
+        editEnabled.setAttribute("aria-label", "Code enabled");
+        editEnabledLabel.append(editEnabled, document.createTextNode(" Code enabled"));
+        editForm.append(editEnabledLabel);
+        const actions = document.createElement("div");
+        const saveEdit = document.createElement("button");
+        saveEdit.type = "submit";
+        saveEdit.className = "menu-button";
+        saveEdit.textContent = "Save code changes";
+        const cancelEdit = createTextButton("Cancel", () => editForm.remove());
+        actions.append(saveEdit, cancelEdit);
+        editForm.append(actions);
+        editForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            saveEdit.disabled = true;
+            try {
+                const type = editRewardType.value as CodeReward["type"];
+                const reward: CodeReward = type === "claims" || type === "specialClaims"
+                    ? { type, amount: Number(editAmount.value) }
+                    : type === "powerup"
+                        ? { type, kind: editDetailSelect.value as PowerupKind, amount: Math.max(1, Number(editAmount.value)) }
+                        : type === "title"
+                            ? { type, titleId: editTitleId.value }
+                            : { type: type as "skin" | "trail" | "avatar", index: Number(editDetailSelect.value) };
+                await apiRequest(`/admin/codes/${encodeURIComponent(entry.id)}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({
+                        reward,
+                        maxUses: editUnlimited.checked ? null : Number(editMaxUses.value),
+                        perPlayerLimit: Number(editPerPlayerLimit.value),
+                        expiresAt: editExpiresAt.value ? new Date(editExpiresAt.value).toISOString() : null,
+                        enabled: editEnabled.checked,
+                    }),
+                });
+                status.textContent = "Code updated.";
+                await refreshCodes();
+            } catch (error) {
+                status.textContent = error instanceof Error ? error.message : "Could not update the code.";
+                saveEdit.disabled = false;
+            }
+        });
+        row.append(editForm);
+    };
     const refreshCodes = async () => {
         try {
-            const response = await apiRequest<{ codes: { id: string; maxUses: number; perPlayerLimit: number; uses: number; reward: CodeReward | number; enabled: boolean; expiresAt: string | null }[] }>("/admin/codes");
+            const response = await apiRequest<{ codes: { id: string; maxUses: number | null; perPlayerLimit: number; uses: number; reward: CodeReward | number; enabled: boolean; expiresAt: string | null }[] }>("/admin/codes");
             history.replaceChildren();
             response.codes.forEach((entry) => {
                 const row = document.createElement("article");
@@ -143,8 +298,11 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
                 const label = document.createElement("span");
                 const reward: CodeReward = typeof entry.reward === "number" ? { type: "claims", amount: entry.reward } : entry.reward;
                 const rewardText = reward.type === "claims" ? `${reward.amount} normal asteroids` : reward.type === "specialClaims" ? `${reward.amount} special asteroids` : reward.type === "powerup" ? `${reward.amount} ${powerupLabels[reward.kind] ?? reward.kind}` : reward.type === "title" ? `title ${reward.titleId}` : `${reward.type} #${(reward as Extract<CodeReward, { type: "skin" | "trail" | "avatar" }>).index}`;
-                label.textContent = `${rewardText} / ${entry.uses}/${entry.maxUses} uses / ${entry.enabled ? "enabled" : "disabled"}${entry.expiresAt ? ` / expires ${new Date(entry.expiresAt).toLocaleString()}` : ""}`;
+                const usageText = entry.maxUses === null ? `${entry.uses}/unlimited uses` : `${entry.uses}/${entry.maxUses} uses`;
+                label.textContent = `${rewardText} / ${usageText} / ${entry.enabled ? "enabled" : "disabled"}${entry.expiresAt ? ` / expires ${new Date(entry.expiresAt).toLocaleString()}` : ""}`;
                 row.append(label);
+                const edit = createTextButton("Edit", () => showEditForm(entry, row));
+                row.append(edit);
                 if (entry.enabled) {
                     const disable = createTextButton("Turn off", async () => {
                         disable.disabled = true;
@@ -263,6 +421,84 @@ export async function renderAdminMessageTools(container: HTMLElement) {
     } catch (error) {
         status.textContent = error instanceof Error ? error.message : "Could not load messages.";
     }
+}
+
+export async function renderAdminChatFilterTools(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Chat word filter";
+    const description = document.createElement("p");
+    description.textContent = "Hateful and abusive terms are masked in global and direct chat. Built-in terms stay masked here; add project-specific words or phrases below.";
+    const form = document.createElement("form");
+    form.className = "account-profile-form chat-filter-form";
+    const term = document.createElement("input");
+    term.required = true;
+    term.maxLength = 80;
+    term.placeholder = "Word or short phrase to block";
+    term.setAttribute("aria-label", "Blocked word or phrase");
+    const category = document.createElement("select");
+    category.setAttribute("aria-label", "Blocked word category");
+    [["Custom", "Custom"], ["Hate / race", "Hate / race"], ["Hate / identity", "Hate / identity"], ["Abusive profanity", "Abusive profanity"], ["Threats", "Threats"]].forEach(([value, labelText]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = labelText;
+        category.append(option);
+    });
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "menu-button";
+    submit.textContent = "Add blocked term";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    form.append(term, category, submit, status);
+    const list = document.createElement("section");
+    list.className = "chat-filter-list";
+    const renderTerms = async () => {
+        const response = await apiRequest<{ terms: { id: string; masked: string; category: string; builtIn: boolean }[]; builtInCount: number }>("/admin/chat-filter");
+        list.replaceChildren();
+        const summary = document.createElement("p");
+        summary.className = "menu-copy";
+        summary.textContent = `${response.terms.length} blocked terms (${response.builtInCount} built-in). Terms are shown with masked characters.`;
+        list.append(summary);
+        if (!response.terms.length) { const empty = document.createElement("p"); empty.textContent = "No blocked terms are configured."; list.append(empty); return; }
+        response.terms.forEach((entry) => {
+            const row = document.createElement("article");
+            row.className = "chat-filter-row";
+            const label = document.createElement("span");
+            label.textContent = `${entry.masked} / ${entry.category}${entry.builtIn ? " / built-in" : " / owner added"}`;
+            row.append(label);
+            if (!entry.builtIn) {
+                const remove = createTextButton("Remove", async () => {
+                    remove.disabled = true;
+                    try {
+                        await apiRequest(`/admin/chat-filter/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+                        await renderTerms();
+                    } catch (error) {
+                        status.textContent = error instanceof Error ? error.message : "Could not remove the blocked term.";
+                        remove.disabled = false;
+                    }
+                });
+                row.append(remove);
+            }
+            list.append(row);
+        });
+    };
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        status.textContent = "Saving blocked term...";
+        try {
+            await apiRequest("/admin/chat-filter", { method: "POST", body: JSON.stringify({ term: term.value, category: category.value }) });
+            term.value = "";
+            status.textContent = "Blocked term saved. Matching chat text will be replaced with **.";
+            await renderTerms();
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not save the blocked term.";
+        } finally { submit.disabled = false; }
+    });
+    const refresh = createTextButton("Refresh blocked list", () => void renderTerms().catch((error) => { status.textContent = error instanceof Error ? error.message : "Could not load blocked terms."; }));
+    container.append(heading, description, form, refresh, list);
+    await renderTerms();
 }
 
 export async function renderAdminUpdateLog(container: HTMLElement, entriesFromServer: UpdateLogEntry[], onSaved: (entries: UpdateLogEntry[]) => void) {

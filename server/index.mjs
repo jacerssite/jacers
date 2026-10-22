@@ -32,6 +32,7 @@ import {
   validateWorkshopLevel,
   validateBuiltinLevelOverrides,
   validatePortalAssignments,
+  hasRolePermission,
 } from "./game-data.mjs";
 
 const app = express();
@@ -41,8 +42,11 @@ const ownerAccounts = [
 ];
 const cookieName = "jacer_session";
 const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
-const presenceActiveWindowMs = 90 * 1000;
+const presenceActiveWindowMs = 30 * 1000;
 const recoveryLockMs = 24 * 60 * 60 * 1000;
+const humanChallengeTtlMs = 10 * 60 * 1000;
+const humanChallengeMinAgeMs = 1200;
+const humanChallengeSecret = process.env.HUMAN_CHALLENGE_SECRET || ownerAccounts.map(({ password }) => password ?? "").join("|");
 const defaultRouletteTiers = [
   { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 0 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
   { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 0 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
@@ -98,6 +102,20 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many account attempts. Wait a few minutes and try again." },
 });
+const registrationLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: 3,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many new accounts from this network today. Try again tomorrow." },
+});
+const humanChallengeLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many human checks requested. Wait a few minutes and try again." },
+});
 const runSubmissionLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 30,
@@ -105,6 +123,15 @@ const runSubmissionLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many run submissions. Wait a minute and try again." },
 });
+const runStartLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many level starts. Wait a moment and try again." },
+});
+const RUN_PROOF_TTL_MS = 30 * 60 * 1000;
+const RUN_PROOF_MIN_TOLERANCE_MS = 250;
 const progressWriteLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 120,
@@ -150,6 +177,85 @@ const chatUploadLimiter = rateLimit({
   message: { error: "Too many attachments. Wait before uploading more files." },
 });
 
+// The built-in list is encoded so it never appears as an unmasked list in an
+// owner panel, logs, or API response. Owners can add project-specific terms
+// from the moderation panel; every displayed term is masked before returning.
+const DEFAULT_CHAT_FILTER_TERMS = [
+  { category: "Hate / race", values: ["bmlnZ2Vy", "bmlnZ2E", "bmVncm8", "Y29vbg", "c3BpYw", "Y2hpbms", "Z29vaw", "amFw", "d2V0YmFjaw", "YmVhbmVy", "a2lrZQ", "cGFraQ", "dG93ZWxoZWFk", "c2FuZG5pZ2dlcg", "cmFnaGVhZA", "cmVkc2tpbg", "aW5qdW4", "YWJv", "d29n", "a2FmZmly", "ZGFya2ll", "cG9yY2ggbW9ua2V5", "c3BlYXIgY2h1Y2tlcg", "Y2hpbmFtYW4", "c2FtYm8", "amlnYWJvbw", "emlwcGVyaGVhZA"] },
+  { category: "Hate / identity", values: ["ZmFn", "ZmFnZ290", "ZHlrZQ", "dHJhbm55", "c2hlbWFsZQ", "cmV0YXJk", "cmV0YXJkZWQ", "c3Bheg", "Y3JpcHBsZQ", "aG9tbw"] },
+  { category: "Abusive profanity", values: ["Y3VudA", "Yml0Y2g", "d2hvcmU", "c2x1dA", "c2thbms", "dHdhdA", "bW90aGVyZnVja2Vy", "ZnVjaw", "c2hpdA", "YmFzdGFyZA", "ZGlja2hlYWQ", "YXNzaG9sZQ", "YnVsbHNoaXQ"] },
+];
+
+function normalizeChatFilterTerm(value) {
+  if (typeof value !== "string") return "";
+  return value.normalize("NFKD").toLowerCase().replace(/[\u0300-\u036f]/g, "")
+    .replace(/[01345789@$]/g, (character) => ({ 0: "o", 1: "i", 3: "e", 4: "a", 5: "s", 7: "t", 8: "b", 9: "g", "@": "a", $: "s" }[character] ?? character))
+    .split(/\s+/).map((word) => word.replace(/[^a-z0-9]/g, "")).filter(Boolean).join(" ").slice(0, 80);
+}
+
+function builtInChatFilterTerms() {
+  return DEFAULT_CHAT_FILTER_TERMS.flatMap(({ category, values }) => values.map((encoded, index) => ({
+    id: `builtin-${category.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${index}`,
+    term: normalizeChatFilterTerm(Buffer.from(encoded, "base64url").toString("utf8")),
+    category,
+    builtIn: true,
+  })));
+}
+
+function maskedChatFilterTerm(term) {
+  return term.split(" ").map((word) => word.length <= 2 ? "**" : `${word[0]}${"*".repeat(Math.min(8, Math.max(2, word.length - 2)))}${word.at(-1)}`).join(" ");
+}
+
+function publicChatFilterTerm(term) {
+  return { id: term.id, masked: maskedChatFilterTerm(term.term), category: term.category, builtIn: Boolean(term.builtIn) };
+}
+
+async function getStoredChatFilterTerms(db) {
+  const settings = db.collection("game_settings");
+  if (typeof settings.findOne !== "function") return [];
+  const setting = await settings.findOne({ _id: "chat_filter" });
+  const stored = setting?.value?.terms;
+  if (!Array.isArray(stored)) return [];
+  return stored.map((entry) => ({
+    id: typeof entry.id === "string" ? entry.id : "",
+    term: normalizeChatFilterTerm(entry.term),
+    category: typeof entry.category === "string" && entry.category.trim() ? entry.category.trim().slice(0, 30) : "Custom",
+    builtIn: false,
+  })).filter((entry) => entry.id && entry.term);
+}
+
+async function getChatFilterTerms(db) {
+  const seen = new Set();
+  return [...builtInChatFilterTerms(), ...(await getStoredChatFilterTerms(db))].filter((entry) => {
+    if (!entry.term || seen.has(entry.term)) return false;
+    seen.add(entry.term);
+    return true;
+  });
+}
+
+function moderateChatText(text, terms) {
+  const parts = text.split(/(\s+)/);
+  const tokenPartIndexes = [];
+  const tokens = [];
+  parts.forEach((part, index) => {
+    if (!/^\s+$/.test(part)) {
+      tokenPartIndexes.push(index);
+      tokens.push(normalizeChatFilterTerm(part));
+    }
+  });
+  const blocked = new Set();
+  terms.forEach((entry) => {
+    const filterTokens = entry.term.split(" ").filter(Boolean);
+    if (!filterTokens.length) return;
+    for (let index = 0; index <= tokens.length - filterTokens.length; index++) {
+      if (filterTokens.every((token, offset) => tokens[index + offset] === token)) {
+        for (let offset = 0; offset < filterTokens.length; offset++) blocked.add(tokenPartIndexes[index + offset]);
+      }
+    }
+  });
+  return parts.map((part, index) => blocked.has(index) ? "**" : part).join("");
+}
+
 function noStore(res) {
   res.setHeader("Cache-Control", "no-store, private");
   res.setHeader("Pragma", "no-cache");
@@ -181,6 +287,41 @@ function temporaryPassword() {
   return password;
 }
 
+function createHumanChallenge() {
+  const left = crypto.randomInt(2, 10);
+  const right = crypto.randomInt(2, 10);
+  const answer = String(left + right);
+  const issuedAt = Date.now();
+  const payload = {
+    version: 1,
+    question: `What is ${left} + ${right}?`,
+    answerHash: crypto.createHash("sha256").update(answer).digest("hex"),
+    issuedAt,
+    expiresAt: issuedAt + humanChallengeTtlMs,
+  };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto.createHmac("sha256", humanChallengeSecret).update(encoded).digest("base64url");
+  return { token: `${encoded}.${signature}`, question: payload.question, issuedAt, expiresAt: payload.expiresAt };
+}
+
+function verifyHumanChallenge(value) {
+  if (!value || typeof value !== "object" || typeof value.token !== "string" || typeof value.answer !== "string") return false;
+  const [encoded, suppliedSignature] = value.token.split(".");
+  if (!encoded || !suppliedSignature || encoded.length > 2048 || suppliedSignature.length > 128) return false;
+  let expectedSignature;
+  try { expectedSignature = crypto.createHmac("sha256", humanChallengeSecret).update(encoded).digest("base64url"); } catch { return false; }
+  if (suppliedSignature !== expectedSignature) return false;
+  let payload;
+  try { payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")); } catch { return false; }
+  if (payload?.version !== 1 || typeof payload.answerHash !== "string" || !Number.isSafeInteger(payload.issuedAt) || !Number.isSafeInteger(payload.expiresAt)) return false;
+  const now = Date.now();
+  if (payload.issuedAt > now || now - payload.issuedAt < humanChallengeMinAgeMs || payload.expiresAt <= now) return false;
+  const answer = value.answer.trim().replace(/\s+/g, "");
+  if (!/^\d{1,3}$/.test(answer)) return false;
+  const answerHash = crypto.createHash("sha256").update(answer).digest("hex");
+  return answerHash === payload.answerHash;
+}
+
 function publicProfileFromProgress(username, role, progress = {}, profileTitles = PROFILE_TITLE_MILESTONES) {
   const readCount = (key) => {
     const value = progress[key];
@@ -202,7 +343,7 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
   const prestigeLevel = readCount("orbit-prestige");
   const selectedTitle = equippedValue("orbit-title");
   const allTitlesGranted = (role === "owner" || role === "tester") && progress["orbit-all-titles"] === "1";
-  const title = profileTitles.find((candidate) => {
+  const titleDefinition = profileTitles.find((candidate) => {
     if (candidate.id !== selectedTitle) return false;
     if (allTitlesGranted) return true;
     if (progress[`orbit-title-unlock-${candidate.id}`] === "1") return true;
@@ -212,7 +353,15 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
     if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
     if (requirement.type === "roulette") return false;
     return completedRouteCount >= requirement.amount;
-  })?.name ?? "";
+  });
+  const title = titleDefinition?.name ?? "";
+  const titleStyleValue = titleDefinition && title
+    ? {
+      ...(titleDefinition.color ? { color: titleDefinition.color } : {}),
+      ...(titleDefinition.animation ? { animation: titleDefinition.animation } : {}),
+    }
+    : {};
+  const titleStyle = Object.keys(titleStyleValue).length ? titleStyleValue : null;
   const equippedIndex = (key) => {
     const value = equippedValue(key);
     const index = value === null ? 0 : Number(value);
@@ -221,9 +370,11 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
   return {
     username,
     role,
-    roleBadge: role === "tester" ? "tester" : "player",
+    roleBadge: role === "owner" ? "owner" : role === "admin" ? "admin" : role === "moderator" ? "moderator" : role === "level-maker" ? "level-maker" : role === "tester" ? "tester" : "player",
     asteroids: readCount("orbit-claims"),
     specialAsteroids: readCount("orbit-special-claims"),
+    enemiesKilled: readCount("orbit-enemies-killed"),
+    bossesKilled: readCount("orbit-bosses-killed"),
     prestige: prestigeLevel,
     routesCleared: completedRouteCount,
     shipColor: equippedValue("orbit-ship-color") ?? "#ed7657",
@@ -231,6 +382,7 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
     skin: equippedIndex("orbit-skin"),
     trail: equippedIndex("orbit-trail"),
     title,
+    titleStyle,
   };
 }
 
@@ -411,11 +563,11 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, chatMuted: 1, emailHash: 1 } },
+    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, readReceipts: 1, typingIndicators: 1, chatMuted: 1, emailHash: 1, humanVerified: 1 } },
   );
   if (user?.emailHash && await isEmailBanned(db, user.emailHash)) return null;
   return user && !user.banned && USER_ROLES.includes(user.role)
-    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, chatMuted: Boolean(user.chatMuted) }
+    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false, chatMuted: Boolean(user.chatMuted) }
     : null;
 }
 
@@ -451,11 +603,29 @@ async function requireStaff(req, res, next) {
     req.user = await getAuthenticatedUser(req);
     if (!req.user) return res.status(401).json({ error: "Log in to continue." });
     if (req.user.mustChangePassword) return res.status(403).json({ error: "Change your temporary password before continuing." });
-    if (!["owner", "tester"].includes(req.user.role)) return res.status(403).json({ error: "Staff access is required." });
+    if (!hasRolePermission(req.user.role, "tester-tools")) return res.status(403).json({ error: "Staff access is required." });
     next();
   } catch (error) {
     next(error);
   }
+}
+
+// Permission middleware is intentionally separate from the UI role checks. Any
+// request made from a modified browser still has to pass this server-side gate.
+function requirePermission(permission) {
+  // Never trust a hidden button or a client-supplied role. Re-read the session
+  // and check the permission on every protected request.
+  return async (req, res, next) => {
+    try {
+      req.user = await getAuthenticatedUser(req);
+      if (!req.user) return res.status(401).json({ error: "Log in to continue." });
+      if (req.user.mustChangePassword) return res.status(403).json({ error: "Change your temporary password before continuing." });
+      if (!hasRolePermission(req.user.role, permission)) return res.status(403).json({ error: "You do not have permission to use this tool." });
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 
 async function createSession(userId, res, ipHash = null) {
@@ -519,8 +689,8 @@ async function getFriendship(db, first, second) {
 
 async function ensureChatUser(db, id) {
   return db.collection("users").findOne(
-    { _id: id, role: { $in: ["player", "tester", "owner"] }, banned: { $ne: true } },
-    { projection: { username: 1, role: 1, banned: 1, chatMuted: 1 } },
+    { _id: id, role: { $in: USER_ROLES }, banned: { $ne: true } },
+    { projection: { username: 1, role: 1, banned: 1, chatMuted: 1, readReceipts: 1, typingIndicators: 1 } },
   );
 }
 
@@ -537,6 +707,12 @@ function chatAttachmentIsValid(attachment) {
   return Boolean(blobOrigin && url.startsWith(blobOrigin.replace(/\/$/, "") + "/"));
 }
 
+function sanitizeChatText(value) {
+  return typeof value === "string"
+    ? value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim()
+    : "";
+}
+
 async function unreadChatCount(db, userId) {
   const conversations = db.collection("conversations");
   if (typeof conversations.find !== "function") return 0;
@@ -547,15 +723,18 @@ async function unreadChatCount(db, userId) {
 async function accountHandler(req, res, next, mode) {
   try {
     const credentials = req.body;
+    const honeypot = typeof credentials?.website === "string" ? credentials.website.trim() : "";
+    if (honeypot) return res.status(400).json({ error: "The account request could not be verified." });
     const username = normalizeUsername(credentials?.username);
     const suppliedEmail = credentials?.email;
-    const email = suppliedEmail === undefined || suppliedEmail === null || suppliedEmail === ""
+    const emailInput = typeof suppliedEmail === "string" ? suppliedEmail.trim() : suppliedEmail;
+    const email = emailInput === undefined || emailInput === null || emailInput === ""
       ? null
-      : normalizeEmail(suppliedEmail);
+      : normalizeEmail(emailInput);
     if (!username || !isValidPassword(credentials?.password)) {
       return res.status(400).json({ error: "Use a 3-20 character username (letters, numbers, underscore) and a 10-128 character password." });
     }
-    if (suppliedEmail !== undefined && suppliedEmail !== null && suppliedEmail !== "" && !email) {
+    if (emailInput !== undefined && emailInput !== null && emailInput !== "" && !email) {
       return res.status(400).json({ error: "Enter a valid email address." });
     }
 
@@ -566,6 +745,16 @@ async function accountHandler(req, res, next, mode) {
     }
 
     if (mode === "register") {
+      if (ipHash && typeof db.collection("users").countDocuments === "function") {
+        const recentRegistrations = await db.collection("users").countDocuments({
+          lastSeenIpHash: ipHash,
+          createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        });
+        if (recentRegistrations >= 3) return res.status(429).json({ error: "Too many new accounts from this network today. Try again tomorrow." });
+      }
+      const humanChallengeProvided = credentials?.humanChallenge !== undefined && credentials?.humanChallenge !== null;
+      const humanVerified = humanChallengeProvided ? verifyHumanChallenge(credentials.humanChallenge) : false;
+      if (humanChallengeProvided && !humanVerified) return res.status(400).json({ error: "Complete the human check before creating an account." });
       const emailHash = hashEmail(email);
       if (emailHash && await isEmailBanned(db, emailHash)) {
         return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
@@ -586,6 +775,9 @@ async function accountHandler(req, res, next, mode) {
           appearOffline: false,
           leaderboardOptIn: true,
           allowFriendRequests: true,
+          readReceipts: true,
+          typingIndicators: true,
+          humanVerified,
           ...(ipHash ? { lastSeenIpHash: ipHash } : {}),
           ...(emailHash ? { emailHash, emailMasked: maskEmail(email) } : {}),
           createdAt: new Date(),
@@ -595,10 +787,13 @@ async function accountHandler(req, res, next, mode) {
         if (error?.code === 11000) return res.status(409).json({ error: "That username is already taken." });
         throw error;
       }
+      // Seed a new account with an empty cloud profile so a refresh or a
+      // failed first sync can never import guest localStorage progression.
+      await initializePlayerProgress(db.collection("player_progress"), user._id, {});
       await createSession(user._id, res, ipHash);
       noStore(res);
       return res.status(201).json({
-        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true },
+        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true, readReceipts: true, typingIndicators: true, humanVerified },
         recoveryCode: code,
       });
     }
@@ -618,6 +813,9 @@ async function accountHandler(req, res, next, mode) {
         appearOffline: Boolean(user.appearOffline),
         leaderboardOptIn: user.leaderboardOptIn !== false,
         allowFriendRequests: user.allowFriendRequests !== false,
+        readReceipts: user.readReceipts !== false,
+        typingIndicators: user.typingIndicators !== false,
+        humanVerified: user.humanVerified !== false,
       },
     });
   } catch (error) {
@@ -627,7 +825,12 @@ async function accountHandler(req, res, next, mode) {
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-app.post("/api/auth/register", requireSameOrigin, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
+app.get("/api/auth/human-challenge", humanChallengeLimiter, (req, res) => {
+  noStore(res);
+  res.json(createHumanChallenge());
+});
+
+app.post("/api/auth/register", requireSameOrigin, registrationLimiter, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
 app.post("/api/auth/login", requireSameOrigin, authLimiter, (req, res, next) => accountHandler(req, res, next, "login"));
 
 app.post("/api/auth/recover", requireSameOrigin, recoveryLimiter, async (req, res, next) => {
@@ -765,7 +968,7 @@ app.get("/api/auth/session", async (req, res, next) => {
     const user = await getAuthenticatedUser(req);
     res.json({
       user: user
-        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false }
+        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false }
         : null,
     });
   } catch (error) {
@@ -804,7 +1007,7 @@ app.get("/api/presence", async (_req, res, next) => {
     const users = await db.collection("users")
       .find({
         _id: { $in: [...activeUserIds].map((id) => new ObjectId(id)) },
-        role: { $in: ["player", "tester", "owner"] },
+        role: { $in: USER_ROLES },
         banned: { $ne: true },
         appearOffline: { $ne: true },
       }, {
@@ -961,6 +1164,41 @@ app.put("/api/account/friend-requests", requireSameOrigin, requireUser, async (r
   }
 });
 
+app.put("/api/account/chat-preferences", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (typeof req.body?.readReceipts !== "boolean" || typeof req.body?.typingIndicators !== "boolean") {
+      return res.status(400).json({ error: "Choose whether read receipts and typing indicators are enabled." });
+    }
+    const result = await (await getDatabase()).collection("users").updateOne(
+      { _id: req.user.id, banned: { $ne: true } },
+      { $set: { readReceipts: req.body.readReceipts, typingIndicators: req.body.typingIndicators } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
+    noStore(res);
+    res.json({ readReceipts: req.body.readReceipts, typingIndicators: req.body.typingIndicators });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/account/human-verify", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (!verifyHumanChallenge(req.body?.humanChallenge)) {
+      return res.status(400).json({ error: "Complete the human check before playing online levels." });
+    }
+    const db = await getDatabase();
+    const result = await db.collection("users").updateOne(
+      { _id: req.user.id, banned: { $ne: true } },
+      { $set: { humanVerified: true, humanVerifiedAt: new Date() } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
+    noStore(res);
+    res.json({ humanVerified: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
     const username = normalizeUsername(req.body?.username);
@@ -1001,7 +1239,7 @@ app.get("/api/players/:id", async (req, res, next) => {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid player id." });
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
-      { _id: new ObjectId(req.params.id), role: { $in: ["player", "tester", "owner"] }, banned: { $ne: true } },
+      { _id: new ObjectId(req.params.id), role: { $in: USER_ROLES }, banned: { $ne: true } },
       { projection: { username: 1, role: 1, appearOffline: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Player not found." });
@@ -1009,15 +1247,6 @@ app.get("/api/players/:id", async (req, res, next) => {
       user.appearOffline ? Promise.resolve(new Set()) : getActiveUserIds(db, [user._id]),
       getProfileTitles(db),
     ]);
-    if (user.role === "owner") {
-      const publicEntry = await db.collection("leaderboard_entries").findOne({ userId: user._id, public: true }, { projection: { _id: 1 } });
-      if (!publicEntry) {
-        return res.json({ player: {
-          id: user._id.toHexString(), username: user.username, role: user.role,
-          title: "", isOnline: activeUserIds.has(user._id.toHexString()), limited: true,
-        } });
-      }
-    }
     const saved = await db.collection("player_progress").findOne(
       { _id: user._id },
       { projection: { data: 1 } },
@@ -1082,7 +1311,7 @@ app.post("/api/friends/requests", requireSameOrigin, friendRequestLimiter, requi
     if (!targetId) return res.status(400).json({ error: "Choose a valid player." });
     if (targetId.equals(req.user.id)) return res.status(400).json({ error: "You cannot add yourself." });
     const db = await getDatabase();
-    const target = await db.collection("users").findOne({ _id: targetId, role: { $in: ["player", "tester", "owner"] }, banned: { $ne: true } }, { projection: { username: 1, role: 1, allowFriendRequests: 1 } });
+    const target = await db.collection("users").findOne({ _id: targetId, role: { $in: USER_ROLES }, banned: { $ne: true } }, { projection: { username: 1, role: 1, allowFriendRequests: 1 } });
     if (!target) return res.status(404).json({ error: "Player not found." });
     if (await isBlocked(db, req.user.id, targetId)) return res.status(403).json({ error: "This player cannot receive a request from you." });
     const friendships = db.collection("friendships");
@@ -1202,6 +1431,48 @@ async function chatTargetAccess(db, userId, targetId) {
   return { target, friendship };
 }
 
+app.get("/api/chat/global", requireUser, async (req, res, next) => {
+  try {
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const db = await getDatabase();
+    const limit = Math.max(1, Math.min(60, Number(req.query.limit) || 40));
+    const filter = {};
+    if (req.query.after && ObjectId.isValid(req.query.after)) filter._id = { $gt: new ObjectId(req.query.after) };
+    const messages = typeof db.collection("global_chat_messages").find === "function"
+      ? await db.collection("global_chat_messages").find(filter).sort({ _id: -1 }).limit(limit).toArray()
+      : [];
+    noStore(res);
+    res.json({ messages: messages.reverse().map((message) => ({
+      id: userIdString(message._id), conversationId: "global", senderId: userIdString(message.senderId),
+      sender: message.sender, role: message.role, text: message.deletedAt ? "Message deleted" : message.text,
+      createdAt: message.createdAt?.toISOString?.() ?? message.createdAt, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
+    })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/global", requireSameOrigin, chatMessageLimiter, requireUser, async (req, res, next) => {
+  try {
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const text = sanitizeChatText(req.body?.text);
+    if (!text) return res.status(400).json({ error: "Write a message first." });
+    if (text.length > 300) return res.status(400).json({ error: "Messages are limited to 300 characters." });
+    const db = await getDatabase();
+    const moderatedText = moderateChatText(text, await getChatFilterTerms(db));
+    const messages = db.collection("global_chat_messages");
+    const recent = typeof messages.find === "function"
+      ? await messages.find({ senderId: req.user.id, deletedAt: { $exists: false } }).sort({ _id: -1 }).limit(3).toArray()
+      : [];
+    if (recent.length >= 3 && recent.every((message) => message.text === moderatedText)) return res.status(429).json({ error: "Please do not repeat the same message." });
+    const now = new Date();
+    const inserted = await messages.insertOne({ senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, createdAt: now });
+    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: "global", senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, createdAt: now.toISOString() } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/chat/conversations", requireUser, async (req, res, next) => {
   try {
     if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
@@ -1243,11 +1514,38 @@ app.get("/api/chat/conversations/:userId/messages", requireUser, async (req, res
     const filter = { conversationId: pairKey };
     if (req.query.after && ObjectId.isValid(req.query.after)) filter._id = { $gt: new ObjectId(req.query.after) };
     if (req.query.before && ObjectId.isValid(req.query.before)) filter._id = { $lt: new ObjectId(req.query.before) };
-    const messages = typeof db.collection("chat_messages").find === "function"
-      ? await db.collection("chat_messages").find(filter).sort({ _id: -1 }).limit(limit).toArray()
-      : [];
-    const mapped = messages.reverse().map((message) => ({ id: userIdString(message._id), conversationId: pairKey, senderId: userIdString(message.senderId), sender: message.sender ?? (userIdString(message.senderId) === userIdString(req.user.id) ? req.user.username : access.target.username), role: message.role ?? (userIdString(message.senderId) === userIdString(req.user.id) ? req.user.role : access.target.role), text: message.deletedAt ? "Message deleted" : message.text, attachment: message.deletedAt ? undefined : message.attachment, createdAt: message.createdAt?.toISOString?.() ?? message.createdAt, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null }));
-    res.json({ messages: mapped, hasMore: messages.length === limit });
+    const [messages, conversation] = await Promise.all([
+      typeof db.collection("chat_messages").find === "function"
+        ? db.collection("chat_messages").find(filter).sort({ _id: -1 }).limit(limit).toArray()
+        : [],
+      db.collection("conversations").findOne({ pairKey }),
+    ]);
+    const targetIdString = userIdString(targetId);
+    const readAtValue = access.target.readReceipts !== false ? conversation?.readAt?.[targetIdString] : null;
+    const readAtDate = readAtValue ? new Date(readAtValue) : null;
+    const now = Date.now();
+    const typingRecord = conversation?.typing?.[targetIdString];
+    const typing = req.user.typingIndicators !== false
+      && access.target.typingIndicators !== false
+      && Boolean(typingRecord?.active && typingRecord.updatedAt && now - new Date(typingRecord.updatedAt).getTime() <= 6000);
+    const mapped = messages.reverse().map((message) => {
+      const senderId = userIdString(message.senderId);
+      const createdAt = message.createdAt?.toISOString?.() ?? message.createdAt;
+      const messageTime = new Date(createdAt).getTime();
+      const readAt = senderId === userIdString(req.user.id)
+        && readAtDate && Number.isFinite(readAtDate.getTime()) && Number.isFinite(messageTime) && readAtDate.getTime() >= messageTime
+        ? readAtDate.toISOString()
+        : null;
+      return {
+        id: userIdString(message._id), conversationId: pairKey, senderId,
+        sender: message.sender ?? (senderId === userIdString(req.user.id) ? req.user.username : access.target.username),
+        role: message.role ?? (senderId === userIdString(req.user.id) ? req.user.role : access.target.role),
+        text: message.deletedAt ? "Message deleted" : message.text,
+        attachment: message.deletedAt ? undefined : message.attachment,
+        createdAt, readAt, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
+      };
+    });
+    res.json({ messages: mapped, hasMore: messages.length === limit, typing, readAt: readAtDate && Number.isFinite(readAtDate.getTime()) && access.target.readReceipts !== false ? readAtDate.toISOString() : null });
   } catch (error) {
     next(error);
   }
@@ -1261,26 +1559,26 @@ app.post("/api/chat/conversations/:userId/messages", requireSameOrigin, chatMess
     if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
     const access = await chatTargetAccess(db, req.user.id, targetId);
     if (access.error) return res.status(access.status).json({ error: access.error });
-    const rawText = typeof req.body?.text === "string" ? req.body.text : "";
-    const text = rawText.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+    const text = sanitizeChatText(req.body?.text);
     const attachment = req.body?.attachment;
     if (!text && !attachment) return res.status(400).json({ error: "Write a message or attach an image/video." });
     if (text.length > 300) return res.status(400).json({ error: "Messages are limited to 300 characters." });
     if (!chatAttachmentIsValid(attachment)) return res.status(400).json({ error: "That attachment is not allowed or has not been uploaded." });
     const pairKey = friendPairKey(req.user.id, targetId);
+    const moderatedText = moderateChatText(text, await getChatFilterTerms(db));
     const messages = db.collection("chat_messages");
     const recent = typeof messages.find === "function" ? await messages.find({ conversationId: pairKey, senderId: req.user.id, deletedAt: { $exists: false } }).sort({ _id: -1 }).limit(3).toArray() : [];
-    if (text && recent.length >= 3 && recent.every((message) => message.text === text)) return res.status(429).json({ error: "Please do not repeat the same message." });
+    if (moderatedText && recent.length >= 3 && recent.every((message) => message.text === moderatedText)) return res.status(429).json({ error: "Please do not repeat the same message." });
     const now = new Date();
-    const message = { conversationId: pairKey, senderId: req.user.id, sender: req.user.username, role: req.user.role, text, ...(attachment ? { attachment } : {}), createdAt: now };
+    const message = { conversationId: pairKey, senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, ...(attachment ? { attachment } : {}), createdAt: now };
     const inserted = await messages.insertOne(message);
     const conversations = db.collection("conversations");
     await conversations.updateOne(
       { pairKey },
-      { $set: { pairKey, userIds: [req.user.id, targetId], lastMessageAt: now, lastMessagePreview: text || "Attachment" }, $inc: { [`unread.${userIdString(targetId)}`]: 1 }, $setOnInsert: { createdAt: now } },
+      { $set: { pairKey, userIds: [req.user.id, targetId], lastMessageAt: now, lastMessagePreview: moderatedText || "Attachment" }, $inc: { [`unread.${userIdString(targetId)}`]: 1 }, $setOnInsert: { createdAt: now } },
       { upsert: true },
     );
-    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: pairKey, senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text, ...(attachment ? { attachment } : {}), createdAt: now.toISOString() } });
+    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: pairKey, senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, ...(attachment ? { attachment } : {}), createdAt: now.toISOString() } });
   } catch (error) {
     next(error);
   }
@@ -1293,7 +1591,30 @@ app.post("/api/chat/conversations/:userId/read", requireSameOrigin, requireUser,
     const db = await getDatabase();
     const access = await chatTargetAccess(db, req.user.id, targetId);
     if (access.error) return res.status(access.status).json({ error: access.error });
-    await db.collection("conversations").updateOne({ pairKey: friendPairKey(req.user.id, targetId) }, { $set: { [`unread.${userIdString(req.user.id)}`]: 0, [`readAt.${userIdString(req.user.id)}`]: new Date() } });
+    const userId = userIdString(req.user.id);
+    const update = { $set: { [`unread.${userId}`]: 0 } };
+    if (req.user.readReceipts === false) update.$unset = { [`readAt.${userId}`]: "" };
+    else update.$set[`readAt.${userId}`] = new Date();
+    await db.collection("conversations").updateOne({ pairKey: friendPairKey(req.user.id, targetId) }, update);
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/conversations/:userId/typing", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.params.userId);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const access = await chatTargetAccess(db, req.user.id, targetId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    const userId = userIdString(req.user.id);
+    await db.collection("conversations").updateOne(
+      { pairKey: friendPairKey(req.user.id, targetId) },
+      { $set: { [`typing.${userId}`]: { active: Boolean(req.body?.typing) && req.user.typingIndicators !== false, updatedAt: new Date() } } },
+    );
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -1331,11 +1652,52 @@ app.post("/api/chat/messages/:id/report", requireSameOrigin, requireUser, async 
   }
 });
 
-app.get("/api/admin/chat/reports", requireOwner, async (req, res, next) => {
+app.get("/api/admin/chat/reports", requirePermission("moderation"), async (req, res, next) => {
   try {
     const db = await getDatabase();
     const reports = typeof db.collection("chat_reports").find === "function" ? await db.collection("chat_reports").find({ status: "open" }).sort({ createdAt: -1 }).limit(100).toArray() : [];
     res.json({ reports });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/chat-filter", requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const terms = await getChatFilterTerms(db);
+    noStore(res);
+    res.json({ terms: terms.map(publicChatFilterTerm), builtInCount: terms.filter((term) => term.builtIn).length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/chat-filter", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const term = normalizeChatFilterTerm(req.body?.term);
+    if (term.length < 2 || term.length > 80) return res.status(400).json({ error: "Enter a word or short phrase from 2 to 80 characters." });
+    const category = typeof req.body?.category === "string" && req.body.category.trim() ? req.body.category.trim().slice(0, 30) : "Custom";
+    const db = await getDatabase();
+    const allTerms = await getChatFilterTerms(db);
+    if (allTerms.some((entry) => entry.term === term)) return res.status(409).json({ error: "That word or phrase is already blocked." });
+    const customTerms = await getStoredChatFilterTerms(db);
+    const entry = { id: `custom-${crypto.randomBytes(10).toString("hex")}`, term, category, builtIn: false };
+    await saveSetting(db, "chat_filter", { terms: [...customTerms, entry].map(({ id, term: value, category: label }) => ({ id, term: value, category: label })) }, req.user.id);
+    res.status(201).json({ term: publicChatFilterTerm(entry) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/chat-filter/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    if (typeof req.params.id !== "string" || !req.params.id.startsWith("custom-")) return res.status(400).json({ error: "Built-in blocked terms cannot be removed." });
+    const db = await getDatabase();
+    const customTerms = await getStoredChatFilterTerms(db);
+    if (!customTerms.some((entry) => entry.id === req.params.id)) return res.status(404).json({ error: "Blocked term not found." });
+    await saveSetting(db, "chat_filter", { terms: customTerms.filter((entry) => entry.id !== req.params.id).map(({ id, term, category }) => ({ id, term, category })) }, req.user.id);
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -1346,7 +1708,7 @@ async function setChatMute(req, res, next, muted) {
     const targetId = validObjectId(req.params.id);
     if (!targetId) return res.status(400).json({ error: "Invalid player." });
     const db = await getDatabase();
-    const result = await db.collection("users").updateOne({ _id: targetId, role: { $in: ["player", "tester"] }, banned: { $ne: true } }, { $set: { chatMuted: muted } });
+    const result = await db.collection("users").updateOne({ _id: targetId, role: { $in: USER_ROLES.filter((role) => role !== "owner") }, banned: { $ne: true } }, { $set: { chatMuted: muted } });
     if (!result.matchedCount) return res.status(404).json({ error: "Player not found." });
     await db.collection("chat_audit").insertOne({ action: muted ? "mute" : "unmute", actorId: req.user.id, targetUserId: targetId, reason: typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : "", createdAt: new Date() });
     res.json({ chatMuted: muted });
@@ -1355,8 +1717,8 @@ async function setChatMute(req, res, next, muted) {
   }
 }
 
-app.post("/api/admin/users/:id/chat-mute", requireSameOrigin, requireOwner, (req, res, next) => setChatMute(req, res, next, true));
-app.post("/api/admin/users/:id/chat-unmute", requireSameOrigin, requireOwner, (req, res, next) => setChatMute(req, res, next, false));
+app.post("/api/admin/users/:id/chat-mute", requireSameOrigin, requirePermission("moderation"), (req, res, next) => setChatMute(req, res, next, true));
+app.post("/api/admin/users/:id/chat-unmute", requireSameOrigin, requirePermission("moderation"), (req, res, next) => setChatMute(req, res, next, false));
 
 app.post("/api/chat/uploads", requireSameOrigin, chatUploadLimiter, requireUser, express.raw({ type: ["image/*", "video/*"], limit: "25mb" }), async (req, res, next) => {
   try {
@@ -1447,7 +1809,7 @@ app.post("/api/account/recovery-code", requireSameOrigin, requireUser, async (re
   }
 });
 
-app.get("/api/admin/presence", requireOwner, async (_req, res, next) => {
+app.get("/api/admin/presence", requirePermission("moderation"), async (_req, res, next) => {
   try {
     noStore(res);
     const db = await getDatabase();
@@ -1468,7 +1830,7 @@ app.get("/api/admin/presence", requireOwner, async (_req, res, next) => {
   }
 });
 
-app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
+app.get("/api/admin/users", requirePermission("moderation"), async (_req, res, next) => {
   try {
     noStore(res);
     const db = await getDatabase();
@@ -1554,7 +1916,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
   }
 });
 
-async function getTargetManagedUser(db, rawId) {
+async function getTargetManagedUser(db, rawId, actorRole = "owner") {
   const userId = validObjectId(rawId);
   if (!userId) return { error: { status: 400, message: "Invalid account." } };
   const user = await db.collection("users").findOne(
@@ -1563,13 +1925,16 @@ async function getTargetManagedUser(db, rawId) {
   );
   if (!user) return { error: { status: 404, message: "Account not found." } };
   if (user.role === "owner") return { error: { status: 403, message: "Owner accounts are protected from player management." } };
+  if (actorRole === "moderator" && ["admin", "moderator", "level-maker"].includes(user.role)) {
+    return { error: { status: 403, message: "Moderators can only take action on player accounts." } };
+  }
   return { user, userId };
 }
 
-app.post("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.post("/api/admin/users/:id/ip-ban", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
     const db = await getDatabase();
-    const target = await getTargetManagedUser(db, req.params.id);
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
     if (target.error) return res.status(target.error.status).json({ error: target.error.message });
     if (!target.user.lastSeenIpHash) return res.status(400).json({ error: "This account has no recorded login network yet." });
     const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 200) : "Owner network ban";
@@ -1591,10 +1956,10 @@ app.post("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async (
   }
 });
 
-app.delete("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.delete("/api/admin/users/:id/ip-ban", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
     const db = await getDatabase();
-    const target = await getTargetManagedUser(db, req.params.id);
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
     if (target.error) return res.status(target.error.status).json({ error: target.error.message });
     if (!target.user.lastSeenIpHash) return res.status(400).json({ error: "This account has no recorded login network yet." });
     await db.collection("ip_bans").updateOne(
@@ -1608,10 +1973,10 @@ app.delete("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async
   }
 });
 
-app.post("/api/admin/users/:id/email-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.post("/api/admin/users/:id/email-ban", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
     const db = await getDatabase();
-    const target = await getTargetManagedUser(db, req.params.id);
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
     if (target.error) return res.status(target.error.status).json({ error: target.error.message });
     if (!target.user.emailHash) return res.status(400).json({ error: "This account does not have an email address on file." });
     const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 200) : "Owner email ban";
@@ -1633,10 +1998,10 @@ app.post("/api/admin/users/:id/email-ban", requireSameOrigin, requireOwner, asyn
   }
 });
 
-app.delete("/api/admin/users/:id/email-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.delete("/api/admin/users/:id/email-ban", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
     const db = await getDatabase();
-    const target = await getTargetManagedUser(db, req.params.id);
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
     if (target.error) return res.status(target.error.status).json({ error: target.error.message });
     if (!target.user.emailHash) return res.status(400).json({ error: "This account does not have an email address on file." });
     await db.collection("email_bans").updateOne(
@@ -1653,7 +2018,7 @@ app.delete("/api/admin/users/:id/email-ban", requireSameOrigin, requireOwner, as
 app.delete("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
   try {
     const db = await getDatabase();
-    const target = await getTargetManagedUser(db, req.params.id);
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
     if (target.error) return res.status(target.error.status).json({ error: target.error.message });
     const { user, userId } = target;
     const conversations = typeof db.collection("conversations").find === "function"
@@ -1677,6 +2042,7 @@ app.delete("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, 
       db.collection("friendships").deleteMany({ userIds: userId }),
       db.collection("user_blocks").deleteMany({ $or: [{ blockerId: userId }, { blockedId: userId }] }),
       db.collection("conversations").deleteMany({ userIds: userId }),
+      db.collection("global_chat_messages").deleteMany({ senderId: userId }),
       db.collection("chat_reports").deleteMany({ $or: [{ reporterId: userId }, ...(messageIds.length ? [{ messageId: { $in: messageIds } }] : [])] }),
       db.collection("chat_audit").deleteMany({ $or: [{ actorId: userId }, { targetUserId: userId }] }),
       db.collection("account_recovery_attempts").deleteOne({ _id: user.usernameNormalized }),
@@ -1691,7 +2057,7 @@ app.delete("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, 
   }
 });
 
-app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
     const db = await getDatabase();
@@ -1699,6 +2065,19 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
     const target = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1, emailHash: 1, emailMasked: 1 } });
     if (!target) return res.status(404).json({ error: "Account not found." });
     if (target.role === "owner") return res.status(403).json({ error: "Owner accounts cannot be changed from player management." });
+    if (req.user.role === "moderator" && ["admin", "moderator", "level-maker"].includes(target.role)) {
+      return res.status(403).json({ error: "Moderators can only take action on player accounts." });
+    }
+    // Moderators and admins may suspend/restore an account, but only the owner
+    // can edit identity, role, email, or progress (all of which can grant or
+    // alter valuable game data).
+    if (req.user.role !== "owner") {
+      const allowedKeys = new Set(["banned"]);
+      const suppliedKeys = Object.keys(req.body ?? {});
+      if (suppliedKeys.some((key) => !allowedKeys.has(key))) {
+        return res.status(403).json({ error: "Only the owner can edit player profile data or roles." });
+      }
+    }
     const updates = {};
     const unsets = {};
     let emailMasked = target.emailMasked ?? null;
@@ -1715,7 +2094,7 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
     }
     if (req.body?.role !== undefined) {
       if (!USER_ROLES.includes(req.body.role) || req.body.role === "owner") {
-        return res.status(400).json({ error: "Role must be tester or player; owner access cannot be assigned here." });
+        return res.status(400).json({ error: "Role must be player, tester, moderator, admin, or level-maker; owner access cannot be assigned here." });
       }
       updates.role = req.body.role;
     }
@@ -2014,7 +2393,7 @@ app.get("/api/version", async (_req, res, next) => {
   }
 });
 
-app.get("/api/settings/history", requireOwner, async (req, res, next) => {
+app.get("/api/settings/history", requirePermission("content:update-log"), async (req, res, next) => {
   try {
     const query = {};
     if (req.query.key !== undefined) {
@@ -2047,7 +2426,7 @@ app.put("/api/settings/roulette-tiers", requireSameOrigin, requireOwner, async (
   }
 });
 
-app.put("/api/settings/update-log", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.put("/api/settings/update-log", requireSameOrigin, requirePermission("content:update-log"), async (req, res, next) => {
   try {
     const entries = validateUpdateLog(req.body?.entries);
     if (!entries) return res.status(400).json({ error: "Update log entries need a valid date, title, and body (up to 100 entries, 20,000 characters per body, and 200 KB total)." });
@@ -2071,7 +2450,7 @@ app.put("/api/settings/profile-titles", requireSameOrigin, requireOwner, async (
   }
 });
 
-app.put("/api/settings/builtin-level-overrides", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.put("/api/settings/builtin-level-overrides", requireSameOrigin, requirePermission("levels:manage"), async (req, res, next) => {
   try {
     const index = req.body?.index;
     if (!Number.isSafeInteger(index) || index < 0 || index > 999) return res.status(400).json({ error: "Select a valid built-in level." });
@@ -2151,7 +2530,7 @@ app.get("/api/levels", async (_req, res, next) => {
   }
 });
 
-app.post("/api/levels", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.post("/api/levels", requireSameOrigin, requirePermission("levels:workshop"), async (req, res, next) => {
   try {
     const level = validateWorkshopLevel(req.body?.level);
     if (!level) return res.status(400).json({ error: "The workshop level is invalid. Check its name, length, and tile positions." });
@@ -2163,7 +2542,7 @@ app.post("/api/levels", requireSameOrigin, requireOwner, async (req, res, next) 
   }
 });
 
-app.put("/api/levels/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.put("/api/levels/:id", requireSameOrigin, requirePermission("levels:workshop"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid workshop level." });
     const level = validateWorkshopLevel(req.body?.level);
@@ -2180,7 +2559,7 @@ app.put("/api/levels/:id", requireSameOrigin, requireOwner, async (req, res, nex
   }
 });
 
-app.delete("/api/levels/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.delete("/api/levels/:id", requireSameOrigin, requirePermission("levels:workshop"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid workshop level." });
     const db = await getDatabase();
@@ -2270,15 +2649,66 @@ app.get("/api/staff/leaderboard", requireStaff, async (req, res, next) => {
   }
 });
 
+app.post("/api/runs/start", requireSameOrigin, runStartLimiter, requireUser, async (req, res, next) => {
+  try {
+    if (req.user.role === "player" && req.user.humanVerified === false) {
+      await recordSecurityEvent(await getDatabase(), { type: "unverified-run-start", userId: req.user.id, role: req.user.role });
+      return res.status(403).json({ error: "Complete the human check in Player settings before playing online levels." });
+    }
+    const levelName = typeof req.body?.level === "string" ? req.body.level.trim() : "";
+    if (!levelName || levelName.length > 80 || /[<>]/.test(levelName)) {
+      return res.status(400).json({ error: "The level name is invalid." });
+    }
+    const now = new Date();
+    const runId = crypto.randomBytes(24).toString("base64url");
+    const expiresAt = new Date(now.getTime() + RUN_PROOF_TTL_MS);
+    const db = await getDatabase();
+    await db.collection("run_proofs").insertOne({
+      _id: runId,
+      userId: req.user.id,
+      levelName,
+      startedAt: now,
+      expiresAt,
+      consumedAt: null,
+    });
+    res.status(201).json({ runId, startedAt: now.getTime(), expiresAt: expiresAt.getTime() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, async (req, res, next) => {
   try {
     const run = req.body;
     if (!isValidRun(run)) return res.status(400).json({ error: "The run details are invalid." });
+    if (req.user.role === "player" && req.user.humanVerified === false) {
+      await recordSecurityEvent(await getDatabase(), { type: "unverified-run-submit", userId: req.user.id, role: req.user.role });
+      return res.status(403).json({ error: "Complete the human check in Player settings before submitting online runs." });
+    }
+    const runId = typeof run.proofId === "string" && /^[A-Za-z0-9_-]{32,80}$/.test(run.proofId) ? run.proofId : "";
+    if (!runId) return res.status(400).json({ error: "This run could not be verified. Start the level again while online." });
     const ownerSubmission = req.user.role === "owner" && req.body?.submitOwner === true;
     if (req.user.role !== "player" && !ownerSubmission) return res.json({ improved: false, ignored: true, reason: "owner-private", entry: null });
     if (req.user.role === "player" && req.user.leaderboardOptIn === false) return res.json({ improved: false, ignored: true, reason: "opted-out", entry: null });
     const levelName = run.level.trim();
     const db = await getDatabase();
+    const runProofs = db.collection("run_proofs");
+    const now = new Date();
+    const proof = await runProofs.findOne({ _id: runId, userId: req.user.id, levelName, consumedAt: null, expiresAt: { $gt: now } });
+    if (!proof || !(proof.startedAt instanceof Date)) {
+      await recordSecurityEvent(db, { type: "invalid-run-proof", userId: req.user.id, role: req.user.role, levelName });
+      return res.status(403).json({ error: "This run could not be verified. Start the level again while online." });
+    }
+    const serverElapsedMs = now.getTime() - proof.startedAt.getTime();
+    if (!ownerSubmission && (!Number.isFinite(serverElapsedMs) || run.timeMs + RUN_PROOF_MIN_TOLERANCE_MS < serverElapsedMs)) {
+      await recordSecurityEvent(db, { type: "impossible-run-time", userId: req.user.id, role: req.user.role, levelName, submittedTimeMs: run.timeMs, serverElapsedMs });
+      return res.status(403).json({ error: "This run time was faster than the server could verify." });
+    }
+    const consumed = await runProofs.updateOne({ _id: runId, userId: req.user.id, consumedAt: null }, { $set: { consumedAt: now } });
+    if (!consumed.matchedCount) {
+      await recordSecurityEvent(db, { type: "replayed-run-proof", userId: req.user.id, role: req.user.role, levelName });
+      return res.status(403).json({ error: "This run proof has already been used." });
+    }
     const entries = db.collection("leaderboard_entries");
     let improved = false;
     const betterRunFilter = {
@@ -2419,7 +2849,7 @@ app.post("/api/messages/:id/ack", requireSameOrigin, requireUser, async (req, re
   }
 });
 
-app.get("/api/admin/messages", requireOwner, async (_req, res, next) => {
+app.get("/api/admin/messages", requirePermission("content:messages"), async (_req, res, next) => {
   try {
     const db = await getDatabase();
     const messages = await db.collection("owner_messages")
@@ -2433,7 +2863,7 @@ app.get("/api/admin/messages", requireOwner, async (_req, res, next) => {
   }
 });
 
-app.get("/api/admin/messages/:id/deliveries", requireOwner, async (req, res, next) => {
+app.get("/api/admin/messages/:id/deliveries", requirePermission("content:messages"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
     const db = await getDatabase();
@@ -2459,7 +2889,7 @@ app.get("/api/admin/messages/:id/deliveries", requireOwner, async (req, res, nex
   }
 });
 
-app.post("/api/admin/messages", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.post("/api/admin/messages", requireSameOrigin, requirePermission("content:messages"), async (req, res, next) => {
   try {
     const { title, body } = req.body ?? {};
     const type = req.body?.type ?? "info";
@@ -2469,6 +2899,9 @@ app.post("/api/admin/messages", requireSameOrigin, requireOwner, async (req, res
       return res.status(400).json({ error: "Message title and body must be within the allowed lengths." });
     }
     const db = await getDatabase();
+    const filterTerms = await getChatFilterTerms(db);
+    const moderatedTitle = moderateChatText(title.trim(), filterTerms);
+    const moderatedBody = moderateChatText(body.trim(), filterTerms);
     let userId = null;
     if (req.body?.userId !== undefined && req.body.userId !== null) {
       if (!ObjectId.isValid(req.body.userId)) return res.status(400).json({ error: "Invalid recipient." });
@@ -2478,20 +2911,20 @@ app.post("/api/admin/messages", requireSameOrigin, requireOwner, async (req, res
     }
     const createdAt = new Date();
     const result = await db.collection("owner_messages").insertOne({
-      title: title.trim(),
-      body: body.trim(),
+      title: moderatedTitle,
+      body: moderatedBody,
       type,
       userId,
       createdAt,
       createdBy: req.user.id,
     });
-    res.status(201).json({ message: { id: result.insertedId.toHexString(), title: title.trim(), body: body.trim(), type, userId: userId?.toHexString() ?? null, createdAt } });
+    res.status(201).json({ message: { id: result.insertedId.toHexString(), title: moderatedTitle, body: moderatedBody, type, userId: userId?.toHexString() ?? null, createdAt } });
   } catch (error) {
     next(error);
   }
 });
 
-app.patch("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.patch("/api/admin/messages/:id", requireSameOrigin, requirePermission("content:messages"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
     const { title, body } = req.body ?? {};
@@ -2502,9 +2935,10 @@ app.patch("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (req
       return res.status(400).json({ error: "Message title and body must be within the allowed lengths." });
     }
     const db = await getDatabase();
+    const filterTerms = await getChatFilterTerms(db);
     const result = await db.collection("owner_messages").updateOne(
       { _id: new ObjectId(req.params.id) },
-      { $set: { title: title.trim(), body: body.trim(), type, updatedAt: new Date(), updatedBy: req.user.id } },
+      { $set: { title: moderateChatText(title.trim(), filterTerms), body: moderateChatText(body.trim(), filterTerms), type, updatedAt: new Date(), updatedBy: req.user.id } },
     );
     if (!result.matchedCount) return res.status(404).json({ error: "Message not found." });
     res.json({ ok: true });
@@ -2513,7 +2947,7 @@ app.patch("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (req
   }
 });
 
-app.delete("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.delete("/api/admin/messages/:id", requireSameOrigin, requirePermission("content:messages"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
     const db = await getDatabase();
@@ -2527,7 +2961,7 @@ app.delete("/api/admin/messages/:id", requireSameOrigin, requireOwner, async (re
   }
 });
 
-app.get("/api/admin/codes", requireOwner, async (_req, res, next) => {
+app.get("/api/admin/codes", requirePermission("content:codes"), async (_req, res, next) => {
   try {
     const db = await getDatabase();
     const codes = await db.collection("redemption_codes")
@@ -2541,7 +2975,7 @@ app.get("/api/admin/codes", requireOwner, async (_req, res, next) => {
   }
 });
 
-app.get("/api/admin/codes/:id/redemptions", requireOwner, async (req, res, next) => {
+app.get("/api/admin/codes/:id/redemptions", requirePermission("content:codes"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid code." });
     const db = await getDatabase();
@@ -2568,17 +3002,17 @@ app.get("/api/admin/codes/:id/redemptions", requireOwner, async (req, res, next)
   }
 });
 
-app.post("/api/admin/codes", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.post("/api/admin/codes", requireSameOrigin, requirePermission("content:codes"), async (req, res, next) => {
   noStore(res);
   try {
     const code = typeof req.body?.code === "string"
       ? req.body.code.trim().toUpperCase()
       : crypto.randomBytes(12).toString("hex").toUpperCase();
-    const maxUses = req.body?.maxUses ?? 1;
+    const maxUses = req.body?.maxUses === null ? null : req.body?.maxUses ?? 1;
     const perPlayerLimit = req.body?.perPlayerLimit ?? 1;
     const reward = validateCodeReward(req.body?.reward ?? { type: "claims", amount: 0 });
     if (!/^[A-Z0-9!?@#$%&*+=._~()\-]{8,40}$/.test(code)
-      || !Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 1000000
+      || !(maxUses === null || (Number.isSafeInteger(maxUses) && maxUses >= 1 && maxUses <= 1000000))
       || !Number.isSafeInteger(perPlayerLimit) || perPlayerLimit < 1 || perPlayerLimit > 1000
       || !reward
       || (req.body?.expiresAt !== undefined && !isValidDateString(req.body.expiresAt))) {
@@ -2611,7 +3045,64 @@ app.post("/api/admin/codes", requireSameOrigin, requireOwner, async (req, res, n
   }
 });
 
-app.delete("/api/admin/codes/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+app.patch("/api/admin/codes/:id", requireSameOrigin, requirePermission("content:codes"), async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid code." });
+    const db = await getDatabase();
+    const codes = db.collection("redemption_codes");
+    const codeId = new ObjectId(req.params.id);
+    const current = await codes.findOne({ _id: codeId });
+    if (!current) return res.status(404).json({ error: "Code not found." });
+    const updates = {};
+    if (Object.hasOwn(req.body ?? {}, "reward")) {
+      const reward = validateCodeReward(req.body.reward);
+      if (!reward) return res.status(400).json({ error: "The code reward is invalid." });
+      if (reward.type === "title") {
+        const titles = await getProfileTitles(db);
+        if (!titles.some((title) => title.id === reward.titleId)) return res.status(400).json({ error: "That title does not exist." });
+      }
+      updates.reward = reward;
+    }
+    if (Object.hasOwn(req.body ?? {}, "maxUses")) {
+      const maxUses = req.body.maxUses;
+      if (!(maxUses === null || (Number.isSafeInteger(maxUses) && maxUses >= 1 && maxUses <= 1000000))) {
+        return res.status(400).json({ error: "Total use limit must be a positive number or unlimited." });
+      }
+      if (maxUses !== null && maxUses < (Number.isSafeInteger(current.uses) ? current.uses : 0)) {
+        return res.status(400).json({ error: "Total use limit cannot be lower than the code's current uses." });
+      }
+      updates.maxUses = maxUses;
+    }
+    if (Object.hasOwn(req.body ?? {}, "perPlayerLimit")) {
+      const perPlayerLimit = req.body.perPlayerLimit;
+      if (!Number.isSafeInteger(perPlayerLimit) || perPlayerLimit < 1 || perPlayerLimit > 1000) {
+        return res.status(400).json({ error: "Per-player use limit must be between 1 and 1000." });
+      }
+      updates.perPlayerLimit = perPlayerLimit;
+    }
+    if (Object.hasOwn(req.body ?? {}, "expiresAt")) {
+      if (req.body.expiresAt === null || req.body.expiresAt === "") updates.expiresAt = null;
+      else if (!isValidDateString(req.body.expiresAt)) return res.status(400).json({ error: "Expiration date is invalid." });
+      else updates.expiresAt = new Date(req.body.expiresAt);
+    }
+    if (Object.hasOwn(req.body ?? {}, "enabled")) {
+      if (typeof req.body.enabled !== "boolean") return res.status(400).json({ error: "Enabled must be true or false." });
+      updates.enabled = req.body.enabled;
+      if (!req.body.enabled) updates.disabledAt = new Date();
+      else updates.disabledAt = null;
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: "Choose at least one code setting to update." });
+    updates.updatedAt = new Date();
+    updates.updatedBy = req.user.id;
+    await codes.updateOne({ _id: codeId }, { $set: updates });
+    const updated = await codes.findOne({ _id: codeId }, { projection: { codeHash: 0 } });
+    res.json({ code: { ...updated, id: codeId.toHexString() } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/codes/:id", requireSameOrigin, requirePermission("content:codes"), async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid code." });
     const db = await getDatabase();
@@ -2652,7 +3143,9 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
           throw Object.assign(new Error("This code has expired."), { statusCode: 410 });
         }
 
-        const maxUses = Number.isSafeInteger(codeRecord.maxUses) ? codeRecord.maxUses : 1;
+        const maxUses = codeRecord.maxUses === null
+          ? null
+          : Number.isSafeInteger(codeRecord.maxUses) ? codeRecord.maxUses : 1;
         const perPlayerLimit = Number.isSafeInteger(codeRecord.perPlayerLimit) ? codeRecord.perPlayerLimit : 1;
         const prior = await redemptions.findOne(
           { codeId: codeRecord._id, userId: req.user.id },
@@ -2679,15 +3172,16 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
           }, { session });
         }
 
+        const totalUseFilter = {
+          _id: codeRecord._id,
+          enabled: { $ne: false },
+          $and: [
+            { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }, { expiresAt: { $exists: false } }] },
+          ],
+        };
+        if (maxUses !== null) totalUseFilter.$and.unshift({ $or: [{ uses: { $lt: maxUses } }, { uses: { $exists: false } }] });
         const totalIncrement = await codes.updateOne(
-          {
-            _id: codeRecord._id,
-            enabled: { $ne: false },
-            $and: [
-              { $or: [{ uses: { $lt: maxUses } }, { uses: { $exists: false } }] },
-              { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }, { expiresAt: { $exists: false } }] },
-            ],
-          },
+          totalUseFilter,
           { $inc: { uses: 1 } },
           { session },
         );
@@ -2742,7 +3236,7 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
         }, { session });
         return {
           reward,
-          remainingUses: Math.max(0, maxUses - ((codeRecord.uses ?? 0) + 1)),
+          remainingUses: maxUses === null ? null : Math.max(0, maxUses - ((codeRecord.uses ?? 0) + 1)),
         };
       });
       res.json({ ok: true, ...redemptionResult });
@@ -2784,6 +3278,7 @@ async function initializeDatabaseOnce() {
   const users = db.collection("users");
   const sessions = db.collection("user_sessions");
   const entries = db.collection("leaderboard_entries");
+  const runProofs = db.collection("run_proofs");
   const settings = db.collection("game_settings");
   const recoveryAttempts = db.collection("account_recovery_attempts");
 
@@ -2796,9 +3291,12 @@ async function initializeDatabaseOnce() {
     sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     sessions.createIndex({ lastSeenAt: 1 }),
     users.createIndex({ lastSeenIpHash: 1 }),
+    users.createIndex({ lastSeenIpHash: 1, createdAt: -1 }),
     entries.createIndex({ userId: 1, levelName: 1 }, { unique: true }),
     entries.createIndex({ levelName: 1, timeMs: 1, achievedAt: 1, _id: 1 }),
     entries.createIndex({ timeMs: 1, achievedAt: 1, _id: 1 }),
+    runProofs.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    runProofs.createIndex({ userId: 1, consumedAt: 1 }),
     recoveryAttempts.createIndex({ lockedUntil: 1 }),
     db.collection("profile_backups").createIndex({ userId: 1, createdAt: -1 }),
     db.collection("redemption_codes").createIndex({ codeHash: 1 }, { unique: true }),
@@ -2813,6 +3311,8 @@ async function initializeDatabaseOnce() {
     db.collection("conversations").createIndex({ pairKey: 1 }, { unique: true }),
     db.collection("conversations").createIndex({ userIds: 1, lastMessageAt: -1 }),
     db.collection("chat_messages").createIndex({ conversationId: 1, _id: -1 }),
+    db.collection("global_chat_messages").createIndex({ _id: -1 }),
+    db.collection("global_chat_messages").createIndex({ senderId: 1, _id: -1 }),
     db.collection("chat_reports").createIndex({ status: 1, createdAt: -1 }),
     db.collection("chat_audit").createIndex({ createdAt: -1 }),
     db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }),
@@ -2845,6 +3345,11 @@ async function initializeDatabaseOnce() {
     settings.updateOne(
       { _id: "app_version" },
       { $setOnInsert: { value: "1", createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
+      { _id: "chat_filter" },
+      { $setOnInsert: { value: { terms: [] }, createdAt: new Date() } },
       { upsert: true },
     ),
     settings.updateOne(

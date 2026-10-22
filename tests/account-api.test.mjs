@@ -100,13 +100,15 @@ test("account registration, progress, privacy, logout, and login work together",
     assert.equal(registration.user.username, "Pilot_7");
     assert.match(registration.recoveryCode, /^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/);
     const cookie = registered.headers.get("set-cookie").split(";")[0];
+    assert.equal(progressRecords.length, 1);
+    assert.deepEqual(progressRecords[0].data, {});
 
     const initialized = await request("account/progress", {
       method: "PUT", headers: { ...jsonHeaders, cookie },
       body: JSON.stringify({ progress: { "orbit-claims": "42" }, baseProgress: null, initializeOnly: true }),
     });
     assert.equal(initialized.status, 200);
-    assert.equal((await initialized.json()).progress["orbit-claims"], "42");
+    assert.deepEqual((await initialized.json()).progress, {});
     progressRecords[0].data["orbit-claims"] = "60";
     progressRecords[0].revision++;
     const conflictingSave = await request("account/progress", {

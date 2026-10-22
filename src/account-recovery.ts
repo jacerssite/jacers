@@ -1,6 +1,6 @@
 import { apiRequest } from "./api";
 import { levels } from "./levels";
-import { createMenuButton, createTextButton } from "./ui";
+import { createMenuButton, createPasswordField, createTextButton } from "./ui";
 
 export function createAccountRecovery(showAccount: (message?: string) => void) {
     function showRecoveryCodeOnce(code: string, onContinue: () => void) {
@@ -60,7 +60,7 @@ export function createAccountRecovery(showAccount: (message?: string) => void) {
             input.required = true;
             if (minLength !== undefined) input.minLength = minLength;
             if (maxLength !== undefined) input.maxLength = maxLength;
-            label.append(input);
+            label.append(type === "password" ? createPasswordField(input) : input);
             form.append(label);
             return input;
         };

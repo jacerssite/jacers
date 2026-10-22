@@ -18,10 +18,12 @@ export function hasCurrencyConflict(existing, progress, baseline) {
 // generated rewards (codes, admin actions, and roulette) use replace writes and
 // bypass this client-mutation guard.
 export function getSuspiciousPlayerMutation(existing, progress, role = "player") {
-  if (role !== "player" || !existing) return null;
+  // Owner/admin/tester accounts are explicitly allowed to use local test
+  // tools. Moderators and level makers still use the normal anti-cheat path;
+  // their roles must never become a way to mint currency or unlocks.
+  if (["owner", "admin", "tester"].includes(role) || !existing) return null;
   const changedKeys = Object.keys(progress).filter((key) => progress[key] !== existing[key]);
-  const privileged = changedKeys.find((key) => /^(orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar))/.test(key)
-    && progress[key] === "1");
+  const privileged = changedKeys.find((key) => /^(orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-))/.test(key));
   if (privileged) return `privileged progress key: ${privileged}`;
 
   const readCount = (key) => {
@@ -32,8 +34,20 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
     const value = progress[key];
     return typeof value === "string" && /^\d{1,10}$/.test(value) ? Number(value) : 0;
   };
+  for (const key of ["orbit-claims", "orbit-special-claims", "orbit-enemies-killed", "orbit-bosses-killed", "orbit-prestige"]) {
+    if (Object.hasOwn(progress, key) && (typeof progress[key] !== "string" || !/^\d{1,10}$/.test(progress[key]))) return `${key} is invalid`;
+  }
+  for (const key of ["orbit-claims", "orbit-special-claims"]) {
+    if (nextCount(key) < readCount(key)) return `${key} cannot decrease in a player sync`;
+  }
   if (nextCount("orbit-claims") - readCount("orbit-claims") > 5000) return "normal asteroid balance jumped too far";
   if (nextCount("orbit-special-claims") - readCount("orbit-special-claims") > 100) return "special asteroid balance jumped too far";
+  for (const [key, maximumJump] of [["orbit-enemies-killed", 5000], ["orbit-bosses-killed", 100]]) {
+    const current = readCount(key);
+    const next = nextCount(key);
+    if (next < current) return `${key} cannot decrease`;
+    if (next - current > maximumJump) return `${key} jumped too far`;
+  }
   const currentPrestige = readCount("orbit-prestige");
   const nextPrestige = nextCount("orbit-prestige");
   if (nextPrestige < currentPrestige) return "prestige cannot decrease in a player sync";
@@ -51,8 +65,9 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
     try { before = JSON.parse(existing["orbit-powerups"] ?? "{}"); } catch { return "invalid saved power-up inventory"; }
     try { after = JSON.parse(progress["orbit-powerups"] ?? "{}"); } catch { return "invalid power-up inventory"; }
     for (const kind of ["shield", "boost", "rapid", "cannon", "star"]) {
-      const oldAmount = Number.isSafeInteger(before?.[kind]) ? before[kind] : 0;
-      const newAmount = Number.isSafeInteger(after?.[kind]) ? after[kind] : 0;
+      const oldAmount = Number.isSafeInteger(before?.[kind]) && before[kind] >= 0 ? before[kind] : 0;
+      const newAmount = Number.isSafeInteger(after?.[kind]) && after[kind] >= 0 && after[kind] <= 100000 ? after[kind] : -1;
+      if (newAmount < 0) return "power-up inventory contains an invalid amount";
       if (newAmount - oldAmount > 20) return "power-up inventory jumped too far";
     }
   }
@@ -60,24 +75,26 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
 }
 
 export function sanitizeInitialPlayerProgress(progress, role = "player") {
-  if (role !== "player") return progress;
+  if (["owner", "admin", "tester"].includes(role)) return progress;
   const sanitized = { ...progress };
   for (const key of Object.keys(sanitized)) {
-    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar)/.test(key)) delete sanitized[key];
+    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-)/.test(key)) delete sanitized[key];
   }
   const clampCount = (key, maximum) => {
     const value = sanitized[key];
-    if (typeof value !== "string" || !/^\d{1,10}$/.test(value)) return;
+    if (typeof value !== "string" || !/^\d{1,10}$/.test(value)) { if (value !== undefined) delete sanitized[key]; return; }
     sanitized[key] = String(Math.min(Number(value), maximum));
   };
   clampCount("orbit-claims", 5000);
   clampCount("orbit-special-claims", 100);
+  clampCount("orbit-enemies-killed", 5000);
+  clampCount("orbit-bosses-killed", 100);
   clampCount("orbit-prestige", 1);
   if (sanitized["orbit-powerups"] !== undefined) {
     try {
       const inventory = JSON.parse(sanitized["orbit-powerups"]);
       const safeInventory = Object.fromEntries(["shield", "boost", "rapid", "cannon", "star"]
-        .map((kind) => [kind, Number.isSafeInteger(inventory?.[kind]) ? Math.min(inventory[kind], 20) : 0]));
+        .map((kind) => [kind, Number.isSafeInteger(inventory?.[kind]) && inventory[kind] >= 0 ? Math.min(inventory[kind], 20) : 0]));
       sanitized["orbit-powerups"] = JSON.stringify(safeInventory);
     } catch {
       delete sanitized["orbit-powerups"];

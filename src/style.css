@@ -268,6 +268,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 
 .run-timer { color: #a7e0bc; font-variant-numeric: tabular-nums; }
 .time-result { margin: 8px 0 0; color: #f6c46e; font: 700 clamp(2rem, 7vw, 4rem) 'DM Mono', monospace; letter-spacing: 1px; }
+.restart-hint { margin: -2px 0 12px; color: #9eb7ba; font: .72rem 'DM Mono', monospace; }
 .prestige-theme .menu-screen, body.prestige-theme { background: linear-gradient(135deg, #170f2b 0%, #35245d 55%, #d55e9c 150%); }
 .prestige-theme .level-button span, .prestige-theme .brand-mark { color: #f58bff; }
 .ship-preview { display: grid; place-items: center; gap: 10px; min-height: 150px; border: 1px solid #f6c46e66; background: radial-gradient(circle, #294b5b, #101b2b 70%); }
@@ -348,22 +349,29 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .credits-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: min(560px, 90vw); margin: 20px 0; }
 .credits-list b { padding: 24px 10px; border: 1px solid #385267; color: #f6c46e; background: #143746cc; }
 .leaderboard-list { display: grid; gap: 6px; width: min(820px, 90vw); margin: 10px 0 24px; }
-.leaderboard-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid #385267; background: #143746cc; text-align: left; }
-.leaderboard-entry b { color: #ed7657; font: .7rem 'DM Mono', monospace; }
-.leaderboard-player-level { color: #f3f5e9; }
-.leaderboard-entry strong { color: #f6c46e; font: .72rem 'DM Mono', monospace; }
-.leaderboard-abilities { grid-column: 2 / -1; color: #99b3a6; font: .58rem 'DM Mono', monospace; }
+.leaderboard-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; grid-template-areas: "rank username time" ". level action" ". abilities abilities" "controls controls controls"; gap: 7px 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid #385267; background: #143746cc; text-align: left; }
+.leaderboard-entry > b { grid-area: rank; color: #ed7657; font: .7rem 'DM Mono', monospace; }
+.leaderboard-player-button { grid-area: username; min-width: 0; max-width: 100%; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.leaderboard-player-level { grid-area: level; min-width: 0; overflow-wrap: anywhere; color: #f3f5e9; font-size: .7rem; }
+.leaderboard-entry strong { grid-area: time; justify-self: end; color: #f6c46e; font: .72rem 'DM Mono', monospace; white-space: nowrap; }
+.leaderboard-abilities { grid-area: abilities; min-width: 0; overflow-wrap: anywhere; color: #99b3a6; font: .58rem/1.4 'DM Mono', monospace; }
 .online-presence { display: grid; gap: 8px; width: min(820px, 90vw); margin: 8px 0 16px; padding: 14px; border: 1px solid #385267; background: #101b2bcc; text-align: left; }
 .online-presence h2 { margin: 0; color: #f6c46e; font: 700 .9rem 'Space Grotesk', sans-serif; }
 .online-presence-status { margin: 0; color: #99b3a6; font: .62rem 'DM Mono', monospace; }
 .online-player-list { display: flex; flex-wrap: wrap; gap: 7px; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
-.online-player-name { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #37634c; background: #10291f; }
+.online-player-name { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #37634c; color: #fff; background: #10291f; }
 .online-player-name::before { width: 7px; height: 7px; border-radius: 50%; background: #71dc91; box-shadow: 0 0 8px #71dc91aa; content: ""; }
-.online-player-name.online-owner { border-color: #f6c46e; color: #ffe2a0; background: #3a2b13; box-shadow: 0 0 10px #f6c46e44; }
+.online-player-name.online-owner { border-color: #f6c46e; color: #fff; background: #3a2b13; box-shadow: 0 0 10px #f6c46e44; }
 .online-player-name.online-owner::before { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: #f6c46e; content: "★"; }
-.online-player-name.online-tester { border-color: #b991ff; color: #e0d0ff; background: #281b43; box-shadow: 0 0 10px #b991ff44; }
+.online-player-name.online-tester { border-color: #b991ff; color: #fff; background: #281b43; box-shadow: 0 0 10px #b991ff44; }
 .online-player-name.online-tester::before { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: #c9a9ff; content: "T"; font-weight: 700; }
-.leaderboard-entry-controls { grid-column: 2 / -1; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
+.online-player-name.online-admin { border-color: #6ecbff; background: #122f40; box-shadow: 0 0 10px #6ecbff44; }
+.online-player-name.online-admin::before { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: #9be0ff; content: "A"; font-weight: 700; }
+.online-player-name.online-moderator { border-color: #71dc91; background: #123323; box-shadow: 0 0 10px #71dc9144; }
+.online-player-name.online-moderator::before { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: #a7f4bc; content: "M"; font-weight: 700; }
+.online-player-name.online-level-maker { border-color: #ff9a6e; background: #3b231c; box-shadow: 0 0 10px #ff9a6e44; }
+.online-player-name.online-level-maker::before { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: #ffc1a4; content: "L"; font-weight: 700; }
+.leaderboard-entry-controls { grid-area: controls; min-width: 0; color: #c4d1bd; font: .65rem 'DM Mono', monospace; }
 .leaderboard-entry-controls summary { cursor: pointer; color: #f6c46e; }
 .leaderboard-entry-controls form, .leaderboard-admin form { display: grid; gap: 8px; margin-top: 8px; }
 .leaderboard-entry-controls input, .leaderboard-admin input { min-width: 0; padding: 8px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
@@ -373,6 +381,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-form label, .leaderboard-admin label { display: grid; gap: 6px; color: #f3f5e9; font: .7rem 'DM Mono', monospace; }
 .account-form input { width: 100%; padding: 11px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .8rem 'DM Mono', monospace; }
 .account-form input:focus, .leaderboard-entry-controls input:focus, .leaderboard-admin input:focus { border-color: #f6c46e; outline: none; }
+.password-input-wrap { position: relative; display: block; width: 100%; }
+.password-input-wrap > input { padding-right: 62px !important; }
+.password-visibility-toggle { position: absolute; z-index: 1; top: 50%; right: 5px; width: auto !important; min-width: 0; min-height: 0; padding: 4px 6px; border: 1px solid #385267; border-radius: 2px; color: #f6c46e; background: #101b2b; font: .62rem 'DM Mono', monospace; cursor: pointer; transform: translateY(-50%); }
+.password-visibility-toggle:hover, .password-visibility-toggle:focus-visible { border-color: #f6c46e; color: #fff3bd; outline: none; }
 .leaderboard-admin h2 { margin: 0; color: #f6c46e; font-size: 1rem; }
 .leaderboard-admin > p { margin: 0; color: #99b3a6; font: .66rem/1.5 'DM Mono', monospace; }
 .maker-cell { position: relative; display: grid; place-items: center; width: 100%; min-width: 0; height: 100%; min-height: 0; padding: 0; overflow: hidden; isolation: isolate; border: 1px solid #385267; color: #101b2b; background: #1b3342; cursor: pointer; }
@@ -640,7 +652,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .cooldown-reset-card { width: min(680px, 90vw); margin: 0 auto 20px; grid-template-columns: 1fr auto; align-items: center; }
 .cooldown-reset-card small { grid-column: 1 / -1; }
 .title-management-list { display: grid; gap: 10px; }
-.title-management-row { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(150px, 1.5fr) 110px auto; gap: 8px; align-items: center; }
+.title-management-row { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(150px, 1.5fr) minmax(100px, .8fr) 110px 80px minmax(130px, 1fr) 80px auto; gap: 8px; align-items: center; }
 .title-management-row input, .title-management-list select { min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
 .title-management-list > .text-button { justify-self: start; }
 .update-log-editor-list { display: grid; gap: 10px; }
@@ -790,7 +802,13 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-settings-category > p { color: #c4d1bd; font: .68rem/1.5 'DM Mono', monospace; }
 .account-settings-category .account-profile-form { width: 100%; max-width: none; padding: 14px; border: 1px solid #385267; background: #10283899; }
 .account-settings-category .account-security-section { margin: 0; padding: 14px; border: 1px solid #385267; background: #10283899; }
-.pilot-title-badge { display: inline-block; margin-left: 8px; padding: 4px 8px; border: 1px solid #f6c46e88; color: #f6c46e; background: #101b2b; font: 600 .58rem 'DM Mono', monospace; vertical-align: middle; }
+.pilot-title-badge { --title-color: #f6c46e; display: inline-block; margin-left: 8px; padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--title-color) 70%, transparent); color: var(--title-color); background: #101b2b; box-shadow: 0 0 10px color-mix(in srgb, var(--title-color) 25%, transparent); font: 600 .58rem 'DM Mono', monospace; vertical-align: middle; }
+.title-animation-pulse { animation: title-pulse 1.8s ease-in-out infinite; }
+.title-animation-shimmer { background: linear-gradient(110deg, #101b2b 25%, color-mix(in srgb, var(--title-color) 32%, #101b2b) 50%, #101b2b 75%); background-size: 220% 100%; animation: title-shimmer 2.2s linear infinite; }
+.title-animation-rainbow { animation: title-rainbow 3.2s linear infinite; }
+@keyframes title-pulse { 0%, 100% { box-shadow: 0 0 6px color-mix(in srgb, var(--title-color) 18%, transparent); } 50% { box-shadow: 0 0 18px color-mix(in srgb, var(--title-color) 70%, transparent); } }
+@keyframes title-shimmer { from { background-position: 200% 0; } to { background-position: -20% 0; } }
+@keyframes title-rainbow { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
 .profile-presence { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 0; color: #adb7b0; font: 700 .62rem 'DM Mono', monospace; }
 .profile-presence::before { width: 8px; height: 8px; border-radius: 50%; background: #89929a; content: ""; }
 .profile-presence.is-online { color: #71dc91; }
@@ -810,6 +828,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-profile-form .account-presence-setting input[type="checkbox"] { flex: 0 0 22px; width: 22px; height: 22px; accent-color: #f6c46e; }
 .account-profile-form .account-title-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .account-title-setting select { max-width: 180px; padding: 8px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .65rem 'DM Mono', monospace; }
+.account-title-preview { min-height: 24px; }
+.account-title-preview .pilot-title-badge { margin-left: 0; }
 .account-profile-form small { min-height: 1.4em; color: #99b3a6; font: .62rem 'DM Mono', monospace; }
 .account-profile-form button { justify-self: start; }
 .account-rail { position: fixed; z-index: 12; top: 50%; left: 18px; transform: translateY(-50%); }
@@ -821,6 +841,9 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .owner-account-indicator.owner-role { font-size: 0; }
 .owner-account-indicator.owner-role::before { content: "★"; font-size: 1rem; }
 .owner-account-indicator.tester-role { border-color: #b991ff; color: #d7c2ff; box-shadow: 0 0 16px #b991ff99; }
+.owner-account-indicator.admin-role { border-color: #6ecbff; color: #9be0ff; box-shadow: 0 0 16px #6ecbff99; }
+.owner-account-indicator.moderator-role { border-color: #71dc91; color: #a7f4bc; box-shadow: 0 0 16px #71dc9199; }
+.owner-account-indicator.level-maker-role { border-color: #ff9a6e; color: #ffc1a4; box-shadow: 0 0 16px #ff9a6e99; }
 .owner-account-indicator:hover, .owner-account-indicator:focus-visible { transform: scale(1.08); outline: 2px solid currentColor; outline-offset: 3px; }
 .tester-world-tabs { display: flex; justify-content: center; gap: 10px; margin: 8px auto 14px; }
 .tester-world-tabs .text-button { min-width: 150px; padding: 12px; border: 1px solid #385267; background: #101b2b; }
@@ -972,6 +995,15 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .chat-tab-count { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin-left: 4px; padding: 0 4px; border-radius: 9px; background: #393a42; color: #f6c46e; font: 700 .62rem/15px "DM Mono", monospace; }
 .chat-panel-content { padding: 10px; overflow: auto; min-height: 120px; font: .76rem "DM Mono", monospace; }
 .chat-panel-content h3 { margin: 8px 0; color: #f6c46e; font-size: .78rem; }
+.chat-typing-indicator { display: block; min-height: 1.2em; margin: -2px 0 4px; color: #f6c46e; font: .62rem "DM Mono", monospace; }
+.human-check-status { display: block; min-height: 1.2em; color: #f6c46e; font: .68rem "DM Mono", monospace; }
+.bot-trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.human-verification-setting { display: grid; gap: 7px; margin-top: 12px; padding: 12px; border: 1px solid rgba(246, 196, 110, .45); background: rgba(246, 196, 110, .06); }
+.human-verification-setting small { color: #b8c6ce; }
+.human-verification-form { display: grid; gap: 7px; }
+.chat-filter-list { display: grid; gap: 7px; margin-top: 12px; }
+.chat-filter-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid #385267; background: #10283899; color: #d9e5e7; font: .68rem "DM Mono", monospace; }
+.chat-filter-row > span { overflow-wrap: anywhere; }
 .chat-list-row { display: flex; align-items: center; gap: 8px; padding: 9px 4px; border-bottom: 1px solid rgba(74,76,88,.5); }
 .chat-avatar { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 28px; border: 1px solid #686b78; border-radius: 50%; background: #2a2b32; color: #f0f0f3; font: 700 .72rem "Space Grotesk", sans-serif; }
 .chat-player-name { border: 0; background: transparent; color: #d9e5e7; cursor: pointer; font: inherit; text-align: left; flex: 1; }
@@ -987,6 +1019,8 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .chat-message { width: fit-content; max-width: 84%; padding: 8px 10px; background: #202126; border: 1px solid #2b2d36; border-radius: 10px; }
 .chat-message.mine { margin-left: auto; background: #2a2b31; }
 .chat-message small { display: block; color: #9eb7ba; margin-bottom: 4px; }
+.chat-message .chat-read-receipt { margin: 5px 0 0; color: #79868b; font-size: .56rem; text-align: right; }
+.chat-message .chat-read-receipt.is-read { color: #f6c46e; }
 .chat-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: .78rem/1.4 "DM Mono", monospace; }
 .chat-message img, .chat-message video { display: block; max-width: 100%; max-height: 240px; margin-top: 6px; }
 .chat-composer { display: grid; grid-template-columns: 1fr auto; gap: 6px; border-top: 1px solid #385267; padding-top: 9px; }
@@ -999,7 +1033,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-inbox-list { display: grid; gap: 8px; }
 .account-inbox-row { display: flex; align-items: center; gap: 8px; padding: 9px; border: 1px solid #385267; background: #112638; }
 .account-inbox-row > span { flex: 1; }
-.leaderboard-add-friend { margin-left: auto; border: 1px solid #f6c46e; background: transparent; color: #f6c46e; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; }
+.leaderboard-add-friend { grid-area: action; justify-self: end; margin-left: 0; border: 1px solid #f6c46e; background: transparent; color: #f6c46e; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; }
 .profile-friend-action { margin: 8px 0; }
 .player-profile-card { position: fixed; z-index: 1240; padding: 12px; border: 1px solid #385267; background: #101b2b; color: #d9e5e7; box-shadow: 0 14px 32px #0009; font: .72rem "DM Mono", monospace; }
 .player-profile-card h3 { margin: 0 0 5px; color: #f6c46e; font-family: "Space Grotesk", sans-serif; }

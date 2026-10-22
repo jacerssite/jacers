@@ -10,7 +10,22 @@ export const ALLOWED_ABILITIES = new Set([
 
 export const RARITIES = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
 export const POWERUP_KINDS = ["shield", "boost", "rapid", "cannon", "star"];
-export const USER_ROLES = ["owner", "tester", "player"];
+// Roles are deliberately explicit and permission-scoped.  The client uses these
+// values to build the right control center, while the API checks the permission
+// map again so hiding a button can never grant access by itself.
+export const USER_ROLES = ["owner", "admin", "moderator", "level-maker", "tester", "player"];
+// Keep this list small: the API uses it as the source of truth for staff tools.
+export const ROLE_PERMISSIONS = {
+  owner: new Set(["*"]),
+  admin: new Set(["tester-tools", "moderation", "content:codes", "content:messages", "content:update-log", "levels:manage", "levels:workshop"]),
+  moderator: new Set(["moderation"]),
+  "level-maker": new Set(["levels:workshop"]),
+  tester: new Set(["tester-tools"]),
+  player: new Set(),
+};
+export function hasRolePermission(role, permission) {
+  return role === "owner" || Boolean(ROLE_PERMISSIONS[role]?.has(permission));
+}
 export const PROFILE_TITLE_MILESTONES = [
   { id: "cadet", name: "Cadet", routes: 1, requirement: { type: "routes", amount: 1 } },
   { id: "pathfinder", name: "Pathfinder", routes: 5, requirement: { type: "routes", amount: 5 } },
@@ -18,6 +33,7 @@ export const PROFILE_TITLE_MILESTONES = [
   { id: "stellar-navigator", name: "Stellar Navigator", routes: 20, requirement: { type: "routes", amount: 20 } },
   { id: "cosmic-legend", name: "Cosmic Legend", routes: 40, requirement: { type: "routes", amount: 40 } },
 ];
+const TITLE_ANIMATIONS = ["none", "pulse", "shimmer", "rainbow"];
 export function validateProfileTitles(value) {
   if (!Array.isArray(value) || value.length > 100) return null;
   const ids = new Set();
@@ -27,6 +43,8 @@ export function validateProfileTitles(value) {
       || typeof entry.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(entry.id)
       || ids.has(entry.id)
       || typeof entry.name !== "string" || !entry.name.trim() || entry.name.trim().length > 50 || /[<>]/.test(entry.name)
+      || (entry.color !== undefined && (typeof entry.color !== "string" || !/^#[0-9a-f]{6}$/i.test(entry.color)))
+      || (entry.animation !== undefined && !TITLE_ANIMATIONS.includes(entry.animation))
       || !Number.isSafeInteger(entry.routes) || entry.routes < 0 || entry.routes > 100000) return null;
     const requirement = entry.requirement ?? { type: "routes", amount: entry.routes };
     if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)
@@ -35,6 +53,8 @@ export function validateProfileTitles(value) {
     ids.add(entry.id);
     const normalized = { id: entry.id, name: entry.name.trim(), routes: entry.routes };
     if (entry.requirement !== undefined) normalized.requirement = { type: requirement.type, amount: requirement.amount };
+    if (entry.color !== undefined) normalized.color = entry.color.toLowerCase();
+    if (entry.animation !== undefined) normalized.animation = entry.animation;
     titles.push(normalized);
   }
   return titles;
@@ -66,7 +86,7 @@ export const DEFAULT_GAME_CONFIG = {
     boost: { durationSeconds: 7, movementMultiplier: 1.7 },
     rapid: { durationSeconds: 10 },
     cannon: { durationSeconds: 0 },
-    star: { durationSeconds: 15 },
+    star: { durationSeconds: 15, movementMultiplier: 1.8 },
   },
   powerupRules: {
     oneActiveAtATime: false,
@@ -135,6 +155,8 @@ export function isValidGameConfig(value) {
     && isBoundedInteger(effects.rapid?.durationSeconds, 1, 300)
     && isBoundedInteger(effects.cannon?.durationSeconds, 0, 300)
     && isBoundedInteger(effects.star?.durationSeconds, 1, 300)
+    && (effects.star?.movementMultiplier === undefined
+      || (Number.isFinite(effects.star.movementMultiplier) && effects.star.movementMultiplier >= 1 && effects.star.movementMultiplier <= 4))
     && value.powerupRules
     && typeof value.powerupRules.oneActiveAtATime === "boolean"
     && typeof value.powerupRules.rainbowStarInvincible === "boolean"

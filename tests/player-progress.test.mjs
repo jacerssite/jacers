@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasCurrencyConflict, initializePlayerProgress } from "../server/player-progress.mjs";
+import { getSuspiciousPlayerMutation, hasCurrencyConflict, initializePlayerProgress, sanitizeInitialPlayerProgress } from "../server/player-progress.mjs";
 
 test("simultaneous currency changes are detected without blocking unrelated changes", () => {
   const baseline = { "orbit-claims": "100", "orbit-special-claims": "3" };
@@ -10,6 +10,27 @@ test("simultaneous currency changes are detected without blocking unrelated chan
   assert.equal(hasCurrencyConflict({ ...baseline, "orbit-claims": "150" }, { ...baseline, "orbit-skin": "2" }, baseline), false);
   assert.equal(hasCurrencyConflict({ ...baseline, "orbit-claims": "150" }, { ...baseline, "orbit-special-claims": "4" }, baseline), false);
   assert.equal(hasCurrencyConflict(null, baseline, baseline), false);
+});
+
+test("player progress anti-cheat blocks forged unlocks and balance decreases", () => {
+  assert.match(
+    getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "99" }),
+    /cannot decrease/i,
+  );
+  assert.match(
+    getSuspiciousPlayerMutation({}, { "orbit-unlock-skins": "1" }),
+    /privileged progress key/i,
+  );
+  assert.equal(getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "101" }), null);
+});
+
+test("moderator progress stays behind the normal anti-cheat boundary", () => {
+  assert.match(
+    getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "100", "orbit-unlock-skins": "1" }, "moderator"),
+    /privileged progress key/i,
+  );
+  assert.equal(sanitizeInitialPlayerProgress({ "orbit-claims": "999999" }, "moderator")["orbit-claims"], "5000");
+  assert.equal(sanitizeInitialPlayerProgress({ "orbit-claims": "999999" }, "player")["orbit-claims"], "5000");
 });
 
 test("first progress save initializes only when the account has no saved record", async () => {

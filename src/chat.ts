@@ -9,7 +9,7 @@ type ChatContext = {
     onMessage?: () => void;
 };
 
-function roleLabel(role: OnlineUser["role"]) { return role === "owner" ? "\u2605" : role === "tester" ? "T" : ""; }
+function roleLabel(role: OnlineUser["role"]) { return role === "owner" ? "\u2605" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : ""; }
 function ageLabel(value: string | null | undefined) {
     if (!value) return "";
     const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
@@ -17,6 +17,11 @@ function ageLabel(value: string | null | undefined) {
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
     return `${Math.floor(seconds / 86400)}d`;
+}
+function clockLabel(value: string | null | undefined) {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
 }
 
 export function createChat(context: ChatContext) {
@@ -29,13 +34,20 @@ export function createChat(context: ChatContext) {
     let activeName = "";
     let lastMessageId = "";
     let conversationMessages: ChatMessage[] = [];
+    let globalMessages: ChatMessage[] = [];
+    let globalLastMessageId = "";
+    const messageDrafts = new Map<string, string>();
     let pendingAttachment: ChatAttachment | null = null;
     let pollTimer = 0;
     let refreshTimer = 0;
-    let tab: "global" | "friends" | "battle" | "chats" | "requests" = "friends";
+    let tab: "global" | "friends" | "battle" | "chats" | "requests" = "global";
+    let activeView: "global" | "conversation" | null = null;
     let gameActiveState = false;
     let pending = 0;
     let unread = 0;
+    let activeTyping = false;
+    let ownTyping = false;
+    let typingStopTimer = 0;
     let hasUnreadSnapshot = false;
 
     const setUnread = (nextPending: number, nextUnread: number) => {
@@ -55,15 +67,29 @@ export function createChat(context: ChatContext) {
     const clearTimers = () => {
         if (pollTimer) window.clearInterval(pollTimer);
         if (refreshTimer) window.clearInterval(refreshTimer);
+        if (typingStopTimer) window.clearTimeout(typingStopTimer);
+        if (ownTyping && activeUserId) void apiRequest(`/chat/conversations/${encodeURIComponent(activeUserId)}/typing`, { method: "POST", body: JSON.stringify({ typing: false }) }).catch(() => undefined);
+        ownTyping = false;
+        typingStopTimer = 0;
         pollTimer = 0; refreshTimer = 0;
     };
 
-    const close = () => { if (!panel) return; panel.hidden = true; activeUserId = null; clearTimers(); launchIcon?.classList.remove("open"); if (launchIcon) launchIcon.textContent = ""; button?.setAttribute("aria-label", "Open chat"); };
+    const saveCurrentDraft = () => {
+        const input = content()?.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
+        if (!input) return;
+        const key = activeView === "global" ? "global" : activeUserId ? `dm:${activeUserId}` : "";
+        if (key) messageDrafts.set(key, input.value);
+    };
+    const close = () => { if (!panel) return; saveCurrentDraft(); clearTimers(); panel.hidden = true; activeUserId = null; activeView = null; launchIcon?.classList.remove("open"); if (launchIcon) launchIcon.textContent = ""; button?.setAttribute("aria-label", "Open chat"); };
     const open = () => {
         if (!context.getUser() || !panel) return;
         panel.hidden = false;
         launchIcon?.classList.add("open"); if (launchIcon) launchIcon.textContent = ""; button?.setAttribute("aria-label", "Close chat");
+        // Render the selected view immediately. Global chat should not depend on
+        // the friends/conversations snapshot being available first.
+        renderTab();
         void refreshSnapshot();
+        startSnapshotPolling();
     };
 
     const makeRole = (role: OnlineUser["role"]) => {
@@ -137,39 +163,93 @@ export function createChat(context: ChatContext) {
             row.append(avatar, name, preview); if (conversation.unread) { const badge = document.createElement("b"); badge.className = "chat-row-unread"; badge.textContent = String(conversation.unread); row.append(badge); } target.append(row);
         });
     };
-    const renderPlaceholder = (message: string) => { const target = content(); if (!target) return; target.replaceChildren(); const empty = document.createElement("p"); empty.className = "chat-empty-state"; empty.textContent = message; target.append(empty); };
-    const renderTab = () => { renderTabs(); if (tab === "global") renderPlaceholder("Global chat is not enabled yet."); else if (tab === "battle") renderPlaceholder("Battle chat will appear during a shared event."); else if (tab === "friends") renderFriends(); else if (tab === "requests") renderRequests(); else renderChats(); };
+    const renderPlaceholder = (message: string) => { saveCurrentDraft(); activeView = null; const target = content(); if (!target) return; target.replaceChildren(); const empty = document.createElement("p"); empty.className = "chat-empty-state"; empty.textContent = message; target.append(empty); };
+    const renderTab = () => {
+        renderTabs();
+        if (tab === "global") {
+            if (activeView !== "global") void openGlobalChat();
+            else renderConversation(globalMessages, "global");
+        } else if (tab === "battle") renderPlaceholder("Battle chat will appear during a shared event.");
+        else if (tab === "friends") renderFriends();
+        else if (tab === "requests") renderRequests();
+        else renderChats();
+    };
 
-    const renderConversation = (messages: ChatMessage[]) => {
+    const startSnapshotPolling = () => {
+        if (refreshTimer || !panel || panel.hidden) return;
+        refreshTimer = window.setInterval(() => {
+            if (!document.hidden) void refreshSnapshot();
+        }, 5000);
+    };
+    const updateTypingIndicator = () => {
+        const indicator = content()?.querySelector<HTMLElement>(".chat-typing-indicator");
+        if (!indicator) return;
+        indicator.hidden = !activeTyping || !activeUserId;
+        indicator.textContent = activeTyping ? `${activeName} is typing...` : "";
+    };
+    const sendTypingState = (typing: boolean) => {
+        if (!activeUserId || context.getUser()?.typingIndicators === false) return;
+        void apiRequest(`/chat/conversations/${encodeURIComponent(activeUserId)}/typing`, { method: "POST", body: JSON.stringify({ typing }) }).catch(() => undefined);
+    };
+    const scheduleTypingStop = () => {
+        if (!activeUserId || context.getUser()?.typingIndicators === false) return;
+        if (!ownTyping) { ownTyping = true; sendTypingState(true); }
+        if (typingStopTimer) window.clearTimeout(typingStopTimer);
+        typingStopTimer = window.setTimeout(() => {
+            ownTyping = false;
+            typingStopTimer = 0;
+            sendTypingState(false);
+        }, 1800);
+    };
+
+    const renderConversation = (messages: ChatMessage[], mode: "direct" | "global" = "direct") => {
         const target = content(); if (!target) return;
+        const draftKey = mode === "global" ? "global" : activeUserId ? `dm:${activeUserId}` : "";
+        const previousInput = target.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
+        const preserveFocus = previousInput === document.activeElement;
+        const previousSelectionStart = previousInput?.selectionStart ?? null;
+        const previousSelectionEnd = previousInput?.selectionEnd ?? null;
+        if (previousInput && draftKey) messageDrafts.set(draftKey, previousInput.value);
+        activeView = mode === "global" ? "global" : "conversation";
         target.replaceChildren();
         const back = document.createElement("button"); back.type = "button"; back.className = "chat-back-button"; back.textContent = "‹ Back"; back.addEventListener("click", () => { activeUserId = null; clearTimers(); renderTab(); });
-        const heading = document.createElement("h3"); heading.textContent = activeName; target.append(back, heading);
+        const heading = document.createElement("h3"); heading.textContent = mode === "global" ? "Global chat" : activeName;
+        if (mode === "global") back.hidden = true;
+        const typingIndicator = document.createElement("small"); typingIndicator.className = "chat-typing-indicator"; typingIndicator.hidden = mode !== "direct" || !activeTyping; typingIndicator.textContent = activeTyping ? `${activeName} is typing...` : "";
+        target.append(back, heading, typingIndicator);
         const list = document.createElement("div"); list.className = "chat-message-list";
         messages.forEach((message) => {
             const bubble = document.createElement("article"); bubble.className = `chat-message ${message.sender === context.getUser()?.username ? "mine" : ""}`;
             const meta = document.createElement("small"); meta.textContent = `${message.sender} · ${ageLabel(message.createdAt)}`;
             const text = document.createElement("p"); text.textContent = message.text;
             bubble.append(meta, text);
+            if (mode === "direct" && message.sender === context.getUser()?.username) {
+                const receipt = document.createElement("small");
+                receipt.className = `chat-read-receipt${message.readAt ? " is-read" : ""}`;
+                receipt.textContent = message.readAt ? `Read ${clockLabel(message.readAt)}` : "Sent";
+                bubble.append(receipt);
+            }
             if (message.attachment) { const media = message.attachment.kind === "video" ? document.createElement("video") : document.createElement("img"); if (media instanceof HTMLVideoElement) { media.controls = true; media.preload = "metadata"; media.playsInline = true; } else { media.loading = "lazy"; media.alt = "Attachment"; } media.src = message.attachment.url; bubble.append(media); }
-            list.append(bubble); lastMessageId = message.id;
+            list.append(bubble); if (mode === "global") globalLastMessageId = message.id; else lastMessageId = message.id;
         });
         target.append(list);
+        window.requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
         const form = document.createElement("form"); form.className = "chat-composer";
         const input = document.createElement("textarea"); input.maxLength = 300; input.rows = 2; input.placeholder = "Write a message…"; input.setAttribute("aria-label", "Chat message");
-        const count = document.createElement("small"); count.textContent = "0/300";
+        input.value = draftKey ? messageDrafts.get(draftKey) ?? "" : "";
+        const count = document.createElement("small"); count.textContent = `${input.value.length}/300`;
         const attachmentInput = document.createElement("input"); attachmentInput.type = "file"; attachmentInput.accept = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"; attachmentInput.hidden = true; attachmentInput.setAttribute("aria-label", "Choose an image, GIF, or video");
-        const attachmentButton = document.createElement("button"); attachmentButton.type = "button"; attachmentButton.className = "chat-action-button"; attachmentButton.textContent = "Attach"; attachmentButton.addEventListener("click", () => attachmentInput.click());
-        const attachmentStatus = document.createElement("small"); attachmentStatus.className = "chat-attachment-status";
+        const attachmentButton = document.createElement("button"); attachmentButton.type = "button"; attachmentButton.className = "chat-action-button"; attachmentButton.textContent = "Attach"; attachmentButton.hidden = mode === "global"; attachmentButton.addEventListener("click", () => attachmentInput.click());
+        const attachmentStatus = document.createElement("small"); attachmentStatus.className = "chat-attachment-status"; attachmentStatus.hidden = mode === "global";
         const send = document.createElement("button"); send.type = "submit"; send.className = "chat-action-button"; send.textContent = "Send";
-        const updateSendState = () => { count.textContent = `${input.value.length}/300`; send.disabled = !input.value.trim() && !pendingAttachment; };
-        if (pendingAttachment) {
+        const updateSendState = () => { count.textContent = `${input.value.length}/300`; send.disabled = !input.value.trim() && (mode === "global" || !pendingAttachment); };
+        if (mode === "direct" && pendingAttachment) {
             attachmentStatus.textContent = `${pendingAttachment.kind === "video" ? "Video" : "Image"} attached (${Math.ceil(pendingAttachment.bytes / 1024)} KB)`;
             const removeAttachment = document.createElement("button"); removeAttachment.type = "button"; removeAttachment.className = "chat-attachment-remove"; removeAttachment.textContent = "Remove"; removeAttachment.addEventListener("click", () => { pendingAttachment = null; renderConversation(messages); }); attachmentStatus.append(" ", removeAttachment);
         }
         attachmentInput.addEventListener("change", async () => {
             const file = attachmentInput.files?.[0];
-            if (!file || !activeUserId) return;
+            if (mode === "global" || !file || !activeUserId) return;
             const isVideo = file.type === "video/mp4" || file.type === "video/webm";
             const isImage = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type);
             const maxBytes = isVideo ? 25 * 1024 * 1024 : 8 * 1024 * 1024;
@@ -181,26 +261,81 @@ export function createChat(context: ChatContext) {
             } catch (error) { attachmentStatus.textContent = error instanceof Error ? error.message : "Could not upload that attachment."; }
             finally { attachmentButton.disabled = false; attachmentInput.value = ""; updateSendState(); }
         });
-        input.addEventListener("input", updateSendState);
+        input.addEventListener("input", () => { if (draftKey) messageDrafts.set(draftKey, input.value); if (mode === "direct" && input.value.trim()) scheduleTypingStop(); else if (mode === "direct" && ownTyping) { ownTyping = false; sendTypingState(false); } updateSendState(); });
         input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
         form.append(input, attachmentInput, attachmentButton, attachmentStatus, count, send); updateSendState();
-        form.addEventListener("submit", async (event) => { event.preventDefault(); if (!activeUserId || (!input.value.trim() && !pendingAttachment)) return; send.disabled = true; try { const result = await apiRequest<{ message: ChatMessage }>(`/chat/conversations/${encodeURIComponent(activeUserId)}/messages`, { method: "POST", body: JSON.stringify({ text: input.value, ...(pendingAttachment ? { attachment: pendingAttachment } : {}) }) }); input.value = ""; pendingAttachment = null; count.textContent = "0/300"; lastMessageId = result.message.id; await loadMessages(false); } catch (error) { attachmentStatus.textContent = error instanceof Error ? error.message : "Could not send message."; } finally { updateSendState(); } });
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            if ((mode === "direct" && !activeUserId) || (!input.value.trim() && (mode === "global" || !pendingAttachment))) return;
+            send.disabled = true;
+            try {
+                const endpoint = mode === "global" ? "/chat/global" : `/chat/conversations/${encodeURIComponent(activeUserId!)}/messages`;
+                const result = await apiRequest<{ message: ChatMessage }>(endpoint, { method: "POST", body: JSON.stringify({ text: input.value, ...(mode === "direct" && pendingAttachment ? { attachment: pendingAttachment } : {}) }) });
+                if (draftKey) messageDrafts.delete(draftKey);
+                input.value = "";
+                pendingAttachment = null;
+                if (ownTyping) { ownTyping = false; sendTypingState(false); }
+                if (typingStopTimer) { window.clearTimeout(typingStopTimer); typingStopTimer = 0; }
+                count.textContent = "0/300";
+                if (mode === "global") { globalLastMessageId = result.message.id; await loadGlobalMessages(false); }
+                else { lastMessageId = result.message.id; await loadMessages(false); }
+            } catch (error) { attachmentStatus.textContent = error instanceof Error ? error.message : "Could not send message."; }
+            finally { updateSendState(); }
+        });
         target.append(form);
+        if (preserveFocus) {
+            input.focus();
+            if (previousSelectionStart !== null && previousSelectionEnd !== null) input.setSelectionRange(previousSelectionStart, previousSelectionEnd);
+        }
     };
     const loadMessages = async (after = true) => {
         if (!activeUserId || !panel || panel.hidden) return;
         try {
             const suffix = after && lastMessageId ? `?after=${encodeURIComponent(lastMessageId)}` : "";
-            const response = await apiRequest<{ messages: ChatMessage[] }>(`/chat/conversations/${encodeURIComponent(activeUserId)}/messages${suffix}`);
+            const response = await apiRequest<{ messages: ChatMessage[]; typing?: boolean; readAt?: string | null }>(`/chat/conversations/${encodeURIComponent(activeUserId)}/messages${suffix}`);
+            const previousLength = conversationMessages.length;
+            let readStateChanged = false;
+            const readAt = response.readAt ?? null;
+            conversationMessages = conversationMessages.map((message) => {
+                if (message.sender !== context.getUser()?.username) return message;
+                const nextReadAt = readAt && new Date(readAt).getTime() >= new Date(message.createdAt).getTime() ? readAt : null;
+                if ((message.readAt ?? null) !== nextReadAt) readStateChanged = true;
+                return { ...message, readAt: nextReadAt };
+            });
             if (after && lastMessageId) {
                 const known = new Set(conversationMessages.map((message) => message.id));
                 conversationMessages = [...conversationMessages, ...response.messages.filter((message) => !known.has(message.id))];
             } else conversationMessages = response.messages;
-            renderConversation(conversationMessages);
+            const nextTyping = Boolean(response.typing);
+            if (nextTyping !== activeTyping) { activeTyping = nextTyping; updateTypingIndicator(); }
+            if (!after || conversationMessages.length !== previousLength || readStateChanged) renderConversation(conversationMessages);
+            void apiRequest<void>(`/chat/conversations/${encodeURIComponent(activeUserId)}/read`, { method: "POST", body: "{}" }).catch(() => undefined);
         } catch (error) { const target = content(); if (target) target.textContent = error instanceof Error ? error.message : "Could not load messages."; }
     };
-    const openConversation = async (userId: string, username: string) => { activeUserId = userId; activeName = username; lastMessageId = ""; conversationMessages = []; pendingAttachment = null; clearTimers(); await loadMessages(false); void apiRequest<void>(`/chat/conversations/${encodeURIComponent(userId)}/read`, { method: "POST", body: "{}" }).catch(() => undefined); pollTimer = window.setInterval(() => { if (!document.hidden) void loadMessages(true); }, 4000); };
-    const refreshSnapshot = async () => { if (!context.getUser() || !panel || panel.hidden) return; try { snapshot = await loadFriends(); const result = await apiRequest<{ conversations: ChatConversation[] }>("/chat/conversations"); conversations = result.conversations; setUnread(snapshot.incoming.length, conversations.reduce((sum, item) => sum + item.unread, 0)); renderTab(); } catch (error) { const target = content(); if (target) target.textContent = error instanceof Error ? error.message : "Chat is unavailable."; } };
+    const loadGlobalMessages = async (after = true) => {
+        if (!panel || panel.hidden || activeView !== "global") return;
+        try {
+            const suffix = after && globalLastMessageId ? `?after=${encodeURIComponent(globalLastMessageId)}` : "";
+            const response = await apiRequest<{ messages: ChatMessage[] }>(`/chat/global${suffix}`);
+            const previousLength = globalMessages.length;
+            if (after && globalLastMessageId) {
+                const known = new Set(globalMessages.map((message) => message.id));
+                globalMessages = [...globalMessages, ...response.messages.filter((message) => !known.has(message.id))];
+            } else globalMessages = response.messages;
+            if (!after || globalMessages.length !== previousLength) renderConversation(globalMessages, "global");
+        } catch (error) { const target = content(); if (target) target.textContent = error instanceof Error ? error.message : "Global chat is unavailable."; }
+    };
+    const openGlobalChat = async () => {
+        saveCurrentDraft();
+        clearTimers();
+        activeUserId = null; activeName = "Global chat"; activeView = "global"; globalLastMessageId = "";
+        renderConversation(globalMessages, "global");
+        await loadGlobalMessages(false);
+        startSnapshotPolling();
+        pollTimer = window.setInterval(() => { if (!document.hidden) void loadGlobalMessages(true); }, 2500);
+    };
+    const openConversation = async (userId: string, username: string) => { saveCurrentDraft(); clearTimers(); activeUserId = userId; activeName = username; activeView = "conversation"; lastMessageId = ""; conversationMessages = []; pendingAttachment = null; activeTyping = false; await loadMessages(false); startSnapshotPolling(); pollTimer = window.setInterval(() => { if (!document.hidden) void loadMessages(true); }, 2500); };
+    const refreshSnapshot = async () => { if (!context.getUser() || !panel || panel.hidden) return; try { snapshot = await loadFriends(); const result = await apiRequest<{ conversations: ChatConversation[] }>("/chat/conversations"); conversations = result.conversations; setUnread(snapshot.incoming.length, conversations.reduce((sum, item) => sum + item.unread, 0)); if (!activeUserId && activeView !== "global") renderTab(); } catch (error) { const target = content(); if (target && !target.querySelector(".chat-composer textarea")) target.textContent = error instanceof Error ? error.message : "Chat is unavailable."; } };
 
     const mount = () => {
         if (button?.isConnected) return;
@@ -211,8 +346,12 @@ export function createChat(context: ChatContext) {
         const header = document.createElement("header"); header.className = "chat-panel-header";
         const tabs = document.createElement("nav"); tabs.className = "chat-tabs";
         const tabLabels: Record<"global" | "friends" | "battle" | "chats", string> = { global: "Global", friends: "Gang", battle: "Battle", chats: "DMs" };
-        (Object.keys(tabLabels) as (keyof typeof tabLabels)[]).forEach((name) => { const tabButton = document.createElement("button"); tabButton.type = "button"; tabButton.className = "chat-tab"; tabButton.dataset.tab = name; tabButton.textContent = tabLabels[name]; tabButton.addEventListener("click", () => { tab = name; renderTab(); }); tabs.append(tabButton); });
-        const refreshButton = document.createElement("button"); refreshButton.type = "button"; refreshButton.textContent = "\u21bb"; refreshButton.className = "chat-refresh-button"; refreshButton.setAttribute("aria-label", "Refresh chat"); refreshButton.addEventListener("click", () => void refreshSnapshot());
+        (Object.keys(tabLabels) as (keyof typeof tabLabels)[]).forEach((name) => { const tabButton = document.createElement("button"); tabButton.type = "button"; tabButton.className = "chat-tab"; tabButton.dataset.tab = name; tabButton.textContent = tabLabels[name]; tabButton.addEventListener("click", () => { saveCurrentDraft(); clearTimers(); activeUserId = null; if (name !== "global") activeView = null; tab = name; renderTab(); if (name !== "global") startSnapshotPolling(); }); tabs.append(tabButton); });
+        const refreshButton = document.createElement("button"); refreshButton.type = "button"; refreshButton.textContent = "\u21bb"; refreshButton.className = "chat-refresh-button"; refreshButton.setAttribute("aria-label", "Refresh chat"); refreshButton.addEventListener("click", () => {
+            void refreshSnapshot();
+            if (activeView === "global") void loadGlobalMessages(false);
+            else if (activeView === "conversation") void loadMessages(false);
+        });
         const closeButton = document.createElement("button"); closeButton.type = "button"; closeButton.textContent = "\u00d7"; closeButton.className = "chat-close-button"; closeButton.setAttribute("aria-label", "Close chat"); closeButton.addEventListener("click", close); header.append(tabs, refreshButton, closeButton);
         const panelContent = document.createElement("div"); panelContent.className = "chat-panel-content"; panel.append(header, panelContent); document.body.append(button, panel); setUser(context.getUser());
         panel.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); button?.focus(); } });

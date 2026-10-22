@@ -31,7 +31,7 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
         boost: { durationSeconds: 7, movementMultiplier: 1.7 },
         rapid: { durationSeconds: 10 },
         cannon: { durationSeconds: 0 },
-        star: { durationSeconds: 15 },
+        star: { durationSeconds: 15, movementMultiplier: 1.8 },
     },
     powerupRules: {
         oneActiveAtATime: false,

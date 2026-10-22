@@ -5,8 +5,16 @@ import { PROFILE_TITLES, powerupLabels, powerupPrices } from "./game-config";
 import { createTextButton } from "./ui";
 
 let managedPresenceTimer = 0;
+type ManagedUsersOptions = {
+    canEditProfiles?: boolean;
+    canManageRoles?: boolean;
+    canManageSensitive?: boolean;
+};
 
-export async function loadManagedUsers(container: HTMLElement) {
+export async function loadManagedUsers(container: HTMLElement, options: ManagedUsersOptions = {}) {
+    const canEditProfiles = options.canEditProfiles !== false;
+    const canManageRoles = options.canManageRoles !== false;
+    const canManageSensitive = options.canManageSensitive !== false;
     if (managedPresenceTimer) {
         window.clearInterval(managedPresenceTimer);
         managedPresenceTimer = 0;
@@ -15,12 +23,14 @@ export async function loadManagedUsers(container: HTMLElement) {
     const heading = document.createElement("h2");
     heading.textContent = "Player accounts";
     const description = document.createElement("p");
-    description.textContent = "Review player stats and live online status, ban or restore access, manage email and network bans, rename accounts, and edit saved profile data.";
+    description.textContent = canEditProfiles
+        ? "Review player stats and live online status, ban or restore access, manage email and network bans, rename accounts, and edit saved profile data."
+        : "Review live status and suspend accounts or block their network and email. Profile rewards and saved game data are owner-only.";
     const status = document.createElement("small");
     status.className = "tester-error";
     status.setAttribute("role", "status");
     status.textContent = "Loading player accounts...";
-    const refresh = createTextButton("Refresh accounts", () => { void loadManagedUsers(container); });
+    const refresh = createTextButton("Refresh accounts", () => { void loadManagedUsers(container, options); });
     container.append(heading, description, refresh, status);
     try {
         const { users } = await apiRequest<{ users: ManagedUser[] }>("/admin/users");
@@ -45,7 +55,7 @@ export async function loadManagedUsers(container: HTMLElement) {
             presence.textContent = user.isOnline ? "ONLINE NOW" : "OFFLINE";
             card.append(presence);
             const stats = document.createElement("p");
-            stats.textContent = `Asteroids: ${user.progress["orbit-claims"] ?? "0"} / Special: ${user.progress["orbit-special-claims"] ?? "0"} / Prestige: ${user.progress["orbit-prestige"] ?? "0"} / Power-ups: ${user.progress["orbit-powerups"] ?? "{}"}`;
+            stats.textContent = `Asteroids: ${user.progress["orbit-claims"] ?? "0"} / Special: ${user.progress["orbit-special-claims"] ?? "0"} / Enemies defeated: ${user.progress["orbit-enemies-killed"] ?? "0"} / Bosses defeated: ${user.progress["orbit-bosses-killed"] ?? "0"} / Prestige: ${user.progress["orbit-prestige"] ?? "0"} / Power-ups: ${user.progress["orbit-powerups"] ?? "{}"}`;
             const created = document.createElement("small");
             created.textContent = `Created ${new Date(user.createdAt).toLocaleString()}`;
             const recoveryStatus = document.createElement("small");
@@ -98,7 +108,10 @@ export async function loadManagedUsers(container: HTMLElement) {
             roleLabel.append(document.createTextNode("Role"));
             const role = document.createElement("select");
             role.setAttribute("aria-label", `Role for ${user.username}`);
-            [["player", "Player"], ["tester", "Tester"]].forEach(([value, label]) => {
+            const roleOptions = canManageRoles
+                ? [["player", "Player"], ["tester", "Tester"], ["moderator", "Moderator"], ["admin", "Admin"], ["level-maker", "Level maker"]]
+                : [[user.role, user.role.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())]];
+            roleOptions.forEach(([value, label]) => {
                 const option = document.createElement("option");
                 option.value = value;
                 option.textContent = label;
@@ -106,6 +119,7 @@ export async function loadManagedUsers(container: HTMLElement) {
                 role.append(option);
             });
             roleLabel.append(role);
+            role.disabled = !canManageRoles;
             let emailBanButton: HTMLButtonElement | null = null;
             const banLabel = document.createElement("label");
             const banned = document.createElement("input");
@@ -283,12 +297,32 @@ export async function loadManagedUsers(container: HTMLElement) {
             result.setAttribute("role", "status");
             const progressHeading = document.createElement("b");
             progressHeading.textContent = "Advanced saved profile data";
+            if (!canEditProfiles) {
+                username.disabled = true;
+                emailLabel.hidden = true;
+                roleLabel.hidden = true;
+                progression.hidden = true;
+                levelSection.hidden = true;
+                progressHeading.hidden = true;
+                progress.hidden = true;
+                save.textContent = "Save ban status";
+            }
             form.append(username, emailLabel, roleLabel, banLabel, chatMute, progression, levelSection, progressHeading, progress, save, result);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 save.disabled = true;
                 result.textContent = "Saving player profile...";
                 try {
+                    if (!canEditProfiles) {
+                        await apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
+                            method: "PATCH",
+                            body: JSON.stringify({ banned: banned.checked }),
+                        });
+                        user.banned = banned.checked;
+                        result.textContent = `Account ${banned.checked ? "banned" : "restored"}.`;
+                        summary.textContent = `${user.username} / ${banned.checked ? "BANNED" : "ACTIVE"} / ${user.role.toUpperCase()}`;
+                        return;
+                    }
                     const parsedProgress: unknown = JSON.parse(progress.value);
                     if (!parsedProgress || typeof parsedProgress !== "object" || Array.isArray(parsedProgress)) {
                         throw new Error("Saved profile data must be a JSON object.");
@@ -544,7 +578,7 @@ export async function loadManagedUsers(container: HTMLElement) {
                         body: JSON.stringify({ backupId: backupSelect.value }),
                     });
                     actionStatus.textContent = "Profile backup restored.";
-                    void loadManagedUsers(container);
+                    void loadManagedUsers(container, options);
                 } catch (error) {
                     actionStatus.textContent = error instanceof Error ? error.message : "Could not restore the profile backup.";
                 } finally {
@@ -568,6 +602,9 @@ export async function loadManagedUsers(container: HTMLElement) {
                 }
             });
             accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, ipBanButton, emailBanButton, deleteAccount, actionStatus);
+            if (!canManageSensitive) {
+                [wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, deleteAccount].forEach((element) => { element.hidden = true; });
+            }
             card.append(accountActions);
             void loadBackups();
             container.append(card);

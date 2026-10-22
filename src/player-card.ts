@@ -1,6 +1,7 @@
 import type { OnlinePlayerPresence, OnlineUser, PublicPlayerProfile } from "./types";
 import { apiRequest } from "./api";
-import { sendFriendRequest } from "./friends";
+import { loadFriends, sendFriendRequest } from "./friends";
+import { createTitleBadge } from "./title-style";
 
 type PlayerCardContext = {
     getUser: () => OnlineUser | null;
@@ -51,14 +52,37 @@ export function attachPlayerCard(anchor: HTMLElement, presence: Pick<OnlinePlaye
         try { if (!profile) { profile = (await apiRequest<{ player: PublicPlayerProfile }>(`/players/${encodeURIComponent(presence.id)}`)).player; cache.set(presence.id, { profile, expires: Date.now() + 60_000 }); } } catch (error) { if (card) card.textContent = error instanceof Error ? error.message : "Profile unavailable."; return; }
         if (!card || activeAnchor !== anchor) return;
         card.replaceChildren();
-        const title = document.createElement("h3"); title.textContent = `${profile.username}${profile.role === "owner" ? " ★" : profile.role === "tester" ? " T" : ""}`;
+        const roleBadge = profile.role === "owner" ? " ★" : profile.role === "admin" ? " A" : profile.role === "moderator" ? " M" : profile.role === "level-maker" ? " L" : profile.role === "tester" ? " T" : "";
+        const title = document.createElement("h3"); title.textContent = `${profile.username}${roleBadge}`;
         const status = document.createElement("small"); status.textContent = profile.isOnline ? "ONLINE NOW" : "OFFLINE";
-        const profileTitle = document.createElement("p"); profileTitle.textContent = profile.title ? `Title: ${profile.title}` : "No title equipped";
+        const profileTitle = document.createElement("p");
+        if (profile.title) {
+            profileTitle.append(document.createTextNode("Title: "), createTitleBadge(profile.title, profile.titleStyle));
+        } else profileTitle.textContent = "No title equipped";
         card.append(title, status, profileTitle);
-        if (!profile.limited) { const stats = document.createElement("p"); stats.textContent = `${profile.routesCleared} routes · prestige ${profile.prestige} · ${profile.asteroids} asteroids`; card.append(stats); card.append(context.createShipPreview({ shipColor: profile.shipColor, avatar: profile.avatar, skin: profile.skin, trail: profile.trail })); }
+        const stats = document.createElement("p"); stats.textContent = `${profile.routesCleared} routes · prestige ${profile.prestige} · ${profile.asteroids} asteroids · ${profile.enemiesKilled} enemies · ${profile.bossesKilled} bosses`; card.append(stats);
+        card.append(context.createShipPreview({ shipColor: profile.shipColor, avatar: profile.avatar, skin: profile.skin, trail: profile.trail }));
         const user = context.getUser();
         if (!user) card.append(createButton("Sign in to add friends", context.showAccount));
-        else if (user.username.toLowerCase() !== profile.username.toLowerCase()) { const add = createButton("Add friend", async () => { add.disabled = true; try { await sendFriendRequest(profile!.id); add.textContent = "Request sent"; } catch (requestError) { add.disabled = false; add.textContent = requestError instanceof Error ? requestError.message : "Could not add friend."; } }); card.append(add); }
+        else if (user.username.toLowerCase() !== profile.username.toLowerCase()) {
+            const add = createButton("Add friend", async () => {
+                add.disabled = true;
+                try {
+                    const result = await sendFriendRequest(profile!.id);
+                    add.textContent = result.status === "accepted" ? "Friends" : "Request sent";
+                } catch (requestError) { add.disabled = false; add.textContent = requestError instanceof Error ? requestError.message : "Could not add friend."; }
+            });
+            try {
+                const friends = await loadFriends();
+                if (friends.friends.some((friend) => friend.userId === profile.id)) { add.textContent = "Friends"; add.disabled = true; }
+                else if (friends.outgoing.some((request) => request.userId === profile.id)) { add.textContent = "Request sent"; add.disabled = true; }
+                else if (friends.incoming.some((request) => request.userId === profile.id)) {
+                    add.textContent = "Incoming request";
+                    add.disabled = true;
+                }
+            } catch { /* leave the add action available when the friends list is temporarily unavailable */ }
+            card.append(add);
+        }
         card.append(createButton("View full profile", () => context.showProfile(profile!.id)));
         positionCard(anchor);
     };

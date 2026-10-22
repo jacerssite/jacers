@@ -101,6 +101,52 @@ test("main menus, customization, settings, and a mission respond to player actio
   }
 });
 
+test("Backspace returns to the previous in-app screen", async () => {
+  const { dom, document, window, errors } = await createPage();
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(document, "Launch mission");
+    clickButton(document, "Customization");
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { code: "Backspace", key: "Backspace" }));
+    assert.ok(document.querySelector(".level-menu"), "Backspace should return to mission select");
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { code: "Backspace", key: "Backspace" }));
+    assert.ok(document.querySelector(".home-screen"), "Backspace should then return to the home screen");
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("global chat remains usable when the friends snapshot is unavailable", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true };
+  const globalMessages = [];
+  const { dom, document, errors } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "/api/friends": { status: 503, json: { error: "Friends unavailable" } },
+    "/api/chat/global": () => ({ messages: globalMessages }),
+    "POST /api/chat/global": ({ init }) => {
+      const text = JSON.parse(init.body).text;
+      const message = { id: `message-${globalMessages.length + 1}`, conversationId: "global", senderId: "pilot", sender: user.username, role: user.role, text, createdAt: new Date().toISOString() };
+      globalMessages.push(message);
+      return { message };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector(".chat-launch-button:not([hidden])"), "Chat launcher did not appear");
+    document.querySelector(".chat-launch-button").click();
+    await waitFor(() => document.querySelector('.chat-composer textarea'), "Global chat composer did not appear");
+    const input = document.querySelector('.chat-composer textarea');
+    input.value = "hello global";
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    input.form.requestSubmit();
+    await waitFor(() => [...document.querySelectorAll(".chat-message p")].some((item) => item.textContent === "hello global"), "Global chat message did not render");
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("malformed local saves do not stop the game from opening", async () => {
   const { dom, document, errors } = await createPage({}, {
     "orbit-custom-levels": "{}",
@@ -406,7 +452,7 @@ test("registration shows the one-time recovery code and does not save before pro
     "POST /api/auth/register": { user, recoveryCode: "ABCD-2345-EFGH-6789" },
     "GET /api/account/progress": { status: 503, json: { error: "Progress temporarily unavailable" } },
     "PUT /api/account/progress": () => { progressWrites++; return { progress: {} }; },
-  });
+  }, { "orbit-claims": "88", "orbit-special-claims": "12", "orbit-skin": "4" });
   try {
     await delay(30);
     clickButton(document, "Account");
@@ -416,6 +462,9 @@ test("registration shows the one-time recovery code and does not save before pro
     document.querySelector(".account-form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     await waitFor(() => document.querySelector(".recovery-code-display"), "One-time recovery code was not shown");
     assert.equal(document.querySelector(".recovery-code-display").textContent, "ABCD-2345-EFGH-6789");
+    assert.equal(window.localStorage.getItem("orbit-claims"), null);
+    assert.equal(window.localStorage.getItem("orbit-special-claims"), null);
+    assert.equal(window.localStorage.getItem("orbit-skin"), null);
     await delay(2600);
     assert.equal(progressWrites, 0);
   } finally {
@@ -492,7 +541,10 @@ test("control center keeps sections separate and preserves drafts while switchin
     "/api/account/progress": { progress: {} },
     "PUT /api/game-config": ({ init }) => { savedConfig = JSON.parse(init.body).config; return { config: savedConfig }; },
     "PUT /api/settings/roulette-tiers": ({ init }) => { rouletteWrites++; savedRoulette = JSON.parse(init.body).tiers; return { rouletteTiers: savedRoulette }; },
-    "/api/admin/codes": () => { codeLoads++; return { codes: [] }; },
+    "/api/admin/codes": () => {
+      codeLoads++;
+      return { codes: [{ id: "code-1", maxUses: null, perPlayerLimit: 1, uses: 2, reward: { type: "claims", amount: 25 }, enabled: true, expiresAt: null }] };
+    },
     "/api/admin/users": { users: [] },
     "/api/admin/messages": { messages: [] },
   });
@@ -559,8 +611,13 @@ test("control center keeps sections separate and preserves drafts while switchin
 
     clickButton(document, "Reward codes");
     await waitFor(() => document.querySelector('.tester-player-management:not([hidden]) input[type="text"]'), "Code tools did not load");
+    await waitFor(() => [...document.querySelectorAll("button")].some((button) => button.textContent.trim() === "Edit"), "Code list did not load");
     const codeInput = document.querySelector('.tester-player-management:not([hidden]) input[type="text"]');
     codeInput.value = "DRAFT-CODE";
+    clickButton(document, "Edit");
+    assert.ok(document.querySelector(".redemption-code-edit"));
+    assert.equal(document.querySelector('.redemption-code-edit [aria-label="Unlimited total uses"]').checked, true);
+    clickButton(document, "Cancel");
     clickButton(document, "Messages");
     await waitFor(() => document.querySelector('[aria-label="Message title"]'), "Message tools did not load");
     clickButton(document, "Reward codes");

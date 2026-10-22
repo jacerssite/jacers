@@ -2,8 +2,9 @@ import type { OnlineLeaderboardEntry, OnlinePlayerPresence, OnlineSettings, Onli
 import { apiRequest } from "./api";
 import { levels } from "./levels";
 import { createTextButton } from "./ui";
-import { loadFriends, sendFriendRequest, acceptFriendRequest } from "./friends";
+import { loadFriends, sendFriendRequest } from "./friends";
 import { attachPlayerCard } from "./player-card";
+import { createTitleBadge } from "./title-style";
 
 type LeaderboardContext = {
     showAccount: () => void;
@@ -76,7 +77,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                         name.addEventListener("click", () => void showLeaderboardPlayerProfile(player.id, showLeaderboard));
                         attachPlayerCard(name, player, { getUser: () => loadedUser, createShipPreview, showProfile: (id) => void showLeaderboardPlayerProfile(id, showLeaderboard), showAccount });
                     }
-                    name.className = `online-player-name ${player.role === "owner" ? "online-owner" : player.role === "tester" ? "online-tester" : ""}`;
+                    name.className = `online-player-name ${player.role === "owner" ? "online-owner" : player.role === "admin" ? "online-admin" : player.role === "moderator" ? "online-moderator" : player.role === "level-maker" ? "online-level-maker" : player.role === "tester" ? "online-tester" : ""}`;
                     const badge = getRoleBadge(player.role ?? "player");
                     name.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
                     onlinePlayers.append(name);
@@ -99,7 +100,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                 return;
             }
             void refreshOnlinePlayers();
-        }, 30_000);
+        }, 5_000);
 
         let latestLoad = 0;
         const loadEntries = async () => {
@@ -180,7 +181,7 @@ export function createLeaderboard(context: LeaderboardContext) {
     }
 
     function getRoleBadge(role: OnlineUser["role"]) {
-        return role === "owner" ? "★" : role === "tester" ? "T" : "";
+        return role === "owner" ? "★" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : "";
     }
 
     async function showLeaderboardPlayerProfile(playerId: string, returnTo: () => void) {
@@ -202,10 +203,7 @@ export function createLeaderboard(context: LeaderboardContext) {
             const title = document.createElement("h2");
             title.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
             if (player.title) {
-                const titleBadge = document.createElement("span");
-                titleBadge.className = "pilot-title-badge";
-                titleBadge.textContent = player.title;
-                title.append(titleBadge);
+                title.append(createTitleBadge(player.title, player.titleStyle));
             }
             const presence = document.createElement("p");
             presence.className = `profile-presence${player.isOnline ? " is-online" : ""}`;
@@ -218,6 +216,8 @@ export function createLeaderboard(context: LeaderboardContext) {
             [
                 ["Asteroids", String(player.asteroids)],
                 ["Special asteroids", String(player.specialAsteroids)],
+                ["Enemies defeated", String(player.enemiesKilled)],
+                ["Bosses defeated", String(player.bossesKilled)],
                 ["Prestige", String(player.prestige)],
                 ["Routes cleared", String(player.routesCleared)],
             ].forEach(([label, value]) => {
@@ -227,16 +227,13 @@ export function createLeaderboard(context: LeaderboardContext) {
                 item.querySelector("b")!.textContent = value;
                 stats.append(item);
             });
-            let character: HTMLElement | null = null;
-            if (!player.limited) {
-                character = createShipPreview({
-                    shipColor: player.shipColor!,
-                    avatar: player.avatar!,
-                    skin: player.skin!,
-                    trail: player.trail!,
-                });
-                character.classList.add("profile-character-card");
-            }
+            const character = createShipPreview({
+                shipColor: player.shipColor!,
+                avatar: player.avatar!,
+                skin: player.skin!,
+                trail: player.trail!,
+            });
+            character.classList.add("profile-character-card");
             const friendAction = document.createElement("div");
             friendAction.className = "profile-friend-action";
             if (!currentUserName()) {
@@ -244,20 +241,19 @@ export function createLeaderboard(context: LeaderboardContext) {
             } else {
                 const friendButton = createTextButton("Add friend", async () => {
                     friendButton.disabled = true;
-                    try { await sendFriendRequest(player.id); friendButton.textContent = "Request sent"; }
+                    try { const result = await sendFriendRequest(player.id); friendButton.textContent = result.status === "accepted" ? "Friends" : "Request sent"; }
                     catch (error) { friendButton.disabled = false; friendButton.textContent = error instanceof Error ? error.message : "Could not add friend."; }
                 });
                 try {
                     const friends = await loadFriends();
                     if (friends.friends.some((friend) => friend.userId === player.id)) { friendButton.textContent = "Friends"; friendButton.disabled = true; }
                     else if (friends.outgoing.some((request) => request.userId === player.id)) { friendButton.textContent = "Request sent"; }
-                    else if (friends.incoming.some((request) => request.userId === player.id)) { friendButton.textContent = "Accept request"; friendButton.onclick = async () => { const request = friends.incoming.find((item) => item.userId === player.id); if (request) await acceptFriendRequest(request.id); friendButton.textContent = "Friends"; friendButton.disabled = true; }; }
+                    else if (friends.incoming.some((request) => request.userId === player.id)) { friendButton.textContent = "Incoming request"; friendButton.disabled = true; }
                 } catch { /* signed-in but offline API: leave the add action available */ }
                 if (player.username.toLowerCase() === currentUserName()?.toLowerCase()) friendButton.remove();
                 friendAction.append(friendButton);
             }
-            if (player.limited) { const limited = document.createElement("small"); limited.textContent = "This owner has no public run yet; stats are hidden."; dashboard.append(limited); }
-            dashboard.append(title, presence, friendAction, ...(player.limited ? [] : [stats]), ...(character ? [character] : []));
+            dashboard.append(title, presence, friendAction, stats, character);
             menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);
             const presenceTimer = window.setInterval(() => {
                 if (!menu.isConnected) {
@@ -275,7 +271,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                         presence.textContent = "Online status could not be refreshed.";
                     }
                 });
-            }, 30_000);
+            }, 5_000);
         } catch (error) {
             status.textContent = error instanceof Error && error.message.includes("404")
                 ? "That player profile could not be found."

@@ -60,7 +60,7 @@ export function createLevelMaker(context: LevelMakerContext) {
         // Start with a compact grid, then grow the timeline when the author
         // extends the route so the initial editor stays easy to scan.
         let gridColumns = Math.max(24, routeLength);
-        menu.innerHTML = `<p class="eyebrow">JACER WORKSHOP / LEVEL EDITOR</p><h1>${editingBuiltIn ? "Edit a" : "Build a"} <em>route</em></h1><p class="menu-copy">Playtest your draft before publishing. Built-in route edits are shared with every player after an owner saves them.</p>`;
+        menu.innerHTML = `<p class="eyebrow">JACER WORKSHOP / LEVEL EDITOR</p><h1>${editingBuiltIn ? "Edit a" : "Build a"} <em>route</em></h1><p class="menu-copy">Playtest your draft before publishing. Built-in route edits are shared with every player after an authorized admin or owner saves them.</p>`;
         const details = document.createElement("div");
         details.className = "maker-details";
         const nameInput = document.createElement("input");
@@ -504,7 +504,7 @@ export function createLevelMaker(context: LevelMakerContext) {
         });
         updateFlippedTab();
         toolbar.append(areaState, normalTab, flippedTab);
-        menu.append(details, lengthControl, toolbar, gridViewport, palette, playtest, save, saveStatus, createTextButton("Back to tester", () => showTesterPanel()));
+        menu.append(details, lengthControl, toolbar, gridViewport, palette, playtest, save, saveStatus, createTextButton("Back to control center", () => showTesterPanel()));
         document.body.replaceChildren(menu);
     }
 

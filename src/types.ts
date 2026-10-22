@@ -39,14 +39,15 @@ export type UnflippedRouteSnapshot = {
     playerX: number;
 };
 export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; prestigeRequirement?: number; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
-export type ControlAction = "left" | "right" | "jump" | "down" | "shoot";
+export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "restart" | "back" | "confirm";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
-export type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean; allowFriendRequests?: boolean };
+export type UserRole = "player" | "tester" | "moderator" | "admin" | "level-maker" | "owner";
+export type OnlineUser = { username: string; role: UserRole; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean; allowFriendRequests?: boolean; readReceipts?: boolean; typingIndicators?: boolean; humanVerified?: boolean };
 export type ManagedUser = {
     id: string;
     username: string;
-    role: "player" | "tester" | "owner";
+    role: UserRole;
     banned: boolean;
     chatMuted?: boolean;
     lastSeenIpAvailable?: boolean;
@@ -72,7 +73,9 @@ export type ProfileTitleRequirement = {
     type: "routes" | "golden" | "prestige" | "roulette" | "locked";
     amount: number;
 };
-export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement };
+export type TitleAnimation = "none" | "pulse" | "shimmer" | "rainbow";
+export type ProfileTitleStyle = { color?: string; animation?: TitleAnimation };
+export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement } & ProfileTitleStyle;
 export type CodeReward =
     | { type: "claims" | "specialClaims"; amount: number }
     | { type: "powerup"; kind: PowerupKind; amount: number }
@@ -84,6 +87,8 @@ export type PublicPlayerProfile = {
     role: OnlineUser["role"];
     asteroids: number;
     specialAsteroids: number;
+    enemiesKilled: number;
+    bossesKilled: number;
     prestige: number;
     routesCleared: number;
     shipColor: string;
@@ -91,13 +96,14 @@ export type PublicPlayerProfile = {
     skin: number;
     trail: number;
     title: string;
+    titleStyle?: ProfileTitleStyle | null;
     isOnline: boolean;
     limited?: boolean;
 };
 export type FriendEntry = { userId: string; username: string; role: OnlineUser["role"]; title: string; isOnline: boolean; unread: number; createdAt?: string };
 export type FriendRequest = { id: string; userId: string; username: string; role: OnlineUser["role"]; title: string; createdAt: string; direction: "incoming" | "outgoing" };
 export type ChatAttachment = { kind: "image" | "gif" | "video"; url: string; contentType: string; bytes: number };
-export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; createdAt: string; deletedAt?: string | null };
+export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; createdAt: string; readAt?: string | null; deletedAt?: string | null };
 export type ChatConversation = { id: string; userId: string; username: string; role: OnlineUser["role"]; isOnline: boolean; lastMessagePreview: string; lastMessageAt: string | null; unread: number };
 export type RouletteTier = {
     buyIn: 5 | 10 | 25;
@@ -124,7 +130,7 @@ export type GameConfig = {
         boost: { durationSeconds: number; movementMultiplier: number };
         rapid: { durationSeconds: number };
         cannon: { durationSeconds: number };
-        star: { durationSeconds: number };
+        star: { durationSeconds: number; movementMultiplier?: number };
     };
     powerupRules: {
         oneActiveAtATime: boolean;

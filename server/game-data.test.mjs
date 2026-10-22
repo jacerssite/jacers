@@ -12,6 +12,7 @@ import {
   formatRecoveryCode,
   normalizeRecoveryCode,
   validateCodeReward,
+  validateProfileTitles,
   getEarnedProfileTitle,
   PROFILE_TITLE_MILESTONES,
   validatePlayerProgress,
@@ -20,7 +21,20 @@ import {
   MAX_UPDATE_LOG_BODY_LENGTH,
   MAX_UPDATE_LOG_BYTES,
   validateWorkshopLevel,
+  USER_ROLES,
+  hasRolePermission,
 } from "./game-data.mjs";
+
+test("staff roles keep permissions separated", () => {
+  assert.deepEqual(USER_ROLES, ["owner", "admin", "moderator", "level-maker", "tester", "player"]);
+  assert.equal(hasRolePermission("owner", "anything"), true);
+  assert.equal(hasRolePermission("admin", "content:codes"), true);
+  assert.equal(hasRolePermission("admin", "game-config"), false);
+  assert.equal(hasRolePermission("moderator", "moderation"), true);
+  assert.equal(hasRolePermission("moderator", "content:codes"), false);
+  assert.equal(hasRolePermission("level-maker", "levels:workshop"), true);
+  assert.equal(hasRolePermission("level-maker", "moderation"), false);
+});
 
 test("username normalization is case-insensitive and validates the public format", () => {
   assert.deepEqual(normalizeUsername("Pilot_7"), { display: "Pilot_7", normalized: "pilot_7" });
@@ -42,6 +56,13 @@ test("profile titles unlock at route milestones and require an earned selected t
   assert.equal(getEarnedProfileTitle(10, "not-a-title"), "");
   const lastTitle = PROFILE_TITLE_MILESTONES.at(-1);
   assert.equal(getEarnedProfileTitle(lastTitle.routes, lastTitle.id), lastTitle.name);
+});
+
+test("profile titles accept bounded colors and animations", () => {
+  const titles = [{ id: "aurora", name: "Aurora", routes: 1, color: "#12AbEf", animation: "shimmer", requirement: { type: "routes", amount: 1 } }];
+  assert.deepEqual(validateProfileTitles(titles), [{ ...titles[0], color: "#12abef" }]);
+  assert.equal(validateProfileTitles([{ ...titles[0], color: "red" }]), null);
+  assert.equal(validateProfileTitles([{ ...titles[0], animation: "spin" }]), null);
 });
 
 test("recovery codes use the unambiguous alphabet and display in four groups", () => {
@@ -146,6 +167,9 @@ test("shared game configuration validates world-specific odds and bounded power-
   const invalidEffect = structuredClone(DEFAULT_GAME_CONFIG);
   invalidEffect.powerupEffects.boost.movementMultiplier = 8;
   assert.equal(isValidGameConfig(invalidEffect), false);
+  const invalidStarEffect = structuredClone(DEFAULT_GAME_CONFIG);
+  invalidStarEffect.powerupEffects.star.movementMultiplier = 0.5;
+  assert.equal(isValidGameConfig(invalidStarEffect), false);
 });
 
 test("workshop levels validate tile bounds and discard unrecognized fields", () => {

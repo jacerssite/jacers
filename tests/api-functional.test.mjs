@@ -18,6 +18,8 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
   let invalidProgress = false;
   let appearOffline = true;
   const settingsById = new Map();
+  const runProofRecords = [];
+  const codeRecords = [];
   let run = { _id: entryId, userId, levelName: "Quiet Orbit", timeMs: 20000, abilities: [], achievedAt: new Date() };
   const generic = {
     async dropIndex() { throw Object.assign(new Error("missing collection"), { code: 26 }); },
@@ -76,6 +78,40 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     },
   };
   const settingHistory = { ...generic, async insertOne() {} };
+  const codes = {
+    ...generic,
+    async insertOne(document) {
+      const record = { ...document, _id: new ObjectId() };
+      codeRecords.push(record);
+      return { insertedId: record._id };
+    },
+    async findOne(filter) {
+      return codeRecords.find((code) => !filter._id || code._id.toString() === filter._id.toString()) ?? null;
+    },
+    async updateOne(filter, update) {
+      const record = await this.findOne(filter);
+      if (!record) return { matchedCount: 0 };
+      Object.assign(record, update.$set ?? {});
+      return { matchedCount: 1 };
+    },
+  };
+  const runProofs = {
+    ...generic,
+    async insertOne(document) { runProofRecords.push(document); return { insertedId: document._id }; },
+    async findOne(filter) {
+      return runProofRecords.find((proof) => proof._id === filter._id
+        && proof.userId === filter.userId
+        && proof.levelName === filter.levelName
+        && proof.consumedAt === filter.consumedAt
+        && proof.expiresAt > filter.expiresAt.$gt) ?? null;
+    },
+    async updateOne(filter, update) {
+      const proof = runProofRecords.find((item) => item._id === filter._id && item.userId === filter.userId && item.consumedAt === filter.consumedAt);
+      if (!proof) return { matchedCount: 0 };
+      Object.assign(proof, update.$set ?? {});
+      return { matchedCount: 1 };
+    },
+  };
   const originalConnect = MongoClient.prototype.connect;
   const originalDb = MongoClient.prototype.db;
   MongoClient.prototype.connect = async function () { return this; };
@@ -87,6 +123,8 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
       if (name === "player_progress") return progress;
       if (name === "game_settings") return settings;
       if (name === "setting_history") return settingHistory;
+      if (name === "redemption_codes") return codes;
+      if (name === "run_proofs") return runProofs;
       return generic;
     } };
   };
@@ -112,6 +150,25 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     const ownerUsers = await fetch(`${origin}/api/router?_route=admin/users`, { headers: { cookie } });
     assert.equal(ownerUsers.status, 200);
     assert.equal((await ownerUsers.json()).users[0].isOnline, false);
+    role = "owner";
+    const createdCodeResponse = await fetch(`${origin}/api/router?_route=admin/codes`, {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ code: "EDIT-ME1", maxUses: 10, perPlayerLimit: 1, reward: { type: "claims", amount: 25 } }),
+    });
+    assert.equal(createdCodeResponse.status, 201);
+    const createdCode = await createdCodeResponse.json();
+    const editedCodeResponse = await fetch(`${origin}/api/router?_route=admin/codes/${createdCode.code.id}`, {
+      method: "PATCH",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ maxUses: null, perPlayerLimit: 2, reward: { type: "specialClaims", amount: 4 }, enabled: false, expiresAt: null }),
+    });
+    assert.equal(editedCodeResponse.status, 200);
+    const editedCode = await editedCodeResponse.json();
+    assert.equal(editedCode.code.maxUses, null);
+    assert.equal(editedCode.code.perPlayerLimit, 2);
+    assert.deepEqual(editedCode.code.reward, { type: "specialClaims", amount: 4 });
+    assert.equal(editedCode.code.enabled, false);
     appearOffline = false;
     const visibleProfile = await fetch(`${origin}/api/router?_route=players/${userId.toHexString()}`);
     assert.equal((await visibleProfile.json()).player.isOnline, true);
@@ -134,6 +191,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     assert.equal(oversizedLogResponse.status, 400);
     assert.deepEqual(settingsById.get("update_log").value, log);
 
+    role = "player";
     invalidProgress = true;
     const invalidResponse = await fetch(`${origin}/api/router?_route=account/progress`, { headers: { cookie } });
     assert.equal(invalidResponse.status, 409);
@@ -146,10 +204,17 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
       body: JSON.stringify({ entries: [] }),
     });
     assert.equal(unauthorizedLogResponse.status, 403);
+    const runStartResponse = await fetch(`${origin}/api/router?_route=runs/start`, {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ level: "Quiet Orbit" }),
+    });
+    assert.equal(runStartResponse.status, 201);
+    const runProof = await runStartResponse.json();
     const runResponse = await fetch(`${origin}/api/router?_route=runs`, {
       method: "POST",
       headers: { cookie, origin, "content-type": "application/json" },
-      body: JSON.stringify({ level: "Quiet Orbit", timeMs: 15000, abilities: [] }),
+      body: JSON.stringify({ level: "Quiet Orbit", timeMs: 15000, abilities: [], proofId: runProof.runId }),
     });
     assert.equal(runResponse.status, 201);
     const result = await runResponse.json();
