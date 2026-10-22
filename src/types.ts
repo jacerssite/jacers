@@ -49,6 +49,8 @@ export type ManagedUser = {
     role: "player" | "tester" | "owner";
     banned: boolean;
     chatMuted?: boolean;
+    lastSeenIpAvailable?: boolean;
+    ipBanned?: boolean;
     isOnline: boolean;
     createdAt: string;
     usernameChangedAt: string | null;

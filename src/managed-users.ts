@@ -58,7 +58,13 @@ export async function loadManagedUsers(container: HTMLElement) {
             lockStatus.textContent = user.recoveryLockState === "locked" && user.recoveryLockedUntil
                 ? `Recovery locked until ${new Date(user.recoveryLockedUntil).toLocaleString()} (${user.recoveryAttempts} attempts)`
                 : `Recovery open (${user.recoveryAttempts} attempts)`;
-            card.append(stats, created, recoveryStatus, passwordStatus, lockStatus);
+            const ipStatus = document.createElement("small");
+            ipStatus.textContent = user.ipBanned
+                ? "Latest login network is IP-banned (the address is hidden for privacy)."
+                : user.lastSeenIpAvailable
+                    ? "Latest login network is recorded (the address is hidden for privacy)."
+                    : "No login network has been recorded yet.";
+            card.append(stats, created, recoveryStatus, passwordStatus, lockStatus, ipStatus);
             if (user.role === "owner") {
                 const protectedMessage = document.createElement("small");
                 protectedMessage.textContent = "Owner accounts are protected from player management.";
@@ -380,6 +386,33 @@ export async function loadManagedUsers(container: HTMLElement) {
                     clearRecoveryLock.disabled = false;
                 }
             });
+            const ipBanButton = createTextButton(user.ipBanned ? "Unban latest login network" : "Ban latest login network", () => {});
+            ipBanButton.addEventListener("click", async () => {
+                if (!user.lastSeenIpAvailable) {
+                    actionStatus.textContent = "This account has not logged in from a network yet.";
+                    return;
+                }
+                const banning = !user.ipBanned;
+                const warning = banning
+                    ? "This bans the latest network address for every account using it (shared Wi-Fi/VPNs can affect multiple players). Continue?"
+                    : "Allow logins again from this account's latest network address?";
+                if (!window.confirm(warning)) return;
+                ipBanButton.disabled = true;
+                actionStatus.textContent = banning ? "Banning latest login network..." : "Removing network ban...";
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/ip-ban`, { method: banning ? "POST" : "DELETE", ...(banning ? { body: JSON.stringify({ reason: "Owner moderation" }) } : {}) });
+                    user.ipBanned = banning;
+                    ipBanButton.textContent = banning ? "Unban latest login network" : "Ban latest login network";
+                    ipStatus.textContent = banning
+                        ? "Latest login network is IP-banned (the address is hidden for privacy)."
+                        : "Latest login network is recorded (the address is hidden for privacy).";
+                    actionStatus.textContent = banning ? "Network banned and active sessions signed out." : "Network ban removed.";
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not update the network ban.";
+                } finally {
+                    ipBanButton.disabled = false;
+                }
+            });
             const wipeTitle = document.createElement("b");
             wipeTitle.textContent = "Selective profile wipe";
             const wipeOptions = document.createElement("div");
@@ -462,7 +495,23 @@ export async function loadManagedUsers(container: HTMLElement) {
                     restoreButton.disabled = false;
                 }
             });
-            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, actionStatus);
+            const deleteAccount = createTextButton("Delete account permanently", () => {});
+            deleteAccount.classList.add("danger");
+            deleteAccount.addEventListener("click", async () => {
+                if (!window.confirm(`Permanently delete ${user.username}? This removes the account, progress, leaderboard entries, messages, and backups.`)
+                    || window.prompt(`Type ${user.username} to confirm account deletion:`) !== user.username) return;
+                deleteAccount.disabled = true;
+                actionStatus.textContent = "Deleting account...";
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+                    card.remove();
+                    status.textContent = `Deleted account ${user.username}.`;
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not delete this account.";
+                    deleteAccount.disabled = false;
+                }
+            });
+            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, ipBanButton, deleteAccount, actionStatus);
             card.append(accountActions);
             void loadBackups();
             container.append(card);

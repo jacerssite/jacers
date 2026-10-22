@@ -890,6 +890,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-settings-tabs .text-button.selected { border-color: #f6c46e; color: #f6c46e; }
 .tester-settings-category { display: grid; gap: 9px; width: min(850px, 94vw); margin: 0 auto 14px; padding: 14px; border: 1px solid #385267; background: #101b2b88; }
 .tester-player-actions { display: grid; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid #385267; }
+.tester-player-actions .text-button.danger { border-color: #ed7657; color: #ed7657; }
 .tester-player-actions > b { color: #f6c46e; font: .7rem 'DM Mono', monospace; }
 .tester-player-actions select, .tester-player-form select, .account-profile-form select, .account-profile-form textarea { width: 100%; min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
 .tester-player-actions .tester-player-unlocks { display: grid; gap: 6px; }

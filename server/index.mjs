@@ -345,10 +345,33 @@ function hashSessionToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+// Store only a one-way fingerprint of a client IP.  This lets owners enforce
+// network bans without exposing raw addresses in the owner panel or user data.
+function normalizeClientIp(value) {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("::ffff:") ? normalized.slice(7) : normalized;
+}
+
+function hashClientIp(value) {
+  const normalized = normalizeClientIp(value);
+  return normalized ? crypto.createHash("sha256").update(normalized).digest("hex") : null;
+}
+
+async function isIpBanned(db, ipHash) {
+  if (!ipHash) return false;
+  const bans = db.collection("ip_bans");
+  if (typeof bans.findOne !== "function") return false;
+  const ban = await bans.findOne({ _id: ipHash, active: { $ne: false } });
+  return Boolean(ban);
+}
+
 async function getAuthenticatedUser(req) {
   const token = getCookie(req, cookieName);
   if (!token || token.length > 100) return null;
   const db = await getDatabase();
+  const ipHash = hashClientIp(req.ip);
+  if (await isIpBanned(db, ipHash)) return null;
   const session = await db.collection("user_sessions").findOne({
     tokenHash: hashSessionToken(token),
     expiresAt: { $gt: new Date() },
@@ -402,7 +425,7 @@ async function requireStaff(req, res, next) {
   }
 }
 
-async function createSession(userId, res) {
+async function createSession(userId, res, ipHash = null) {
   const token = crypto.randomBytes(32).toString("base64url");
   const now = new Date();
   const expiresAt = new Date(Date.now() + sessionLifetimeMs);
@@ -414,6 +437,7 @@ async function createSession(userId, res) {
     expiresAt,
     createdAt: now,
     lastSeenAt: now,
+    ...(ipHash ? { ipHash } : {}),
   });
   setSessionCookie(res, token);
 }
@@ -495,12 +519,17 @@ async function accountHandler(req, res, next, mode) {
       return res.status(400).json({ error: "Use a 3-20 character username (letters, numbers, underscore) and a 10-128 character password." });
     }
 
+    const db = await getDatabase();
+    const ipHash = hashClientIp(req.ip);
+    if (await isIpBanned(db, ipHash)) {
+      return res.status(403).json({ error: "This device network has been banned. Contact the owner for help." });
+    }
+
     if (mode === "register") {
       const passwordHash = await argon2.hash(credentials.password, passwordHashOptions);
       const code = recoveryCode();
       const recoveryCodeCreatedAt = new Date();
       let user;
-      const db = await getDatabase();
       try {
         const created = await db.collection("users").insertOne({
           username: username.display,
@@ -513,6 +542,7 @@ async function accountHandler(req, res, next, mode) {
           appearOffline: false,
           leaderboardOptIn: true,
           allowFriendRequests: true,
+          ...(ipHash ? { lastSeenIpHash: ipHash } : {}),
           createdAt: new Date(),
         });
         user = { _id: created.insertedId, username: username.display, role: "player" };
@@ -520,7 +550,7 @@ async function accountHandler(req, res, next, mode) {
         if (error?.code === 11000) return res.status(409).json({ error: "That username is already taken." });
         throw error;
       }
-      await createSession(user._id, res);
+      await createSession(user._id, res, ipHash);
       noStore(res);
       return res.status(201).json({
         user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true },
@@ -528,13 +558,12 @@ async function accountHandler(req, res, next, mode) {
       });
     }
 
-    const db = await getDatabase();
     const user = await db.collection("users").findOne({ usernameNormalized: username.normalized });
     const valid = await argon2.verify(user?.passwordHash ?? dummyPasswordHash, credentials.password);
     if (!valid || !user) return res.status(401).json({ error: "Username or password is incorrect." });
     if (user.banned) return res.status(403).json({ error: "This account has been banned. Contact the owner for help." });
-    await db.collection("users").updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
-    await createSession(user._id, res);
+    await db.collection("users").updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date(), ...(ipHash ? { lastSeenIpHash: ipHash } : {}) } });
+    await createSession(user._id, res, ipHash);
     return res.json({
       user: {
         username: user.username,
@@ -564,6 +593,9 @@ app.post("/api/auth/recover", requireSameOrigin, recoveryLimiter, async (req, re
       return res.status(400).json({ error: "Provide a valid username and a 10-128 character new password." });
     }
     const db = await getDatabase();
+    if (await isIpBanned(db, hashClientIp(req.ip))) {
+      return res.status(403).json({ error: "This device network has been banned. Contact the owner for help." });
+    }
     const attempts = db.collection("account_recovery_attempts");
     const now = new Date();
     let lock = await attempts.findOne({ _id: username.normalized });
@@ -1401,6 +1433,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         createdAt: 1,
         usernameChangedAt: 1,
         lastLoginAt: 1,
+        lastSeenIpHash: 1,
         passwordChangedAt: 1,
         wipeVersion: 1,
         recoveryCodeHash: 1,
@@ -1410,6 +1443,12 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
       .limit(200)
       .toArray();
     const onlineUserIds = await getActiveUserIds(db, users.map((user) => user._id));
+    const ipHashes = users.map((user) => user.lastSeenIpHash).filter((hash) => typeof hash === "string" && hash.length > 0);
+    const ipBanCollection = db.collection("ip_bans");
+    const activeIpBans = ipHashes.length && typeof ipBanCollection.find === "function"
+      ? await ipBanCollection.find({ _id: { $in: ipHashes }, active: { $ne: false } }, { projection: { _id: 1 } }).toArray()
+      : [];
+    const activeIpBanHashes = new Set(activeIpBans.map((ban) => String(ban._id)));
     const progressRecords = await db.collection("player_progress")
       .find({ _id: { $in: users.map((user) => user._id) } }, { projection: { data: 1 } })
       .toArray();
@@ -1437,6 +1476,8 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         createdAt: user.createdAt,
         usernameChangedAt: user.usernameChangedAt ?? null,
         lastLoginAt: user.lastLoginAt ?? null,
+        lastSeenIpAvailable: Boolean(user.lastSeenIpHash),
+        ipBanned: Boolean(user.lastSeenIpHash && activeIpBanHashes.has(user.lastSeenIpHash)),
         passwordChangedAt: user.passwordChangedAt ?? null,
         wipeVersion: user.wipeVersion ?? 0,
         progress: progressByUser.get(user._id.toHexString()) ?? {},
@@ -1447,6 +1488,101 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         recoveryLockState: recoveryByUsername.get(user.usernameNormalized)?.lockedUntil > new Date() ? "locked" : "clear",
       })),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function getTargetManagedUser(db, rawId) {
+  const userId = validObjectId(rawId);
+  if (!userId) return { error: { status: 400, message: "Invalid account." } };
+  const user = await db.collection("users").findOne(
+    { _id: userId },
+    { projection: { role: 1, username: 1, usernameNormalized: 1, lastSeenIpHash: 1 } },
+  );
+  if (!user) return { error: { status: 404, message: "Account not found." } };
+  if (user.role === "owner") return { error: { status: 403, message: "Owner accounts are protected from player management." } };
+  return { user, userId };
+}
+
+app.post("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    if (!target.user.lastSeenIpHash) return res.status(400).json({ error: "This account has no recorded login network yet." });
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 200) : "Owner network ban";
+    const now = new Date();
+    await db.collection("ip_bans").updateOne(
+      { _id: target.user.lastSeenIpHash },
+      { $set: { active: true, reason: reason || "Owner network ban", bannedAt: now, bannedBy: req.user.id }, $setOnInsert: { createdAt: now } },
+      { upsert: true },
+    );
+    const affectedUsers = typeof db.collection("users").find === "function"
+      ? await db.collection("users").find({ lastSeenIpHash: target.user.lastSeenIpHash }, { projection: { _id: 1 } }).toArray()
+      : [];
+    const affectedIds = affectedUsers.map((user) => user._id);
+    await db.collection("user_sessions").deleteMany({ $or: [{ ipHash: target.user.lastSeenIpHash }, ...(affectedIds.length ? [{ userId: { $in: affectedIds } }] : [])] });
+    await recordSecurityEvent(db, { type: "ip_ban", actorId: req.user.id, targetUserId: target.userId, ipHash: target.user.lastSeenIpHash, reason: reason || "Owner network ban" });
+    res.json({ ok: true, ipBanned: true, affectedAccounts: affectedIds.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    if (!target.user.lastSeenIpHash) return res.status(400).json({ error: "This account has no recorded login network yet." });
+    await db.collection("ip_bans").updateOne(
+      { _id: target.user.lastSeenIpHash },
+      { $set: { active: false, unbannedAt: new Date(), unbannedBy: req.user.id } },
+    );
+    await recordSecurityEvent(db, { type: "ip_unban", actorId: req.user.id, targetUserId: target.userId, ipHash: target.user.lastSeenIpHash });
+    res.json({ ok: true, ipBanned: false });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    const { user, userId } = target;
+    const conversations = typeof db.collection("conversations").find === "function"
+      ? await db.collection("conversations").find({ userIds: userId }, { projection: { pairKey: 1 } }).toArray()
+      : [];
+    const conversationKeys = conversations.map((conversation) => conversation.pairKey).filter((key) => typeof key === "string");
+    const messages = typeof db.collection("chat_messages").find === "function"
+      ? await db.collection("chat_messages").find({ $or: [{ senderId: userId }, { conversationId: { $in: conversationKeys } }] }, { projection: { _id: 1 } }).toArray()
+      : [];
+    const messageIds = messages.map((message) => message._id);
+
+    await Promise.all([
+      db.collection("user_sessions").deleteMany({ userId }),
+      db.collection("player_progress").deleteOne({ _id: userId }),
+      db.collection("leaderboard_entries").deleteMany({ userId }),
+      db.collection("profile_backups").deleteMany({ userId }),
+      db.collection("code_redemptions").deleteMany({ userId }),
+      db.collection("code_redemption_logs").deleteMany({ userId }),
+      db.collection("owner_messages").deleteMany({ userId }),
+      db.collection("message_deliveries").deleteMany({ userId }),
+      db.collection("friendships").deleteMany({ userIds: userId }),
+      db.collection("user_blocks").deleteMany({ $or: [{ blockerId: userId }, { blockedId: userId }] }),
+      db.collection("conversations").deleteMany({ userIds: userId }),
+      db.collection("chat_reports").deleteMany({ $or: [{ reporterId: userId }, ...(messageIds.length ? [{ messageId: { $in: messageIds } }] : [])] }),
+      db.collection("chat_audit").deleteMany({ $or: [{ actorId: userId }, { targetUserId: userId }] }),
+      db.collection("account_recovery_attempts").deleteOne({ _id: user.usernameNormalized }),
+      db.collection("security_events").deleteMany({ $or: [{ userId }, { targetUserId: userId }] }),
+      ...(messageIds.length ? [db.collection("chat_messages").deleteMany({ _id: { $in: messageIds } })] : []),
+      db.collection("users").deleteOne({ _id: userId, role: { $ne: "owner" } }),
+    ]);
+    await recordSecurityEvent(db, { type: "account_deleted", actorId: req.user.id, targetUserId: userId, targetUsername: user.username });
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -2534,6 +2670,7 @@ async function initializeDatabaseOnce() {
     sessions.createIndex({ tokenHash: 1 }, { unique: true }),
     sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     sessions.createIndex({ lastSeenAt: 1 }),
+    users.createIndex({ lastSeenIpHash: 1 }),
     entries.createIndex({ userId: 1, levelName: 1 }, { unique: true }),
     entries.createIndex({ levelName: 1, timeMs: 1, achievedAt: 1, _id: 1 }),
     entries.createIndex({ timeMs: 1, achievedAt: 1, _id: 1 }),
@@ -2554,6 +2691,7 @@ async function initializeDatabaseOnce() {
     db.collection("chat_reports").createIndex({ status: 1, createdAt: -1 }),
     db.collection("chat_audit").createIndex({ createdAt: -1 }),
     db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }),
+    db.collection("ip_bans").createIndex({ active: 1, bannedAt: -1 }),
     db.collection("setting_history").createIndex({ settingKey: 1, changedAt: -1 }),
   ]);
   await users.updateMany({ role: { $exists: false } }, { $set: { role: "player" } });
