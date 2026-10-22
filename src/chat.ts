@@ -65,9 +65,9 @@ export function createChat(context: ChatContext) {
     };
 
     const clearTimers = () => {
-        if (pollTimer) window.clearInterval(pollTimer);
-        if (refreshTimer) window.clearInterval(refreshTimer);
-        if (typingStopTimer) window.clearTimeout(typingStopTimer);
+        if (pollTimer) globalThis.clearInterval(pollTimer);
+        if (refreshTimer) globalThis.clearInterval(refreshTimer);
+        if (typingStopTimer) globalThis.clearTimeout(typingStopTimer);
         if (ownTyping && activeUserId) void apiRequest(`/chat/conversations/${encodeURIComponent(activeUserId)}/typing`, { method: "POST", body: JSON.stringify({ typing: false }) }).catch(() => undefined);
         ownTyping = false;
         typingStopTimer = 0;
@@ -177,7 +177,7 @@ export function createChat(context: ChatContext) {
 
     const startSnapshotPolling = () => {
         if (refreshTimer || !panel || panel.hidden) return;
-        refreshTimer = window.setInterval(() => {
+        refreshTimer = globalThis.setInterval(() => {
             if (!document.hidden) void refreshSnapshot();
         }, 5000);
     };
@@ -194,8 +194,8 @@ export function createChat(context: ChatContext) {
     const scheduleTypingStop = () => {
         if (!activeUserId || context.getUser()?.typingIndicators === false) return;
         if (!ownTyping) { ownTyping = true; sendTypingState(true); }
-        if (typingStopTimer) window.clearTimeout(typingStopTimer);
-        typingStopTimer = window.setTimeout(() => {
+        if (typingStopTimer) globalThis.clearTimeout(typingStopTimer);
+        typingStopTimer = globalThis.setTimeout(() => {
             ownTyping = false;
             typingStopTimer = 0;
             sendTypingState(false);
@@ -233,7 +233,7 @@ export function createChat(context: ChatContext) {
             list.append(bubble); if (mode === "global") globalLastMessageId = message.id; else lastMessageId = message.id;
         });
         target.append(list);
-        window.requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+        globalThis.requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
         const form = document.createElement("form"); form.className = "chat-composer";
         const input = document.createElement("textarea"); input.maxLength = 300; input.rows = 2; input.placeholder = "Write a message…"; input.setAttribute("aria-label", "Chat message");
         input.value = draftKey ? messageDrafts.get(draftKey) ?? "" : "";
@@ -275,7 +275,7 @@ export function createChat(context: ChatContext) {
                 input.value = "";
                 pendingAttachment = null;
                 if (ownTyping) { ownTyping = false; sendTypingState(false); }
-                if (typingStopTimer) { window.clearTimeout(typingStopTimer); typingStopTimer = 0; }
+                if (typingStopTimer) { globalThis.clearTimeout(typingStopTimer); typingStopTimer = 0; }
                 count.textContent = "0/300";
                 if (mode === "global") { globalLastMessageId = result.message.id; await loadGlobalMessages(false); }
                 else { lastMessageId = result.message.id; await loadMessages(false); }
@@ -332,9 +332,9 @@ export function createChat(context: ChatContext) {
         renderConversation(globalMessages, "global");
         await loadGlobalMessages(false);
         startSnapshotPolling();
-        pollTimer = window.setInterval(() => { if (!document.hidden) void loadGlobalMessages(true); }, 2500);
+        pollTimer = globalThis.setInterval(() => { if (!document.hidden) void loadGlobalMessages(true); }, 2500);
     };
-    const openConversation = async (userId: string, username: string) => { saveCurrentDraft(); clearTimers(); activeUserId = userId; activeName = username; activeView = "conversation"; lastMessageId = ""; conversationMessages = []; pendingAttachment = null; activeTyping = false; await loadMessages(false); startSnapshotPolling(); pollTimer = window.setInterval(() => { if (!document.hidden) void loadMessages(true); }, 2500); };
+    const openConversation = async (userId: string, username: string) => { saveCurrentDraft(); clearTimers(); activeUserId = userId; activeName = username; activeView = "conversation"; lastMessageId = ""; conversationMessages = []; pendingAttachment = null; activeTyping = false; await loadMessages(false); startSnapshotPolling(); pollTimer = globalThis.setInterval(() => { if (!document.hidden) void loadMessages(true); }, 2500); };
     const refreshSnapshot = async () => { if (!context.getUser() || !panel || panel.hidden) return; try { snapshot = await loadFriends(); const result = await apiRequest<{ conversations: ChatConversation[] }>("/chat/conversations"); conversations = result.conversations; setUnread(snapshot.incoming.length, conversations.reduce((sum, item) => sum + item.unread, 0)); if (!activeUserId && activeView !== "global") renderTab(); } catch (error) { const target = content(); if (target && !target.querySelector(".chat-composer textarea")) target.textContent = error instanceof Error ? error.message : "Chat is unavailable."; } };
 
     const mount = () => {

@@ -37,6 +37,11 @@ export default async function handler(req, res) {
         error: "The database connection points to this server instead of a hosted database. Set MONGODB_URI or DATABASE_MONGODB_URI to your MongoDB Atlas connection URL in Vercel.",
       });
     }
+    if (error?.name === "MongoServerSelectionError" || error?.code === "ETIMEDOUT" || error?.cause?.code === "ETIMEDOUT") {
+      return res.status(503).json({
+        error: "MongoDB Atlas could not be reached. Confirm the cluster is running and allow Vercel in Atlas Network Access (use 0.0.0.0/0 for a temporary test), then redeploy.",
+      });
+    }
     return res.status(503).json({ error: "The online service is temporarily unavailable." });
   }
 }

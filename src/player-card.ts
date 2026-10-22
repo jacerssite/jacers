@@ -17,26 +17,26 @@ let activeAnchor: HTMLElement | null = null;
 const cache = new Map<string, { expires: number; profile: PublicPlayerProfile }>();
 
 function closeCard() {
-    if (openTimer) window.clearTimeout(openTimer);
-    if (closeTimer) window.clearTimeout(closeTimer);
+    if (openTimer) globalThis.clearTimeout(openTimer);
+    if (closeTimer) globalThis.clearTimeout(closeTimer);
     openTimer = 0; closeTimer = 0;
     card?.remove(); card = null; activeAnchor = null;
 }
 
 function scheduleClose() {
-    if (closeTimer) window.clearTimeout(closeTimer);
-    closeTimer = window.setTimeout(() => { if (!card?.matches(":hover") && !activeAnchor?.matches(":hover")) closeCard(); }, 150);
+    if (closeTimer) globalThis.clearTimeout(closeTimer);
+    closeTimer = globalThis.setTimeout(() => { if (!card?.matches(":hover") && !activeAnchor?.matches(":hover")) closeCard(); }, 150);
 }
 
 function positionCard(anchor: HTMLElement) {
     if (!card) return;
     const rect = anchor.getBoundingClientRect();
-    const width = Math.min(280, window.innerWidth - 16);
+    const width = Math.min(280, globalThis.innerWidth - 16);
     card.style.width = `${width}px`;
-    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left));
+    const left = Math.max(8, Math.min(globalThis.innerWidth - width - 8, rect.left));
     const below = rect.bottom + 8;
     const height = card.getBoundingClientRect().height;
-    const top = below + height <= window.innerHeight - 8 ? below : Math.max(8, rect.top - height - 8);
+    const top = below + height <= globalThis.innerHeight - 8 ? below : Math.max(8, rect.top - height - 8);
     card.style.left = `${left}px`; card.style.top = `${top}px`;
 }
 
@@ -46,7 +46,7 @@ export function attachPlayerCard(anchor: HTMLElement, presence: Pick<OnlinePlaye
         if (activeAnchor === anchor && card) return;
         closeCard(); activeAnchor = anchor;
         card = document.createElement("aside"); card.className = "player-profile-card"; card.setAttribute("role", "dialog"); card.setAttribute("aria-label", `Profile of ${presence.username}`); card.textContent = "Loading profile…";
-        card.addEventListener("mouseenter", () => { if (closeTimer) window.clearTimeout(closeTimer); }); card.addEventListener("mouseleave", scheduleClose);
+        card.addEventListener("mouseenter", () => { if (closeTimer) globalThis.clearTimeout(closeTimer); }); card.addEventListener("mouseleave", scheduleClose);
         document.body.append(card); positionCard(anchor);
         let profile = cache.get(presence.id)?.expires && cache.get(presence.id)!.expires > Date.now() ? cache.get(presence.id)!.profile : null;
         try { if (!profile) { profile = (await apiRequest<{ player: PublicPlayerProfile }>(`/players/${encodeURIComponent(presence.id)}`)).player; cache.set(presence.id, { profile, expires: Date.now() + 60_000 }); } } catch (error) { if (card) card.textContent = error instanceof Error ? error.message : "Profile unavailable."; return; }
@@ -86,10 +86,10 @@ export function attachPlayerCard(anchor: HTMLElement, presence: Pick<OnlinePlaye
         card.append(createButton("View full profile", () => context.showProfile(profile!.id)));
         positionCard(anchor);
     };
-    const scheduleOpen = () => { if (openTimer) window.clearTimeout(openTimer); openTimer = window.setTimeout(() => void open(), 250); };
+    const scheduleOpen = () => { if (openTimer) globalThis.clearTimeout(openTimer); openTimer = globalThis.setTimeout(() => void open(), 250); };
     anchor.addEventListener("mouseenter", scheduleOpen); anchor.addEventListener("mouseleave", scheduleClose); anchor.addEventListener("focus", scheduleOpen); anchor.addEventListener("blur", scheduleClose); anchor.addEventListener("keydown", (event) => { if (event.key === "Escape") closeCard(); });
-    anchor.addEventListener("click", (event) => { if (window.matchMedia?.("(hover: none)").matches) { event.preventDefault(); void open(); } });
-    window.addEventListener("scroll", closeCard, { passive: true });
+    anchor.addEventListener("click", (event) => { if (globalThis.matchMedia?.("(hover: none)").matches) { event.preventDefault(); void open(); } });
+    globalThis.addEventListener("scroll", closeCard, { passive: true });
 }
 
 function createButton(text: string, action: () => void | Promise<void>) { const button = document.createElement("button"); button.type = "button"; button.className = "chat-action-button"; button.textContent = text; button.addEventListener("click", () => void action()); return button; }

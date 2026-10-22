@@ -16,7 +16,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
     const canManageRoles = options.canManageRoles !== false;
     const canManageSensitive = options.canManageSensitive !== false;
     if (managedPresenceTimer) {
-        window.clearInterval(managedPresenceTimer);
+        globalThis.clearInterval(managedPresenceTimer);
         managedPresenceTimer = 0;
     }
     container.replaceChildren();
@@ -410,7 +410,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             actionStatus.setAttribute("role", "status");
             const resetPassword = createTextButton("Reset password", () => {});
             resetPassword.addEventListener("click", async () => {
-                if (!window.confirm(`Reset ${user.username}'s password? They will be signed out everywhere and required to change it.`)) return;
+                if (!globalThis.confirm(`Reset ${user.username}'s password? They will be signed out everywhere and required to change it.`)) return;
                 resetPassword.disabled = true;
                 actionStatus.textContent = "Resetting password...";
                 try {
@@ -424,7 +424,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             });
             const makeRecoveryCode = createTextButton("Make new recovery code", () => {});
             makeRecoveryCode.addEventListener("click", async () => {
-                if (!window.confirm(`Replace ${user.username}'s current recovery code? The old code will stop working.`)) return;
+                if (!globalThis.confirm(`Replace ${user.username}'s current recovery code? The old code will stop working.`)) return;
                 makeRecoveryCode.disabled = true;
                 try {
                     const response = await apiRequest<{ recoveryCode: string }>(`/admin/users/${encodeURIComponent(user.id)}/recovery-code`, { method: "POST", body: "{}" });
@@ -459,7 +459,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 const warning = banning
                     ? "This bans the latest network address for every account using it (shared Wi-Fi/VPNs can affect multiple players). Continue?"
                     : "Allow logins again from this account's latest network address?";
-                if (!window.confirm(warning)) return;
+                if (!globalThis.confirm(warning)) return;
                 ipBanButton.disabled = true;
                 actionStatus.textContent = banning ? "Banning latest login network..." : "Removing network ban...";
                 try {
@@ -486,7 +486,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 const warning = banning
                     ? `Permanently block ${user.emailMasked ?? "this email address"} from registering, signing in, or recovering accounts?`
                     : `Allow ${user.emailMasked ?? "this email address"} to be used again?`;
-                if (!window.confirm(warning)) return;
+                if (!globalThis.confirm(warning)) return;
                 emailBanButton.disabled = true;
                 actionStatus.textContent = banning ? "Permanently banning email..." : "Removing permanent email ban...";
                 try {
@@ -530,8 +530,8 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     actionStatus.textContent = "Select at least one category to wipe.";
                     return;
                 }
-                if (!window.confirm(`This will permanently remove the selected data for ${user.username} and sign them out everywhere. A seven-day backup will be created.`)
-                    || window.prompt(`Type ${user.username} to confirm this wipe:`) !== user.username) return;
+                if (!globalThis.confirm(`This will permanently remove the selected data for ${user.username} and sign them out everywhere. A seven-day backup will be created.`)
+                    || globalThis.prompt(`Type ${user.username} to confirm this wipe:`) !== user.username) return;
                 wipeButton.disabled = true;
                 try {
                     const response = await apiRequest<{ backupId: string }>(`/admin/users/${encodeURIComponent(user.id)}/wipe`, {
@@ -570,7 +570,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             };
             const restoreButton = createTextButton("Restore selected backup", () => {});
             restoreButton.addEventListener("click", async () => {
-                if (!backupSelect.value || !window.confirm(`Restore this backup for ${user.username}? Current values may be replaced.`)) return;
+                if (!backupSelect.value || !globalThis.confirm(`Restore this backup for ${user.username}? Current values may be replaced.`)) return;
                 restoreButton.disabled = true;
                 try {
                     await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/restore`, {
@@ -588,8 +588,8 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             const deleteAccount = createTextButton("Delete account permanently", () => {});
             deleteAccount.classList.add("danger");
             deleteAccount.addEventListener("click", async () => {
-                if (!window.confirm(`Permanently delete ${user.username}? This removes the account, progress, leaderboard entries, messages, and backups.`)
-                    || window.prompt(`Type ${user.username} to confirm account deletion:`) !== user.username) return;
+                if (!globalThis.confirm(`Permanently delete ${user.username}? This removes the account, progress, leaderboard entries, messages, and backups.`)
+                    || globalThis.prompt(`Type ${user.username} to confirm account deletion:`) !== user.username) return;
                 deleteAccount.disabled = true;
                 actionStatus.textContent = "Deleting account...";
                 try {
@@ -619,9 +619,9 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 item.textContent = isOnline ? "ONLINE NOW" : "OFFLINE";
             });
         };
-        const presenceTimer = window.setInterval(() => {
+        const presenceTimer = globalThis.setInterval(() => {
             if (!container.isConnected) {
-                window.clearInterval(presenceTimer);
+                globalThis.clearInterval(presenceTimer);
                 if (managedPresenceTimer === presenceTimer) managedPresenceTimer = 0;
                 return;
             }

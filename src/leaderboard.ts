@@ -94,9 +94,9 @@ export function createLeaderboard(context: LeaderboardContext) {
             }
         };
         void refreshOnlinePlayers();
-        const onlinePlayerRefreshTimer = window.setInterval(() => {
+        const onlinePlayerRefreshTimer = globalThis.setInterval(() => {
             if (!onlinePresence.isConnected) {
-                window.clearInterval(onlinePlayerRefreshTimer);
+                globalThis.clearInterval(onlinePlayerRefreshTimer);
                 return;
             }
             void refreshOnlinePlayers();
@@ -255,9 +255,9 @@ export function createLeaderboard(context: LeaderboardContext) {
             }
             dashboard.append(title, presence, friendAction, stats, character);
             menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);
-            const presenceTimer = window.setInterval(() => {
+            const presenceTimer = globalThis.setInterval(() => {
                 if (!menu.isConnected) {
-                    window.clearInterval(presenceTimer);
+                    globalThis.clearInterval(presenceTimer);
                     return;
                 }
                 void apiRequest<{ player: PublicPlayerProfile }>(`/players/${encodeURIComponent(playerId)}`).then((updated) => {
@@ -326,7 +326,7 @@ export function createLeaderboard(context: LeaderboardContext) {
         remove.type = "button";
         remove.textContent = "Delete";
         remove.addEventListener("click", async () => {
-            if (!window.confirm(`Delete ${entry.username}'s ${entry.level} record?`)) return;
+            if (!globalThis.confirm(`Delete ${entry.username}'s ${entry.level} record?`)) return;
             try {
                 await apiRequest(`/leaderboard/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
                 refresh();

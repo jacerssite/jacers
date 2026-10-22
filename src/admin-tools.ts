@@ -579,7 +579,7 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
             edit.setAttribute("aria-label", `Edit update ${index + 1}`);
             editorActions.prepend(edit);
             const remove = createTextButton("Remove", () => {
-                if (!window.confirm(`Remove update ${index + 1} from the draft? You must publish to make this permanent.`)) return;
+                if (!globalThis.confirm(`Remove update ${index + 1} from the draft? You must publish to make this permanent.`)) return;
                 draft = readEntries().filter((_, entryIndex) => entryIndex !== index);
                 drawEntries();
             });

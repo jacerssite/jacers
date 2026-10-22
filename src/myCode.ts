@@ -599,7 +599,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
     if (!currentOnlineUser) return;
     while (accountRedemptionInFlight || accountProgressSyncing) {
         if (direction === "save" && !force) return;
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 20));
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 20));
         if (!currentOnlineUser) return;
     }
     const identity = accountIdentity(currentOnlineUser);
@@ -823,10 +823,10 @@ export function startApp() {
     void refreshOnlineState().then(() => {
         if (document.querySelector(".home-screen")) showMenu();
     }).catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
-    if (!presenceHeartbeatTimer) presenceHeartbeatTimer = window.setInterval(() => void sendPresenceHeartbeat(), 10_000);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    window.addEventListener("blur", () => pressedKeys.clear());
+    if (!presenceHeartbeatTimer) presenceHeartbeatTimer = globalThis.setInterval(() => void sendPresenceHeartbeat(), 10_000);
+    globalThis.addEventListener("keydown", handleKeyDown);
+    globalThis.addEventListener("keyup", handleKeyUp);
+    globalThis.addEventListener("blur", () => pressedKeys.clear());
     document.addEventListener("click", unlockMusic, { once: true });
     document.addEventListener("keydown", unlockMusic, { once: true });
     document.addEventListener("click", (event) => {
@@ -838,10 +838,10 @@ export function startApp() {
         if (document.hidden) void musicContext.suspend();
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
     });
-    if (!accountProgressTimer) accountProgressTimer = window.setInterval(() => {
+    if (!accountProgressTimer) accountProgressTimer = globalThis.setInterval(() => {
         if (currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
     }, 2500);
-    if (!accountNoticeTimer) accountNoticeTimer = window.setInterval(() => void refreshAccountNotices(), 7000);
+    if (!accountNoticeTimer) accountNoticeTimer = globalThis.setInterval(() => void refreshAccountNotices(), 7000);
     showMenu();
 }
 
@@ -938,7 +938,7 @@ function stopExternalMusic(resetPosition = true) {
 function configureExternalMusic() {
     const track = MUSIC_TRACKS.find((candidate) => candidate.id === selectedMusicTrackId);
     if (!musicContext || !musicFilter || !track?.source) return null;
-    const sourceUrl = new URL(track.source, window.location.href).href;
+    const sourceUrl = new URL(track.source, globalThis.location.href).href;
     if (!externalMusicAudio || externalMusicAudio.src !== sourceUrl) {
         stopExternalMusic();
         externalMusicAudio = new Audio(track.source);
@@ -1007,14 +1007,14 @@ function musicSceneRoot(scene: MusicScene) {
 
 function stopMusicSequence() {
     if (musicSequenceTimer !== null) {
-        window.clearTimeout(musicSequenceTimer);
+        globalThis.clearTimeout(musicSequenceTimer);
         musicSequenceTimer = null;
     }
 }
 
 function scheduleMusicStep(delay = MUSIC_STEP_MS) {
     if (selectedMusicTrackId !== "original" || !musicUnlocked || musicMuted || !musicContext || musicSequenceTimer !== null) return;
-    musicSequenceTimer = window.setTimeout(() => {
+    musicSequenceTimer = globalThis.setTimeout(() => {
         musicSequenceTimer = null;
         playMusicStep();
         scheduleMusicStep();
@@ -1266,7 +1266,7 @@ function openRoleQuickPanel() {
         button.className = "text-button";
         button.textContent = text;
         button.addEventListener("click", () => {
-            if (confirmText && !window.confirm(confirmText)) return;
+            if (confirmText && !globalThis.confirm(confirmText)) return;
             action();
         });
         levelActions.append(button);
@@ -1622,7 +1622,7 @@ function showSettings() {
                 controlsStatus.textContent = `${controlLabels[action]} is now ${formatControlBinding(code)}.`;
                 showSettings();
             };
-            window.addEventListener("keydown", captureKey, { once: true });
+            globalThis.addEventListener("keydown", captureKey, { once: true });
         });
         controlsSection.append(button);
     });
@@ -2511,7 +2511,7 @@ function showAccount(initialMessage = "") {
                         syncWarning = ` You are signed out, but the latest progress could not sync: ${error instanceof Error ? error.message : "online service error"}`;
                         console.error("Could not save account progress before sign-out:", error);
                     }
-                    if (syncFailed && !window.confirm("We could not save your latest progress. Sign out anyway and lose it?")) return;
+                    if (syncFailed && !globalThis.confirm("We could not save your latest progress. Sign out anyway and lose it?")) return;
                     await apiRequest<void>("/auth/logout", { method: "POST" });
                     setOnlineUser(null);
                     clearLocalAccountData();
@@ -2954,7 +2954,7 @@ function showShop() {
     cooldownBuy.addEventListener("click", () => {
         const balance = Number(localStorage.getItem("orbit-claims") ?? asteroidsClaimed);
         if (!Number.isSafeInteger(balance) || balance < COOLDOWN_RESET_COST || !resettableSecretIndexes.length) return;
-        if (!window.confirm(`Spend ${COOLDOWN_RESET_COST.toLocaleString()} normal asteroids to reset every secret-level cooldown?`)) return;
+        if (!globalThis.confirm(`Spend ${COOLDOWN_RESET_COST.toLocaleString()} normal asteroids to reset every secret-level cooldown?`)) return;
         asteroidsClaimed = balance - COOLDOWN_RESET_COST;
         localStorage.setItem("orbit-claims", String(asteroidsClaimed));
         resettableSecretIndexes.forEach(({ level, index }) => {
@@ -3178,7 +3178,7 @@ function switchPlanet() {
     transition.className = `planet-transition ${activePlanet}`;
     transition.innerHTML = `<span>${activePlanet === "prestige" ? "ENTERING PRESTIGE ORBIT" : "RETURNING TO BLUE PLANET"}</span>`;
     document.body.append(transition);
-    window.setTimeout(() => transition.remove(), 1100);
+    globalThis.setTimeout(() => transition.remove(), 1100);
 }
 
 function createLoadoutPanel() {
@@ -3432,7 +3432,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             requirement.addEventListener("change", syncRequirementEditor);
             syncRequirementEditor();
             const remove = createTextButton("Remove", () => {
-                if (!window.confirm(`Remove the ${title.name} title from the shared catalog?`)) return;
+                if (!globalThis.confirm(`Remove the ${title.name} title from the shared catalog?`)) return;
                 profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
                 drawTitleManagement();
             });
@@ -4023,7 +4023,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const name = document.createElement("span");
         name.textContent = `${level.name} / ${level.prestige ? "PRESTIGE" : "NORMAL"}`;
         const remove = createTextButton("Delete", async () => {
-            if (!level.customId || !window.confirm(`Delete the shared workshop level "${level.name}" for every player?`)) return;
+            if (!level.customId || !globalThis.confirm(`Delete the shared workshop level "${level.name}" for every player?`)) return;
             remove.disabled = true;
             try {
                 await apiRequest<void>(`/levels/${encodeURIComponent(level.customId)}`, { method: "DELETE" });
@@ -4068,9 +4068,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     resetButton.type = "button";
     resetButton.textContent = "Reset all game data";
     resetButton.addEventListener("click", () => {
-        if (!window.confirm("Clear this device's game data? Shared settings and workshop levels will not be deleted.")) return;
+        if (!globalThis.confirm("Clear this device's game data? Shared settings and workshop levels will not be deleted.")) return;
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter((key): key is string => Boolean(key?.startsWith("orbit-"))).forEach((key) => localStorage.removeItem(key));
-        window.location.reload();
+        globalThis.location.reload();
     });
     resetPanel.append(resetButton);
     form.append(resetTitle, resetPanel);
@@ -4622,7 +4622,7 @@ function unlockEndGoal() {
 }
 
 function cancelPortalTransit() {
-    if (portalTransitTimer) window.clearTimeout(portalTransitTimer);
+    if (portalTransitTimer) globalThis.clearTimeout(portalTransitTimer);
     portalTransitTimer = 0;
     projectiles.forEach((projectile) => projectile.element.remove());
     projectiles = [];
@@ -4688,7 +4688,7 @@ function updateSecretBossRoom() {
                     verticalSpeed = jumpPower * 0.65;
                     jumpCount = 1;
                     roomPlayer?.classList.add("ground-pound");
-                    window.setTimeout(() => roomPlayer?.classList.remove("ground-pound"), 180);
+                    globalThis.setTimeout(() => roomPlayer?.classList.remove("ground-pound"), 180);
                     statusLabel.textContent = "Void Warden crushed. Ground pound landed!";
                     } else if (isStarInvincible()) {
                         playerX = Math.max(20, Math.min(secretBoss.x - playerWidth - 8, room.clientWidth - playerWidth - 20));
@@ -4743,7 +4743,7 @@ function damageSecretBoss() {
     const room = document.querySelector<HTMLElement>(".portal-key-room");
     const bossElement = room?.querySelector(".void-warden");
     bossElement?.classList.add("hit");
-    window.setTimeout(() => bossElement?.classList.remove("hit"), 180);
+    globalThis.setTimeout(() => bossElement?.classList.remove("hit"), 180);
     if (secretBoss.health > 0) {
         const healthLabel = room?.querySelector<HTMLElement>(".portal-boss-health");
         if (healthLabel) healthLabel.textContent = `${secretBoss.health} HITS LEFT`;
@@ -4767,7 +4767,7 @@ function damageSecretBoss() {
     const smallEl = room?.querySelector<HTMLElement>(".portal-boss-health");
     if (smallEl) smallEl.textContent = keyId ? `${keyId.toUpperCase()} KEY SECURED` : "SECRET KEY SECURED";
     statusLabel.textContent = "Void Warden defeated. Secret key claimed!";
-    portalTransitTimer = window.setTimeout(() => exitSecretBossRoom(), 1500);
+    portalTransitTimer = globalThis.setTimeout(() => exitSecretBossRoom(), 1500);
 }
 
 function redrawRouteObjects() {
@@ -4867,7 +4867,7 @@ function leaveFlippedRoute() {
 }
 
 function showPlanetaryTransition(text: string) {
-    const transition = document.createElement("div"); transition.className = "planet-transition prestige"; transition.innerHTML = `<span>${text}</span>`; document.body.append(transition); window.setTimeout(() => transition.remove(), 1100);
+    const transition = document.createElement("div"); transition.className = "planet-transition prestige"; transition.innerHTML = `<span>${text}</span>`; document.body.append(transition); globalThis.setTimeout(() => transition.remove(), 1100);
 }
 
 async function requestRunProof(levelName: string, sequence: number) {
@@ -4892,7 +4892,7 @@ async function waitForRunProof(levelName: string, timeoutMs = 3000) {
     while (performance.now() < deadline) {
         const proofId = getRunProofId(levelName);
         if (proofId) return proofId;
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 40));
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 40));
     }
     return getRunProofId(levelName);
 }
@@ -5764,7 +5764,7 @@ function updateProjectiles() {
         return true;
     });
 }
-function createSplash(x: number, y: number) { const splash = document.createElement("div"); splash.className = "splash"; splash.style.left = `${x}px`; splash.style.top = `${y}px`; world.append(splash); window.setTimeout(() => splash.remove(), reducedEffects ? 180 : 350); }
+function createSplash(x: number, y: number) { const splash = document.createElement("div"); splash.className = "splash"; splash.style.left = `${x}px`; splash.style.top = `${y}px`; world.append(splash); globalThis.setTimeout(() => splash.remove(), reducedEffects ? 180 : 350); }
 function createEnemyExplosion(container: HTMLElement, x: number, y: number, color = "#f6c46e") {
     playSound("explode");
     const burst = document.createElement("div");
@@ -5779,7 +5779,7 @@ function createEnemyExplosion(container: HTMLElement, x: number, y: number, colo
         burst.append(fragment);
     }
     container.append(burst);
-    window.setTimeout(() => burst.remove(), reducedEffects ? 360 : 720);
+    globalThis.setTimeout(() => burst.remove(), reducedEffects ? 360 : 720);
 }
 function recordKill(kind: "enemy" | "boss") {
     const key = kind === "boss" ? "orbit-bosses-killed" : "orbit-enemies-killed";
@@ -5887,7 +5887,7 @@ if (portalTravelInProgress) return;
             verticalSpeed = shipFlipped ? Math.abs(jumpPower) * 0.58 : jumpPower * 0.58;
             jumpCount = 1;
             playerLabel.classList.add("ground-pound");
-            window.setTimeout(() => playerLabel.classList.remove("ground-pound"), 180);
+            globalThis.setTimeout(() => playerLabel.classList.remove("ground-pound"), 180);
             statusLabel.textContent = inFlippedRoute ? "Dark sentry crushed. Ground pound dominates." : "Sentry disabled. Nice landing.";
             document.querySelectorAll(".enemy")[index]?.classList.add("defeated");
         } else if (touchingEnemy) {
@@ -5917,9 +5917,9 @@ if (portalTravelInProgress) return;
             verticalSpeed = shipFlipped ? Math.abs(jumpPower) * (inFlippedRoute ? 0.75 : .62) : jumpPower * (inFlippedRoute ? 0.75 : .62);
             jumpCount = 1;
             playerLabel.classList.add("ground-pound");
-            window.setTimeout(() => playerLabel.classList.remove("ground-pound"), 180);
+            globalThis.setTimeout(() => playerLabel.classList.remove("ground-pound"), 180);
             document.querySelectorAll(".mini-boss")[index]?.classList.add("hit");
-            window.setTimeout(() => document.querySelectorAll(".mini-boss")[index]?.classList.remove("hit"), 180);
+            globalThis.setTimeout(() => document.querySelectorAll(".mini-boss")[index]?.classList.remove("hit"), 180);
             if (miniBoss.health <= 0) {
                 miniBoss.defeated = true;
                 recordKill("enemy");
@@ -6017,7 +6017,7 @@ function updatePowerupHud() {
     }); 
     playerLabel.classList.toggle("shielded", shieldCharges > 0); 
 }
-function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); window.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; recordKill("boss"); bossElement?.classList.add("defeated"); createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
+function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); globalThis.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; recordKill("boss"); bossElement?.classList.add("defeated"); createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
 
 function getNormalRouteCount() { return levels.filter((level) => !level.secret && !level.prestige).length; }
 function getNormalRouteCompletionCount() { return levels.filter((level, index) => !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
