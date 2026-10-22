@@ -2,6 +2,8 @@ import type { OnlineLeaderboardEntry, OnlinePlayerPresence, OnlineSettings, Onli
 import { apiRequest } from "./api";
 import { levels } from "./levels";
 import { createTextButton } from "./ui";
+import { loadFriends, sendFriendRequest, acceptFriendRequest } from "./friends";
+import { attachPlayerCard } from "./player-card";
 
 type LeaderboardContext = {
     showAccount: () => void;
@@ -16,6 +18,8 @@ type LeaderboardContext = {
 
 export function createLeaderboard(context: LeaderboardContext) {
     const { showAccount, showLevelMenu, showMenu, sendPresenceHeartbeat, setCurrentOnlineUser, setGoldenTimeLimit, createShipPreview, formatTime } = context;
+    let loadedUser: OnlineUser | null = null;
+    const currentUserName = () => loadedUser?.username ?? null;
 
     function showLeaderboard() {
         const menu = document.createElement("main");
@@ -60,9 +64,18 @@ export function createLeaderboard(context: LeaderboardContext) {
             try {
                 const response = await apiRequest<{ users: OnlinePlayerPresence[]; truncated: boolean }>("/presence");
                 if (!onlinePresence.isConnected) return;
+                if (document.querySelector(".player-profile-card")) return;
+                const existing = new Map(Array.from(onlinePlayers.querySelectorAll<HTMLButtonElement>("button[data-player-id]")).map((item) => [item.dataset.playerId!, item]));
                 onlinePlayers.replaceChildren();
                 response.users.forEach((player) => {
-                    const name = document.createElement("span");
+                    let name = existing.get(player.id);
+                    if (!name) {
+                        name = document.createElement("button");
+                        name.type = "button";
+                        name.dataset.playerId = player.id;
+                        name.addEventListener("click", () => void showLeaderboardPlayerProfile(player.id, showLeaderboard));
+                        attachPlayerCard(name, player, { getUser: () => loadedUser, createShipPreview, showProfile: (id) => void showLeaderboardPlayerProfile(id, showLeaderboard), showAccount });
+                    }
                     name.className = `online-player-name ${player.role === "owner" ? "online-owner" : player.role === "tester" ? "online-tester" : ""}`;
                     const badge = getRoleBadge(player.role ?? "player");
                     name.textContent = `${player.username}${badge ? ` ${badge}` : ""}`;
@@ -99,6 +112,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                 ]);
                 if (!menu.isConnected || requestNumber !== latestLoad) return;
                 setCurrentOnlineUser(session.user);
+                loadedUser = session.user;
                 void sendPresenceHeartbeat();
                 setGoldenTimeLimit(settings.goldenTimeLimitMs);
                 accountSummary.textContent = session.user
@@ -146,6 +160,20 @@ export function createLeaderboard(context: LeaderboardContext) {
             const time = document.createElement("strong");
             time.textContent = formatTime(entry.timeMs);
             row.append(rank, username, playerLevel, time, abilities);
+            if (user && entry.userId) {
+                const add = document.createElement("button");
+                add.type = "button";
+                add.className = "leaderboard-add-friend";
+                add.textContent = "+";
+                add.title = `Add ${entry.username} as a friend`;
+                add.hidden = user.username.toLowerCase() === entry.username.toLowerCase();
+                add.addEventListener("click", async () => {
+                    add.disabled = true;
+                    try { const result = await sendFriendRequest(entry.userId); add.textContent = result.status === "accepted" ? "✓" : "…"; }
+                    catch (error) { add.disabled = false; add.title = error instanceof Error ? error.message : "Could not send friend request."; }
+                });
+                row.append(add);
+            }
             if (user?.role === "owner") row.append(createOwnerEntryControls(entry, () => showLeaderboard()));
             container.append(row);
         });
@@ -199,14 +227,37 @@ export function createLeaderboard(context: LeaderboardContext) {
                 item.querySelector("b")!.textContent = value;
                 stats.append(item);
             });
-            const character = createShipPreview({
-                shipColor: player.shipColor,
-                avatar: player.avatar,
-                skin: player.skin,
-                trail: player.trail,
-            });
-            character.classList.add("profile-character-card");
-            dashboard.append(title, presence, stats, character);
+            let character: HTMLElement | null = null;
+            if (!player.limited) {
+                character = createShipPreview({
+                    shipColor: player.shipColor!,
+                    avatar: player.avatar!,
+                    skin: player.skin!,
+                    trail: player.trail!,
+                });
+                character.classList.add("profile-character-card");
+            }
+            const friendAction = document.createElement("div");
+            friendAction.className = "profile-friend-action";
+            if (!currentUserName()) {
+                friendAction.append(createTextButton("Sign in to add friends", showAccount));
+            } else {
+                const friendButton = createTextButton("Add friend", async () => {
+                    friendButton.disabled = true;
+                    try { await sendFriendRequest(player.id); friendButton.textContent = "Request sent"; }
+                    catch (error) { friendButton.disabled = false; friendButton.textContent = error instanceof Error ? error.message : "Could not add friend."; }
+                });
+                try {
+                    const friends = await loadFriends();
+                    if (friends.friends.some((friend) => friend.userId === player.id)) { friendButton.textContent = "Friends"; friendButton.disabled = true; }
+                    else if (friends.outgoing.some((request) => request.userId === player.id)) { friendButton.textContent = "Request sent"; }
+                    else if (friends.incoming.some((request) => request.userId === player.id)) { friendButton.textContent = "Accept request"; friendButton.onclick = async () => { const request = friends.incoming.find((item) => item.userId === player.id); if (request) await acceptFriendRequest(request.id); friendButton.textContent = "Friends"; friendButton.disabled = true; }; }
+                } catch { /* signed-in but offline API: leave the add action available */ }
+                if (player.username.toLowerCase() === currentUserName()?.toLowerCase()) friendButton.remove();
+                friendAction.append(friendButton);
+            }
+            if (player.limited) { const limited = document.createElement("small"); limited.textContent = "This owner has no public run yet; stats are hidden."; dashboard.append(limited); }
+            dashboard.append(title, presence, friendAction, ...(player.limited ? [] : [stats]), ...(character ? [character] : []));
             menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);
             const presenceTimer = window.setInterval(() => {
                 if (!menu.isConnected) {
@@ -332,5 +383,5 @@ export function createLeaderboard(context: LeaderboardContext) {
     }
 
 
-    return { showLeaderboard, getRoleBadge, formatAbilityName };
+    return { showLeaderboard, showLeaderboardPlayerProfile, getRoleBadge, formatAbilityName };
 }

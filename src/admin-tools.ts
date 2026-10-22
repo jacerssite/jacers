@@ -63,18 +63,15 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
     const detailLabel = document.createElement("label");
     detailLabel.append(document.createTextNode("Reward"), detailSelect);
     rewardDetails.append(detailLabel);
-    const titleId = document.createElement("input");
-    titleId.type = "text";
-    titleId.placeholder = "title-id";
-    titleId.maxLength = 40;
-    titleId.pattern = "[a-z0-9-]{1,40}";
-    const titleSuggestions = document.createElement("datalist");
-    titleSuggestions.id = "reward-title-suggestions";
-    availableTitles.forEach((title) => { const option = document.createElement("option"); option.value = title.id; option.label = title.name; titleSuggestions.append(option); });
-    titleId.setAttribute("list", titleSuggestions.id);
-    form.append(titleSuggestions);
+    const titleId = document.createElement("select");
+    titleId.setAttribute("aria-label", "Title reward");
+    const noTitle = document.createElement("option");
+    noTitle.value = "";
+    noTitle.textContent = "Choose a title";
+    titleId.append(noTitle);
+    availableTitles.forEach((title) => { const option = document.createElement("option"); option.value = title.id; option.textContent = `${title.name} (${title.id})`; titleId.append(option); });
     const titleLabel = document.createElement("label");
-    titleLabel.append(document.createTextNode("Title ID"), titleId);
+    titleLabel.append(document.createTextNode("Title"), titleId);
     rewardDetails.append(titleLabel);
     const redrawRewardDetails = () => {
         const type = rewardType.value;
@@ -119,7 +116,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
                         const type = rewardType.value as CodeReward["type"];
                         if (type === "claims" || type === "specialClaims") return { type, amount: Number(amount.value) } satisfies CodeReward;
                         if (type === "powerup") return { type, kind: detailSelect.value as PowerupKind, amount: Math.max(1, Number(amount.value)) } satisfies CodeReward;
-                        if (type === "title") return { type, titleId: titleId.value.trim().toLowerCase() } satisfies CodeReward;
+                        if (type === "title") return { type, titleId: titleId.value } satisfies CodeReward;
                         return { type: type as "skin" | "trail" | "avatar", index: Number(detailSelect.value) } satisfies CodeReward;
                     })(),
                     maxUses: Number(maxUses.value),

@@ -44,7 +44,7 @@ export function levelToMakerDraft(level: Level, sourceLevelIndex?: number): Leve
         (route.powerups ?? []).forEach(({ index, kind }) => place(flippedTiles, index, `powerup${kind.charAt(0).toUpperCase()}${kind.slice(1)}`));
         if (route.key !== undefined) place(flippedTiles, route.key, "exitKey");
     }
-    return { name: level.name, briefing: level.briefing, prestige: Boolean(level.prestige), length: level.length, tiles, flippedTiles, customId: level.customId, sourceLevelIndex };
+    return { name: level.name, briefing: level.briefing, prestige: Boolean(level.prestige), prestigeRequirement: level.prestigeRequirement ?? 1, length: level.length, tiles, flippedTiles, customId: level.customId, sourceLevelIndex };
 }
 
 export function createLevelMaker(context: LevelMakerContext) {
@@ -156,6 +156,19 @@ export function createLevelMaker(context: LevelMakerContext) {
         const prestigeRouteInput = prestigeToggle.querySelector<HTMLInputElement>("input")!;
         prestigeRouteInput.checked = draft?.prestige ?? false;
         toolbar.append(prestigeToggle);
+        const prestigeRequirementLabel = document.createElement("label");
+        prestigeRequirementLabel.className = "maker-mode-label maker-prestige-requirement";
+        prestigeRequirementLabel.append(document.createTextNode("Prestige needed"));
+        const prestigeRequirementInput = document.createElement("input");
+        prestigeRequirementInput.type = "number";
+        prestigeRequirementInput.min = "1";
+        prestigeRequirementInput.max = "100";
+        prestigeRequirementInput.step = "1";
+        prestigeRequirementInput.value = String(draft?.prestigeRequirement ?? sourceLevel?.prestigeRequirement ?? 1);
+        prestigeRequirementInput.setAttribute("aria-label", "Prestige needed");
+        prestigeRequirementLabel.append(prestigeRequirementInput);
+        prestigeRequirementLabel.hidden = !prestigeRouteInput.checked;
+        toolbar.append(prestigeRequirementLabel);
         const areaState = document.createElement("span"); areaState.className = "maker-area-state";
         const palette = document.createElement("nav"); palette.className = "maker-palette";
         const paletteHint = document.createElement("p");
@@ -320,6 +333,7 @@ export function createLevelMaker(context: LevelMakerContext) {
             name: nameInput.value,
             briefing: briefingInput.value,
             prestige: prestigeRouteInput.checked,
+            prestigeRequirement: Number(prestigeRequirementInput.value) || 1,
             tiles: cells.map((cell) => cell.dataset.kind ?? "empty"),
             flippedTiles: flippedCells.map((cell) => cell.dataset.kind ?? "empty"),
             length: routeLength,
@@ -340,6 +354,7 @@ export function createLevelMaker(context: LevelMakerContext) {
         normalTab.addEventListener("click", showMainGrid);
         flippedTab.addEventListener("click", () => { grid.hidden = true; flippedGrid.hidden = false; normalTab.hidden = false; buildMode.textContent = "Flipped build"; updatePaletteForArea(); });
         const updateFlippedTab = () => {
+            prestigeRequirementLabel.hidden = !prestigeRouteInput.checked;
             const canBuildFlippedArea = prestigeRouteInput.checked && cells.some((cell) => cell.dataset.kind === "gravity");
             flippedTab.hidden = !canBuildFlippedArea;
             areaState.textContent = prestigeRouteInput.checked ? (canBuildFlippedArea ? "PRESTIGE / main route + flipped route" : "PRESTIGE / place a gravity field to enable the flipped route") : "NORMAL / main route only";
@@ -371,6 +386,7 @@ export function createLevelMaker(context: LevelMakerContext) {
             level.briefing = briefing;
             level.length = routeLength;
             level.prestige = prestigeRouteInput.checked;
+            level.prestigeRequirement = prestigeRouteInput.checked ? Math.max(1, Math.min(100, Math.round(Number(prestigeRequirementInput.value) || 1))) : undefined;
             level.customId = draft?.customId;
             level.localOnly = sourceLevel?.localOnly;
             level.asteroids = [];

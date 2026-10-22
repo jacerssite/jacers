@@ -1,6 +1,6 @@
 import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward } from "./types";
-import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
-import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity, createRarityBadge } from "./cosmetics";
+import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_RESET_COST, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
+import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
 import { levels } from "./levels";
 import { ApiError, apiRequest } from "./api";
 import { createMenuButton, createTextButton } from "./ui";
@@ -14,6 +14,8 @@ import { createAccountRecovery } from "./account-recovery";
 import { renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
 import { createControlNavigation, type ControlSection } from "./owner-panel";
 import { createRouletteFields } from "./roulette-editor";
+import { createChat } from "./chat";
+import { acceptFriendRequest, blockUser, declineFriendRequest, loadFriends, removeFriend } from "./friends";
 
 const playerLabel = document.createElement("div");
 const world = document.createElement("main");
@@ -61,6 +63,9 @@ let trailPositions: { x: number; y: number }[] = [];
 let trailDirection = 1;
 let trailActive = false;
 let projectileTimer = 0;
+let enemyAttackTimer = 0;
+let miniBossAttackTimer = 0;
+let bossAttackTimer = 0;
 let trailTimer = 0;
 let trailMovementFrames = 0;
 let shieldCharges = 0;
@@ -175,6 +180,8 @@ let accountRedemptionInFlight = false;
 let lastSyncedAccountProgress = "";
 let loadedAccountProgressFor: string | null = null;
 let onlineSessionVersion = 0;
+let pendingFriendRequests = 0;
+let chatController: ReturnType<typeof createChat> | null = null;
 
 const OWNER_TEST_INVENTORY_AMOUNT = 100000;
 function hasOwnerAccess() { return currentOnlineUser?.role === "owner"; }
@@ -195,6 +202,7 @@ function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
         }
     }
     currentOnlineUser = user;
+    chatController?.setUser(user);
 }
 const gravity = 0.7;
 const jumpPower = -16;
@@ -251,7 +259,7 @@ const { showCustomization, createShipPreview } = createCustomization({
 });
 
 
-const { showLeaderboard, getRoleBadge, formatAbilityName } = createLeaderboard({
+const { showLeaderboard, showLeaderboardPlayerProfile, getRoleBadge, formatAbilityName } = createLeaderboard({
     showAccount,
     showLevelMenu,
     showMenu,
@@ -298,7 +306,7 @@ function loadCustomLevels() {
         levels.splice(Math.min(index, levels.length), 0, { name: `Frontier ${index + 1}`, briefing: "A longer route on the blue planet. Reach the beacon and claim the whole lane.", length: 28 + index, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21, 25], enemies: [8, 16, 24], spikes: [6, 14, 22], gravity: [10, 20], portals: [12, 26], boss: index === 19 });
     }
     for (let index = 0; index < 20; index++) {
-        levels.push({ name: prestigeRouteNames[index], briefing: "A longer route around the ringed planet. Planetary flip fields reveal the upper lane.", length: 38 + index, asteroids: [3, 8, 13, 18, 23, 28, 33], walls: [5, 10, 15, 20, 25, 30], enemies: [7, 17, 27, 35], spikes: [6, 14, 24, 32], gravity: [11, 21, 31], flip: [11, 31], boss: index === 19, prestige: true });
+        levels.push({ name: prestigeRouteNames[index], briefing: "A longer route around the ringed planet. Planetary flip fields reveal the upper lane.", length: 38 + index, asteroids: [3, 8, 13, 18, 23, 28, 33], walls: [5, 10, 15, 20, 25, 30], enemies: [7, 17, 27, 35], spikes: [6, 14, 24, 32], gravity: [11, 21, 31], flip: [11, 31], boss: index === 19, prestige: true, prestigeRequirement: index < 5 ? 1 : index < 13 ? 2 : 3 });
     }
     const cachedLevels = readStoredLevels("orbit-global-level-cache");
     [...legacyLevels, ...cachedLevels].forEach((level, index) => levels.push({
@@ -327,6 +335,12 @@ function getPlacedPortalIndex(level: Level) {
 
 function getLevelType(level: Level): "normal" | "secret" | "prestige" {
     return level.secret ? "secret" : level.prestige ? "prestige" : "normal";
+}
+
+function isPrestigeRouteLocked(level: Level) {
+    if (hasOwnerAccess() || !level.prestige || level.secret) return false;
+    const required = Math.min(level.prestigeRequirement ?? 1, prestigeMax);
+    return prestigeLevel < required;
 }
 
 function getHiddenPortalY() {
@@ -368,7 +382,9 @@ async function sendPresenceHeartbeat() {
     if (!currentOnlineUser || presenceHeartbeatInFlight) return;
     presenceHeartbeatInFlight = true;
     try {
-        await apiRequest<void>("/presence/heartbeat", { method: "POST", body: "{}" });
+        const result = await apiRequest<{ pendingRequests?: number; unreadMessages?: number }>("/presence/heartbeat", { method: "POST", body: "{}" });
+        pendingFriendRequests = Math.max(0, Number(result?.pendingRequests) || 0);
+        chatController?.setUnread(pendingFriendRequests, Math.max(0, Number(result?.unreadMessages) || 0));
     } catch (error) {
         if (currentOnlineUser) console.error("Could not update online status:", error);
     } finally {
@@ -410,6 +426,24 @@ function refreshProgressStateFromStorage() {
     musicMuted = localStorage.getItem("orbit-music-muted") === "true";
     if (musicUnlocked) fadeMusicTo(musicMuted ? 0 : getMusicOutputGain());
     controlBindings = readControlBindings();
+}
+
+function clearLocalAccountData() {
+    const keep = new Set(["orbit-controls", "orbit-music-volume", "orbit-music-muted", "orbit-music-track", "orbit-reduced-effects", "orbit-global-level-cache"]);
+    Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+        .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !keep.has(key)))
+        .forEach((key) => localStorage.removeItem(key));
+    refreshProgressStateFromStorage();
+    reloadLocalCustomLevels();
+    activePlanet = "normal";
+    testerSettingsDraft.clear();
+    roleQuickPanel?.remove();
+    roleQuickPanel = null;
+    gameConfig = structuredClone(DEFAULT_GAME_CONFIG);
+    rouletteTiers = structuredClone(DEFAULT_ROULETTE_TIERS);
+    builtinLevelOverrides = {};
+    portalAssignments = {};
+    configurePortalDistribution();
 }
 
 function reloadLocalCustomLevels() {
@@ -474,6 +508,10 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
         if (!currentOnlineUser) return;
     }
     const identity = accountIdentity(currentOnlineUser);
+    if (direction === "load") {
+        const localOwner = localStorage.getItem("jacer-local-owner");
+        if (localOwner && localOwner !== identity) clearLocalAccountData();
+    }
     if (direction === "save" && loadedAccountProgressFor !== identity) {
         throw new Error("Account progress has not loaded yet, so cloud saving is paused. Sign in again to retry.");
     }
@@ -497,6 +535,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 applySyncedProgress(localProgress, result.progress);
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
                 loadedAccountProgressFor = identity;
+                localStorage.setItem("jacer-local-owner", identity ?? "");
                 return;
             }
             Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -507,6 +546,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             reloadLocalCustomLevels();
             lastSyncedAccountProgress = serializeAccountProgress(getLocalAccountProgress());
             loadedAccountProgressFor = identity;
+            localStorage.setItem("jacer-local-owner", identity ?? "");
             return;
         }
         const localProgress = getLocalAccountProgress();
@@ -539,6 +579,7 @@ async function refreshOnlineState() {
             // A login or logout while startup is pending must not be overwritten.
             if (onlineSessionVersion !== originalSessionVersion) return;
             setOnlineUser(session.user);
+            if (!session.user && localStorage.getItem("jacer-local-owner")) clearLocalAccountData();
             void sendPresenceHeartbeat();
             updateOwnerAccountIndicator();
             try {
@@ -676,6 +717,10 @@ export function startApp() {
     loadCustomLevels();
     configurePortalDistribution();
     document.body.innerHTML = "";
+    chatController?.remove();
+    chatController = createChat({ getUser: () => currentOnlineUser, onUnread: (pending) => { pendingFriendRequests = pending; updateOwnerAccountIndicator(); }, onMessage: () => playSound("message"), onProfile: (id) => showLeaderboardPlayerProfile(id, showLeaderboard) });
+    const chatMountObserver = new MutationObserver(() => chatController?.mount());
+    chatMountObserver.observe(document.body, { childList: true });
     ownerBadgeObserver ??= new MutationObserver(updateOwnerAccountIndicator);
     ownerBadgeObserver.observe(document.body, { childList: true });
     void refreshOnlineState().then(() => {
@@ -983,22 +1028,22 @@ function setMusicScene(scene: MusicScene) {
     scheduleMusicStep(120);
 }
 
-function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "roulette" | "reward" | "lose") {
+function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "roulette" | "reward" | "lose" | "message") {
     if (!musicContext || musicMuted) return;
     try {
         const frequencies: Record<typeof kind, number> = {
             shoot: 420, enemy: 180, explode: 90, ability: 620, ui: 300,
-            roulette: 260, reward: 880, lose: 70,
+            roulette: 260, reward: 880, lose: 70, message: 540,
         };
         const oscillator = musicContext.createOscillator();
         const gain = musicContext.createGain();
         const now = musicContext.currentTime;
-        oscillator.type = kind === "explode" || kind === "lose" ? "sawtooth" : kind === "reward" || kind === "roulette" ? "triangle" : "square";
+        oscillator.type = kind === "explode" || kind === "lose" ? "sawtooth" : kind === "reward" || kind === "roulette" || kind === "message" ? "triangle" : "square";
         oscillator.frequency.setValueAtTime(frequencies[kind], now);
-        oscillator.frequency.exponentialRampToValueAtTime(Math.max(35, frequencies[kind] * (kind === "reward" ? 1.5 : 0.55)), now + (kind === "ui" ? 0.07 : 0.18));
+        oscillator.frequency.exponentialRampToValueAtTime(Math.max(35, frequencies[kind] * (kind === "reward" ? 1.5 : kind === "message" ? 1.15 : 0.55)), now + (kind === "ui" ? 0.07 : 0.18));
         gain.gain.setValueAtTime(0.0001, now);
         gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, musicVolume * 0.12), now + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + (kind === "explode" || kind === "lose" ? 0.38 : 0.16));
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + (kind === "explode" || kind === "lose" ? 0.38 : kind === "message" ? 0.24 : 0.16));
         oscillator.connect(gain);
         gain.connect(musicContext.destination);
         oscillator.start(now);
@@ -1009,6 +1054,7 @@ function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "rou
 }
 
 function updateOwnerAccountIndicator() {
+    document.querySelectorAll<HTMLElement>(".pending-friend-badge").forEach((badge) => { badge.textContent = pendingFriendRequests ? String(pendingFriendRequests) : ""; badge.hidden = pendingFriendRequests === 0; });
     const existing = document.querySelector<HTMLElement>(".owner-account-indicator");
     if (currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "tester") {
         const indicator = existing instanceof HTMLButtonElement ? existing : document.createElement("button");
@@ -1204,6 +1250,11 @@ function showMenu() {
     accountRail.className = "account-rail";
     const accountButton = createTextButton(currentOnlineUser ? currentOnlineUser.username : "Account", () => showAccount());
     accountButton.classList.add("account-rail-button");
+    const accountBadge = document.createElement("b");
+    accountBadge.className = "pending-friend-badge";
+    accountBadge.hidden = pendingFriendRequests === 0;
+    accountBadge.textContent = pendingFriendRequests ? String(pendingFriendRequests) : "";
+    accountButton.append(accountBadge);
     accountButton.setAttribute("aria-label", currentOnlineUser ? `Account: ${currentOnlineUser.username}` : "Open account");
     accountRail.append(accountButton);
     const secondaryActions = document.createElement("div"); secondaryActions.className = "secondary-actions"; secondaryActions.append(createTextButton("Special asteroid odds", showDropRates), createTextButton("Credits", showCredits));
@@ -1246,11 +1297,12 @@ function showLevelMenu() {
         button.className = `level-button ${level.secret ? "secret-level" : ""} ${unlocked ? "" : "locked"}`;
         button.type = "button";
         button.disabled = !unlocked;
-        const requiredPrestige = level.prestigeRequirement ?? 1;
-        const prestigeLocked = !hasOwnerAccess() && activePlanet === "prestige" && prestigeLevel < requiredPrestige;
+        const requiredPrestige = Math.min(level.prestigeRequirement ?? 1, prestigeMax);
+        const prestigeLocked = activePlanet === "prestige" && isPrestigeRouteLocked(level);
         button.disabled = !unlocked || prestigeLocked;
         const lockMessage = prestigeLocked ? `LOCKED / reach prestige ${requiredPrestige}` : "LOCKED / clear the previous sector";
-        button.innerHTML = `<span><b>${String(routeIndex + 1).padStart(2, "0")}</b> ${level.name}</span><small>${button.disabled ? lockMessage : `${level.asteroids.length} asteroids / ${level.briefing}`}</small>`;
+        const requirementTag = requiredPrestige > 1 ? ` / PRESTIGE ${requiredPrestige}+` : "";
+        button.innerHTML = `<span><b>${String(routeIndex + 1).padStart(2, "0")}</b> ${level.name}</span><small>${button.disabled ? lockMessage : `${level.asteroids.length} asteroids${requirementTag} / ${level.briefing}`}</small>`;
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelList.append(button);
     });
@@ -1283,7 +1335,9 @@ function showSecretLevels() {
         button.className = `level-button secret-level ${unlocked ? "" : "locked"}`;
         button.type = "button";
         button.disabled = !unlocked || remainingMs > 0;
-        const cooldownText = remainingMs > 0 ? `AVAILABLE IN ${formatCooldown(remainingMs)}` : "";
+        const claimed = getClaimedAsteroids(index).size;
+        const readyText = remainingMs <= 0 && claimed > 0 ? "SPECIAL ASTEROIDS READY" : "";
+        const cooldownText = remainingMs > 0 ? `AVAILABLE IN ${formatCooldown(remainingMs)}` : readyText;
         button.innerHTML = `<span><b>??</b> ${level.name}</span><small>${!unlocked ? `LOCKED / find its ${level.prestige ? "prestige " : ""}key` : cooldownText || `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}`}</small>`;
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelList.append(button);
@@ -1885,6 +1939,30 @@ function showAccount(initialMessage = "") {
                 }
             });
             privacyRow.append(privacyInput);
+            const friendRequestsRow = document.createElement("label");
+            friendRequestsRow.className = "account-presence-setting";
+            friendRequestsRow.innerHTML = `<span><b>Allow friend requests</b><small>Let other pilots send you requests from profiles and the online list.</small></span>`;
+            const friendRequestsInput = document.createElement("input");
+            friendRequestsInput.type = "checkbox";
+            friendRequestsInput.checked = currentOnlineUser.allowFriendRequests !== false;
+            friendRequestsInput.setAttribute("aria-label", "Allow friend requests");
+            const friendRequestsStatus = document.createElement("small");
+            friendRequestsStatus.className = "presence-setting-status";
+            friendRequestsStatus.setAttribute("role", "status");
+            friendRequestsInput.addEventListener("change", async () => {
+                const previousValue = currentOnlineUser?.allowFriendRequests !== false;
+                friendRequestsInput.disabled = true;
+                friendRequestsStatus.textContent = "Saving friend request preference...";
+                try {
+                    const result = await apiRequest<{ allowFriendRequests: boolean }>("/account/friend-requests", { method: "PUT", body: JSON.stringify({ allowFriendRequests: friendRequestsInput.checked }) });
+                    if (currentOnlineUser) setOnlineUser({ ...currentOnlineUser, allowFriendRequests: result.allowFriendRequests });
+                    friendRequestsStatus.textContent = result.allowFriendRequests ? "Friend requests are enabled." : "New friend requests are disabled.";
+                } catch (error) {
+                    friendRequestsInput.checked = previousValue;
+                    friendRequestsStatus.textContent = error instanceof Error ? error.message : "Could not save friend request preference.";
+                } finally { friendRequestsInput.disabled = !currentOnlineUser; }
+            });
+            friendRequestsRow.append(friendRequestsInput);
             let leaderboardRow: HTMLElement | null = null;
             let leaderboardStatus: HTMLElement | null = null;
             if (currentOnlineUser.role === "player") {
@@ -1956,7 +2034,7 @@ function showAccount(initialMessage = "") {
             saveProfile.className = "menu-button";
             saveProfile.type = "submit";
             saveProfile.textContent = "Save profile";
-            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
+            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, friendRequestsRow, friendRequestsStatus, ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
             profileForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 saveProfile.disabled = true;
@@ -2059,11 +2137,47 @@ function showAccount(initialMessage = "") {
             securityPanel.dataset.controlSection = "security";
             securityPanel.hidden = true;
             securityPanel.append(passwordSection);
+            const inboxPanel = document.createElement("section");
+            inboxPanel.className = "account-settings-category";
+            inboxPanel.dataset.controlSection = "inbox";
+            inboxPanel.hidden = true;
+            const inboxHeading = document.createElement("h2");
+            inboxHeading.textContent = pendingFriendRequests ? `Inbox (${pendingFriendRequests})` : "Inbox";
+            const inboxStatus = document.createElement("small");
+            inboxStatus.className = "presence-setting-status";
+            inboxStatus.setAttribute("role", "status");
+            const inboxContent = document.createElement("div");
+            inboxContent.className = "account-inbox-list";
+            inboxPanel.append(inboxHeading, inboxStatus, inboxContent);
+            const drawInbox = async () => {
+                inboxContent.textContent = "Loading friend requests...";
+                try {
+                    const data = await loadFriends();
+                    pendingFriendRequests = data.incoming.length;
+                    inboxHeading.textContent = pendingFriendRequests ? `Inbox (${pendingFriendRequests})` : "Inbox";
+                    updateOwnerAccountIndicator();
+                    inboxContent.replaceChildren();
+                    if (!data.incoming.length && !data.outgoing.length) { inboxContent.textContent = "No friend requests right now."; return; }
+                    const incomingHeading = document.createElement("h3"); incomingHeading.textContent = "Requests for you"; inboxContent.append(incomingHeading);
+                    data.incoming.forEach((request) => {
+                        const row = document.createElement("article"); row.className = "account-inbox-row";
+                        const label = document.createElement("span"); label.textContent = `${request.username} ${request.role === "owner" ? "★" : request.role === "tester" ? "T" : ""} · sent ${request.createdAt ? new Date(request.createdAt).toLocaleString() : "recently"}`;
+                        const accept = createTextButton("Accept", async () => { await acceptFriendRequest(request.id); await drawInbox(); });
+                        const decline = createTextButton("Decline", async () => { await declineFriendRequest(request.id); await drawInbox(); });
+                        const block = createTextButton("Block", async () => { await blockUser(request.userId); await drawInbox(); });
+                        const profile = createTextButton("View profile", () => void showLeaderboardPlayerProfile(request.userId, showLeaderboard));
+                        row.append(label, accept, decline, block, profile); inboxContent.append(row);
+                    });
+                    const outgoingHeading = document.createElement("h3"); outgoingHeading.textContent = "Requests you sent"; inboxContent.append(outgoingHeading);
+                    data.outgoing.forEach((request) => { const row = document.createElement("article"); row.className = "account-inbox-row"; const label = document.createElement("span"); label.textContent = `${request.username} · waiting`; const cancel = createTextButton("Cancel", async () => { await removeFriend(request.userId); await drawInbox(); }); row.append(label, cancel); inboxContent.append(row); });
+                } catch (error) { inboxContent.textContent = error instanceof Error ? error.message : "Could not load friend requests."; }
+            };
             const accountSections: ControlSection[] = [
                 { id: "overview", title: "Pilot overview", group: "Player settings", description: "See your current progress, route completion, and prestige status at a glance.", panel: overviewPanel },
                 { id: "loadout", title: "Items & loadout", group: "Player settings", description: "Review your inventory and the ship cosmetics currently equipped.", panel: loadoutPanel },
                 { id: "profile", title: "Profile", group: "Account", description: "Change your display name, online visibility, and earned pilot title.", panel: profilePanel },
                 { id: "security", title: "Security", group: "Account", description: "Change your password or create a recovery code for this account.", panel: securityPanel },
+                { id: "inbox", title: pendingFriendRequests ? `Inbox (${pendingFriendRequests})` : "Inbox", group: "Account", description: "Friend requests sent to you, and requests you have sent.", panel: inboxPanel },
             ];
             const accountContent = document.createElement("div");
             accountContent.className = "account-settings-content";
@@ -2088,6 +2202,7 @@ function showAccount(initialMessage = "") {
                 accountDescription.textContent = selected.description;
                 accountNavigation.select(id);
                 localStorage.setItem("orbit-account-tab", id);
+                if (id === "inbox") void drawInbox();
             }
             dashboard.append(accountNavigation.nav, accountContent);
             const previousAccountSection = localStorage.getItem("orbit-account-tab");
@@ -2163,14 +2278,19 @@ function showAccount(initialMessage = "") {
             const signOut = createTextButton("Sign out", async () => {
                 try {
                     let syncWarning = "";
+                    let syncFailed = false;
                     try {
                         await syncAccountProgress("save", true);
                     } catch (error) {
+                        syncFailed = true;
                         syncWarning = ` You are signed out, but the latest progress could not sync: ${error instanceof Error ? error.message : "online service error"}`;
                         console.error("Could not save account progress before sign-out:", error);
                     }
+                    if (syncFailed && !window.confirm("We could not save your latest progress. Sign out anyway and lose it?")) return;
                     await apiRequest<void>("/auth/logout", { method: "POST" });
                     setOnlineUser(null);
+                    clearLocalAccountData();
+                    localStorage.removeItem("jacer-local-owner");
                     render(`You have signed out.${syncWarning}`);
                 } catch (error) {
                     render(error instanceof Error ? error.message : "Could not sign out.");
@@ -2522,23 +2642,26 @@ function showShop() {
     const cooldownTitle = document.createElement("b");
     cooldownTitle.textContent = "COOLDOWN RESET";
     const cooldownDescription = document.createElement("small");
-    cooldownDescription.textContent = "Clear every secret-level cooldown so completed portals can be replayed now.";
+    const resettableSecretIndexes = levels.map((level, index) => ({ level, index })).filter(({ level, index }) => Boolean(level.secretId) && (Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") > 0 || getClaimedAsteroids(index).size > 0));
+    cooldownDescription.textContent = "Costs 1,000 normal asteroids. Clears every secret-level cooldown and brings back their special asteroids.";
     const cooldownBuy = document.createElement("button");
     cooldownBuy.type = "button";
     cooldownBuy.className = "text-button shop-buy";
-    cooldownBuy.textContent = "Reset / 1,000 asteroids";
-    cooldownBuy.disabled = asteroidsClaimed < 1000;
+    cooldownBuy.textContent = `Reset / ${COOLDOWN_RESET_COST.toLocaleString()} asteroids`;
+    cooldownBuy.disabled = asteroidsClaimed < COOLDOWN_RESET_COST || resettableSecretIndexes.length === 0;
+    if (!resettableSecretIndexes.length) cooldownDescription.textContent = "Nothing to reset right now.";
     cooldownBuy.addEventListener("click", () => {
-        if (asteroidsClaimed < 1000) return;
-        asteroidsClaimed -= 1000;
+        const balance = Number(localStorage.getItem("orbit-claims") ?? asteroidsClaimed);
+        if (!Number.isSafeInteger(balance) || balance < COOLDOWN_RESET_COST || !resettableSecretIndexes.length) return;
+        if (!window.confirm(`Spend ${COOLDOWN_RESET_COST.toLocaleString()} normal asteroids to reset every secret-level cooldown?`)) return;
+        asteroidsClaimed = balance - COOLDOWN_RESET_COST;
         localStorage.setItem("orbit-claims", String(asteroidsClaimed));
-        levels.forEach((level) => {
+        resettableSecretIndexes.forEach(({ level, index }) => {
             if (level.secretId) localStorage.removeItem(`orbit-secret-cooldown-${level.secretId}`);
+            respawnSecretAsteroids(index);
         });
-        cooldownBuy.disabled = true;
-        currency.textContent = `NORMAL ${asteroidsClaimed}  /  SPECIAL ${specialAsteroids}`;
-        cooldownDescription.textContent = "All secret-level cooldowns are clear. Fly through the portals again.";
-        if (currentOnlineUser) void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not sync cooldown reset:", error));
+        if (currentOnlineUser) void syncAccountProgress("save", true).then(() => showShop()).catch((error: unknown) => console.error("Could not sync cooldown reset:", error));
+        else showShop();
     });
     cooldownReset.append(cooldownTitle, cooldownDescription, cooldownBuy);
     menu.append(currency, grid, wheel, cooldownReset, createTextButton("Mission select", showLevelMenu), createTextButton("Main menu", showMenu), createPageCounter());
@@ -2741,21 +2864,7 @@ function showDropRates() {
     oddsNote.className = "roulette-odds-note";
     oddsNote.textContent = "These are the configured odds. If a cosmetic collection is complete, its reward type is excluded and the remaining odds are normalized.";
     rouletteOdds.append(rouletteOddsGrid, oddsNote);
-    const catalog = document.createElement("section");
-    catalog.className = "rarity-catalog";
-    const collections: { title: string; items: { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }[] }[] = [
-        { title: "Skins", items: skins },
-        { title: "Trails", items: trails },
-        { title: "Avatars", items: avatars },
-    ];
-    collections.forEach((collection) => {
-        const group = document.createElement("article");
-        const orderedItems = [...collection.items].sort((first, second) =>
-            RARITY_ORDER.indexOf(getCosmeticRarity(first)) - RARITY_ORDER.indexOf(getCosmeticRarity(second)) || first.name.localeCompare(second.name));
-        group.innerHTML = `<h2>${collection.title}</h2><div>${orderedItems.map((item) => `<span>${item.name}${createRarityBadge(getCosmeticRarity(item))}</span>`).join("")}</div>`;
-        catalog.append(group);
-    });
-    menu.append(rouletteOdds, catalog, createTextButton("Back to main menu", showMenu), createPageCounter());
+    menu.append(rouletteOdds, createTextButton("Back to main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
 }
 
@@ -2793,6 +2902,15 @@ function getClaimedAsteroids(levelIndex: number): Set<number> {
 }
 
 function saveClaimedAsteroids(levelIndex: number, claimed: Set<number>) { localStorage.setItem(`orbit-asteroids-${levelIndex}`, JSON.stringify([...claimed])); }
+
+function respawnSecretAsteroids(levelIndex: number) {
+    localStorage.removeItem(`orbit-asteroids-${levelIndex}`);
+    localStorage.removeItem(`orbit-level-claims-${levelIndex}`);
+}
+
+function getActiveSecretPortals(level: Level) {
+    return (level.secretPortals ?? []).filter((portal) => hasOwnerAccess() || !isSecretPortalClaimed(portal.secretId));
+}
 
 function isSecretLevelUnlocked(level: Level) {
     if (hasOwnerAccess()) return true;
@@ -2937,7 +3055,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             name: row.querySelector<HTMLInputElement>("[data-title-name]")!.value,
             routes: Number(row.querySelector<HTMLInputElement>("[data-title-routes]")!.value),
             requirement: {
-                type: row.querySelector<HTMLSelectElement>("[data-title-requirement]")!.value as "routes" | "golden" | "prestige" | "roulette",
+                type: row.querySelector<HTMLSelectElement>("[data-title-requirement]")!.value as "routes" | "golden" | "prestige" | "roulette" | "locked",
                 amount: Number(row.querySelector<HTMLInputElement>("[data-title-requirement-amount]")!.value),
             },
         }));
@@ -2969,7 +3087,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const requirement = document.createElement("select");
             requirement.dataset.titleRequirement = String(index);
             requirement.setAttribute("aria-label", `Title ${index + 1} requirement type`);
-            [["routes", "Routes cleared"], ["golden", "Golden Body routes"], ["prestige", "Prestige level"], ["roulette", "Roulette prize"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; requirement.append(option); });
+            [["routes", "Routes cleared"], ["golden", "Golden Body routes"], ["prestige", "Prestige level"], ["roulette", "Roulette prize"], ["locked", "Unobtainable (owner or code only)"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; requirement.append(option); });
             requirement.value = title.requirement?.type ?? "routes";
             const requirementAmount = document.createElement("input");
             requirementAmount.type = "number";
@@ -2979,6 +3097,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             requirementAmount.value = String(title.requirement?.amount ?? title.routes);
             requirementAmount.dataset.titleRequirementAmount = String(index);
             requirementAmount.setAttribute("aria-label", `Title ${index + 1} requirement amount`);
+            const syncRequirementEditor = () => { requirementAmount.hidden = requirement.value === "locked"; if (requirement.value === "locked") requirementAmount.value = "0"; };
+            requirement.addEventListener("change", syncRequirementEditor);
+            syncRequirementEditor();
             const remove = createTextButton("Remove", () => {
                 if (!window.confirm(`Remove the ${title.name} title from the shared catalog?`)) return;
                 profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
@@ -3021,13 +3142,14 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         profileTitles.forEach((title) => {
             const option = document.createElement("option");
             option.value = title.id;
-            const requirement = title.requirement?.type === "golden" ? `${title.requirement.amount} Golden Body routes` : title.requirement?.type === "prestige" ? `prestige ${title.requirement.amount}` : title.requirement?.type === "roulette" ? "roulette prize" : `${title.requirement?.amount ?? title.routes} routes`;
+            const requirement = title.requirement?.type === "golden" ? `${title.requirement.amount} Golden Body routes` : title.requirement?.type === "prestige" ? `prestige ${title.requirement.amount}` : title.requirement?.type === "roulette" ? "roulette prize" : title.requirement?.type === "locked" ? "owner or code only" : `${title.requirement?.amount ?? title.routes} routes`;
             option.textContent = `${title.name} / ${requirement}`;
             grant.append(option);
         });
         const grantButton = createTextButton("Equip selected title on my account", () => {
             if (!grant.value) return;
             localStorage.setItem("orbit-title", grant.value);
+            localStorage.setItem(`orbit-title-unlock-${grant.value}`, "1");
             void syncAccountProgress("save", true).then(() => { status.textContent = "Selected title saved to your account."; }).catch((error: unknown) => { status.textContent = error instanceof Error ? error.message : "Could not sync title."; });
         });
         const grantAllButton = createTextButton("Grant all titles on my account", () => {
@@ -3316,6 +3438,58 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     addEnemyInput("Enemy projectile speed", "projectileSpeed", gameConfig.enemyRules.projectileSpeed, 0.5, 12, 0.1);
     addEnemyInput("Mini-boss projectile speed", "miniBossProjectileSpeed", gameConfig.enemyRules.miniBossProjectileSpeed, 0.5, 16, 0.1);
     addEnemyInput("Boss projectile speed", "bossProjectileSpeed", gameConfig.enemyRules.bossProjectileSpeed, 0.5, 16, 0.1);
+    const enemyRosterHeading = document.createElement("p");
+    enemyRosterHeading.className = "setting-title";
+    enemyRosterHeading.textContent = "Enemy roster";
+    enemySettings.append(enemyRosterHeading);
+    const enemyRosterHelp = document.createElement("p");
+    enemyRosterHelp.className = "menu-copy";
+    enemyRosterHelp.textContent = "Every enemy used by the level builder is listed below. Tune each enemy's cadence and projectile speed without changing the global defaults.";
+    enemySettings.append(enemyRosterHelp);
+    const enemyRoster = document.createElement("div");
+    enemyRoster.className = "enemy-roster";
+    const hasConfiguredEnemyProfiles = Boolean(gameConfig.enemyRules.enemyTypes);
+    const enemyProfiles = structuredClone(gameConfig.enemyRules.enemyTypes ?? DEFAULT_GAME_CONFIG.enemyRules.enemyTypes!);
+    if (!hasConfiguredEnemyProfiles) {
+        enemyProfiles.sentry.projectileSpeed = gameConfig.enemyRules.projectileSpeed;
+        enemyProfiles.darkKnight.projectileSpeed = gameConfig.enemyRules.miniBossProjectileSpeed;
+        enemyProfiles.titanCore.projectileSpeed = gameConfig.enemyRules.bossProjectileSpeed;
+    }
+    const enemyDefinitions = [
+        { key: "sentry" as const, name: "Sentry", description: "Regular route enemy", color: "#f6c46e" },
+        { key: "darkKnight" as const, name: "Dark Knight", description: "Mini-boss guardian", color: "#b991ff" },
+        { key: "titanCore" as const, name: "Titan Core", description: "Route boss", color: "#ed7657" },
+        { key: "voidWarden" as const, name: "Void Warden", description: "Secret portal boss", color: "#6ecbff" },
+    ];
+    enemyDefinitions.forEach(({ key, name, description, color }) => {
+        const profile = enemyProfiles[key];
+        const card = document.createElement("article");
+        card.className = "enemy-roster-card";
+        card.style.setProperty("--enemy-accent", color);
+        const heading = document.createElement("h3");
+        heading.textContent = name;
+        const copy = document.createElement("p");
+        copy.textContent = description;
+        card.append(heading, copy);
+        const addProfileInput = (labelText: string, field: "attackIntervalMultiplier" | "projectileSpeed", value: number, min: number, max: number, step: number) => {
+            const label = document.createElement("label");
+            label.append(document.createTextNode(labelText));
+            const input = document.createElement("input");
+            input.type = "number";
+            input.min = String(min);
+            input.max = String(max);
+            input.step = String(step);
+            input.value = String(value);
+            input.dataset.enemyProfile = `${key}.${field}`;
+            bindTesterSetting(input, `enemy.profile.${key}.${field}`);
+            label.append(input);
+            card.append(label);
+        };
+        addProfileInput("Cadence multiplier", "attackIntervalMultiplier", profile.attackIntervalMultiplier, 0.25, 2, 0.01);
+        addProfileInput("Projectile speed", "projectileSpeed", profile.projectileSpeed, 0.5, 16, 0.01);
+        enemyRoster.append(card);
+    });
+    enemySettings.append(enemyRoster);
     effectSettings.append(enemySettings);
     form.append(effectSettings);
     const customizationTitle = document.createElement("p"); customizationTitle.className = "setting-title"; customizationTitle.textContent = "Customization unlocks"; form.append(customizationTitle);
@@ -3638,11 +3812,24 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const fallback = currentPrestigeMultipliers[index] ?? currentPrestigeMultipliers[currentPrestigeMultipliers.length - 1] ?? enemyRules.prestigeAttackMultiplier;
             return readTesterSetting(`enemy.prestigeAttack.${index + 1}`, fallback);
         });
+        const enemyProfiles = enemyRules.enemyTypes ?? structuredClone(DEFAULT_GAME_CONFIG.enemyRules.enemyTypes!);
+        const enemyProfileKeys = ["sentry", "darkKnight", "titanCore", "voidWarden"] as const;
+        if (testerSettingsDraft.get("enemy.profile.sentry.projectileSpeed") === undefined) enemyProfiles.sentry.projectileSpeed = enemyRules.projectileSpeed;
+        if (testerSettingsDraft.get("enemy.profile.darkKnight.projectileSpeed") === undefined) enemyProfiles.darkKnight.projectileSpeed = enemyRules.miniBossProjectileSpeed;
+        if (testerSettingsDraft.get("enemy.profile.titanCore.projectileSpeed") === undefined) enemyProfiles.titanCore.projectileSpeed = enemyRules.bossProjectileSpeed;
+        enemyProfileKeys.forEach((type) => {
+            const profile = enemyProfiles[type];
+            profile.attackIntervalMultiplier = readTesterSetting(`enemy.profile.${type}.attackIntervalMultiplier`, profile.attackIntervalMultiplier);
+            profile.projectileSpeed = readTesterSetting(`enemy.profile.${type}.projectileSpeed`, profile.projectileSpeed);
+        });
+        enemyRules.enemyTypes = enemyProfiles;
         const enemyRuleValid = Number.isInteger(enemyRules.attackIntervalFrames) && enemyRules.attackIntervalFrames >= 15 && enemyRules.attackIntervalFrames <= 600
             && [enemyRules.prestigeAttackMultiplier, enemyRules.secretAttackMultiplier].every((value) => Number.isFinite(value) && value >= 0.25 && value <= 2)
             && enemyRules.prestigeAttackMultipliers.every((value) => Number.isFinite(value) && value >= 0.25 && value <= 2)
             && Number.isFinite(enemyRules.rapidAttackMultiplier) && enemyRules.rapidAttackMultiplier >= 0.25 && enemyRules.rapidAttackMultiplier <= 1
-            && [enemyRules.projectileSpeed, enemyRules.miniBossProjectileSpeed, enemyRules.bossProjectileSpeed].every((value) => Number.isFinite(value) && value >= 0.5 && value <= 16);
+            && [enemyRules.projectileSpeed, enemyRules.miniBossProjectileSpeed, enemyRules.bossProjectileSpeed].every((value) => Number.isFinite(value) && value >= 0.5 && value <= 16)
+            && enemyProfileKeys.every((type) => Number.isFinite(enemyProfiles[type].attackIntervalMultiplier) && enemyProfiles[type].attackIntervalMultiplier >= 0.25 && enemyProfiles[type].attackIntervalMultiplier <= 2
+                && Number.isFinite(enemyProfiles[type].projectileSpeed) && enemyProfiles[type].projectileSpeed >= 0.5 && enemyProfiles[type].projectileSpeed <= 16);
         if (!enemyRuleValid) {
             selectSection("abilities");
             setSaveStatus("Enemy behavior values are invalid. Check the allowed ranges and try again.", true);
@@ -3863,7 +4050,14 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
             || (Array.isArray(enemies.prestigeAttackMultipliers) && enemies.prestigeAttackMultipliers.length >= 1 && enemies.prestigeAttackMultipliers.length <= 100
                 && enemies.prestigeAttackMultipliers.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.25 && value <= 2)))
         && typeof enemies.rapidAttackMultiplier === "number" && Number.isFinite(enemies.rapidAttackMultiplier) && enemies.rapidAttackMultiplier >= 0.25 && enemies.rapidAttackMultiplier <= 1
-        && [enemies.projectileSpeed, enemies.miniBossProjectileSpeed, enemies.bossProjectileSpeed].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.5 && value <= 16);
+        && [enemies.projectileSpeed, enemies.miniBossProjectileSpeed, enemies.bossProjectileSpeed].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0.5 && value <= 16)
+        && (enemies.enemyTypes === undefined || (isRecord(enemies.enemyTypes)
+            && (["sentry", "darkKnight", "titanCore", "voidWarden"] as const).every((type) => {
+                const profile = enemies.enemyTypes?.[type];
+                return isRecord(profile)
+                    && typeof profile.attackIntervalMultiplier === "number" && Number.isFinite(profile.attackIntervalMultiplier) && profile.attackIntervalMultiplier >= 0.25 && profile.attackIntervalMultiplier <= 2
+                    && typeof profile.projectileSpeed === "number" && Number.isFinite(profile.projectileSpeed) && profile.projectileSpeed >= 0.5 && profile.projectileSpeed <= 16;
+            })));
 }
 
 function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
@@ -3876,7 +4070,7 @@ function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
         if (typeof candidate.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(candidate.id) || ids.has(candidate.id)
             || typeof candidate.name !== "string" || !candidate.name.trim() || candidate.name.trim().length > 50 || /[<>]/.test(candidate.name)
             || typeof candidate.routes !== "number" || !Number.isSafeInteger(candidate.routes) || candidate.routes < 0 || candidate.routes > 100000
-            || requirement !== undefined && (typeof requirement !== "object" || !["routes", "golden", "prestige", "roulette"].includes(requirement.type) || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000)) return false;
+            || requirement !== undefined && (typeof requirement !== "object" || !["routes", "golden", "prestige", "roulette", "locked"].includes(requirement.type) || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000)) return false;
         ids.add(candidate.id);
         return true;
     });
@@ -4027,7 +4221,7 @@ function buildLevel(levelIndex: number) {
     // Keep the spike hitbox over the playable floor (not below the ship's
     // collision box) so spikes damage normal, secret, and prestige worlds.
     levelHazards = [...level.spikes.map((index) => ({ x: 140 + index * TILE_WIDTH, y: FLOOR_Y + 30, width: 76, height: 30, kind: "spikes" as const })), ...level.gravity.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 110, width: 115, height: 250, kind: "gravity" as const }))];
-    levelEnemies = enemyIndices.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 285, defeated: false }));
+    levelEnemies = enemyIndices.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 285, defeated: false, attackTimer: 0 }));
     const blockedPowerupTiles = [...obstacleIndices, ...enemyIndices, ...level.spikes, ...level.gravity];
     levelPowerups = createLevelPowerups(level, [...(level.powerups ?? [])], blockedPowerupTiles);
     const keyPlacement = level.secret && !level.prestige ? level.secretKey : undefined;
@@ -4045,10 +4239,10 @@ function buildLevel(levelIndex: number) {
     }
     const difficultyMultiplier = level.prestige ? Math.max(1.35, getPrestigeDifficultyMultiplier()) : level.secret ? 1.2 : 1.1;
     const miniBossHealth = Math.ceil(2 * difficultyMultiplier);
-    levelMiniBosses = (level.miniBosses ?? []).map((index) => ({ x: 140 + index * TILE_WIDTH, y: 245, health: miniBossHealth, maxHealth: miniBossHealth, defeated: false }));
+    levelMiniBosses = (level.miniBosses ?? []).map((index) => ({ x: 140 + index * TILE_WIDTH, y: 245, health: miniBossHealth, maxHealth: miniBossHealth, defeated: false, attackTimer: 0 }));
 separateActorsFromObstacles();
     const bossHealth = Math.ceil(level.asteroids.length * difficultyMultiplier);
-    boss = (level.boss || level.secret) ? { x: 140 + (level.bossIndex ?? level.length - 2) * TILE_WIDTH, y: 205, health: bossHealth, maxHealth: bossHealth, defeated: false } : null;
+    boss = (level.boss || level.secret) ? { x: 140 + (level.bossIndex ?? level.length - 2) * TILE_WIDTH, y: 205, health: bossHealth, maxHealth: bossHealth, defeated: false, attackTimer: 0 } : null;
     if (boss) {
         levelObstacles.push({ x: boss.x, y: boss.y, width: 128, height: 150 });
         separateActorsFromObstacles();
@@ -4152,7 +4346,8 @@ function updateSecretBossRoom() {
             if (shootingHeld || controlKeysFor("shoot").some((key) => pressedKeys.has(key))) shootSecretBoss();
             projectileTimer += currentFrameScale;
             const secondPhase = secretBoss.health <= secretBoss.maxHealth / 2;
-            const attackInterval = secondPhase ? 48 : rapidTimer > 0 ? 56 : reducedEffects ? 96 : 72;
+            const profile = getEnemyProfile("voidWarden");
+            const attackInterval = Math.max(15, Math.round((secondPhase ? 48 : rapidTimer > 0 ? 56 : reducedEffects ? 96 : 72) * profile.attackIntervalMultiplier));
             if (projectileTimer >= attackInterval) {
                 projectileTimer = 0;
                 if (secondPhase) [-0.3, 0, 0.3].forEach((spread) => fireSecretBossProjectile(spread));
@@ -4179,7 +4374,7 @@ function fireSecretBossProjectile(spread = 0) {
     const element = document.createElement("div");
     element.className = "boss-projectile secret-boss-projectile";
     document.querySelector(".portal-key-room")?.append(element);
-    const speed = 5.04;
+    const speed = getEnemyProfile("voidWarden").projectileSpeed;
     projectiles.push({ x: secretBoss.x + 64, y: secretBoss.y + SECRET_BOSS_HEIGHT / 2, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, element, owner: "enemy" });
 }
 
@@ -4202,6 +4397,7 @@ function damageSecretBoss() {
     const keyId = currentSecretPortalTarget;
     if (keyId) {
         markSecretPortalClaimed(keyId);
+        hideSecretPortal(keyId);
         localStorage.setItem(`orbit-key-${keyId}`, "1");
         if (keyId === "eclipse") localStorage.setItem("orbit-secret-unlocked", "1");
         if (levelKey && !levelKey.collected) { levelKey.collected = true; secretKeyRevealed = true; localStorage.setItem(`orbit-key-${levelKey.id}`, "1"); unlockEndGoal(); }
@@ -4317,8 +4513,27 @@ function showPlanetaryTransition(text: string) {
 function startGame(levelIndex = currentLevel) {
     const level = levels[levelIndex];
     if (!level) return;
+    if (isPrestigeRouteLocked(level)) {
+        const required = Math.min(level.prestigeRequirement ?? 1, prestigeMax);
+        const screen = document.createElement("main");
+        screen.className = "menu-screen";
+        screen.innerHTML = `<p class="eyebrow">PRESTIGE ROUTE / REQUIREMENTS</p><h1>Route <em>sealed</em></h1>`;
+        const message = document.createElement("p");
+        message.className = "menu-copy";
+        message.textContent = `Reach prestige ${required} to enter this route.`;
+        screen.append(message, createTextButton("Mission select", showLevelMenu));
+        document.body.replaceChildren(screen);
+        return;
+    }
     if (level.secret && level.secretId) {
-        const cooldownUntil = Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") + SECRET_LEVEL_COOLDOWN_MS;
+        const cooldownKey = `orbit-secret-cooldown-${level.secretId}`;
+        const completedAt = Number(localStorage.getItem(cooldownKey) ?? "0");
+        const cooldownUntil = completedAt + SECRET_LEVEL_COOLDOWN_MS;
+        if (completedAt > 0 && cooldownUntil <= Date.now()) {
+            respawnSecretAsteroids(levelIndex);
+            localStorage.removeItem(cooldownKey);
+            if (currentOnlineUser) void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not sync secret asteroid respawn:", error));
+        }
         if (cooldownUntil > Date.now()) {
             showSecretLevels();
             return;
@@ -4346,13 +4561,14 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; enemyAttackTimer = 0; miniBossAttackTimer = 0; bossAttackTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    chatController?.setGameActive(true);
     document.body.innerHTML = "";
     createGameShell(); createPlayer(); createWorldObjects(); createTrail(false); createControls(); startGameLoop();
 }
 
 function showWinScreen() {
-    gameActive = false; cancelAnimationFrame(animationFrame);
+    gameActive = false; chatController?.setGameActive(false); cancelAnimationFrame(animationFrame);
     if (isLevelMakerPreview) {
         const screen = document.createElement("main");
         screen.className = "win-screen win-screen-animation";
@@ -4414,7 +4630,15 @@ function showWinScreen() {
         document.body.replaceChildren(screen);
         return;
     }
-    screen.append(createMenuButton(nextLevel >= 0 ? "Next sector" : "Replay sector", () => nextLevel >= 0 ? startGame(nextLevel) : startGame(currentLevel)), createTextButton("Mission select", showLevelMenu), createPageCounter());
+    if (nextLevel >= 0 && isPrestigeRouteLocked(levels[nextLevel])) {
+        const required = Math.min(levels[nextLevel].prestigeRequirement ?? 1, prestigeMax);
+        const next = createMenuButton(`Next sector needs prestige ${required}`, () => undefined);
+        next.disabled = true;
+        screen.append(next);
+    } else {
+        screen.append(createMenuButton(nextLevel >= 0 ? "Next sector" : "Replay sector", () => nextLevel >= 0 ? startGame(nextLevel) : startGame(currentLevel)));
+    }
+    screen.append(createTextButton("Mission select", showLevelMenu), createPageCounter());
     document.body.replaceChildren(screen);
 }
 
@@ -4456,7 +4680,7 @@ async function submitLeaderboardRun(status: HTMLElement, levelName: string, time
 function showGameOver(reason = "Your hull took a hit.") {
     if (!gameActive) return;
     playSound("lose");
-    gameActive = false; cancelAnimationFrame(animationFrame); pressedKeys.clear(); cancelPortalTransit();
+    gameActive = false; chatController?.setGameActive(false); cancelAnimationFrame(animationFrame); pressedKeys.clear(); cancelPortalTransit();
     resetFlippedVisualState();
     const screen = document.createElement("main");
     screen.className = "win-screen game-over-screen";
@@ -4539,7 +4763,7 @@ createLevelKeyObject();
     if (inFlippedRoute && !flippedRouteKeyCollected) { const routeKey = document.createElement("div"); routeKey.className = "level-key flipped-route-key"; routeKey.textContent = "⚿"; routeKey.style.left = `${140 + Math.min(levels[currentLevel].length - 2, Math.max(2, levels[currentLevel].flippedRoute?.key ?? levels[currentLevel].length - 3)) * TILE_WIDTH}px`; routeKey.style.top = `${flippedRouteKeyY}px`; routeKey.setAttribute("aria-label", "Flipped planet exit key"); world.append(routeKey); }
     
     // Secret portals - one per secret level, placed in hard-to-reach/obscured locations (y=80, reveal radius 50px)
-    const secretPortals = levels[currentLevel].secret ? [] : levels[currentLevel].secretPortals ?? [];
+    const secretPortals = levels[currentLevel].secret ? [] : getActiveSecretPortals(levels[currentLevel]);
     secretPortals.forEach((portal, portalIndex) => {
         const element = document.createElement("div");
         element.className = "secret-portal";
@@ -4548,6 +4772,7 @@ createLevelKeyObject();
         element.style.top = `${portal.y ?? PORTAL_Y}px`;
         element.setAttribute("aria-label", `Hidden portal to ${portal.secretId}`);
         element.dataset.portalIndex = portalIndex.toString();
+        element.dataset.secretId = portal.secretId;
         world.append(element);
     });
     
@@ -4625,8 +4850,15 @@ function createLevelKeyObject() {
     world.append(element);
 }
 
+function hideSecretPortal(secretId: string) {
+    world.querySelectorAll<HTMLElement>(".secret-portal").forEach((element) => {
+        if (element.dataset.secretId === secretId) element.remove();
+    });
+}
+
 function startPortalTransit(target: number, secretId?: string) {
     if (portalTravelInProgress) return;
+    if (secretId && !hasOwnerAccess() && isSecretPortalClaimed(secretId)) return;
     usedAbilities.add("portal");
     const sourceLevel = levels[currentLevel];
     const targetLevel = levels.find((level) => level.secretId === secretId);
@@ -4661,6 +4893,9 @@ function startPortalTransit(target: number, secretId?: string) {
     projectiles.forEach((projectile) => projectile.element.remove());
     projectiles = [];
     projectileTimer = 0;
+    enemyAttackTimer = 0;
+    miniBossAttackTimer = 0;
+    bossAttackTimer = 0;
     const skin = skins[selectedSkin] ?? skins[0];
     const avatar = avatars[selectedAvatar] ?? avatars[0];
     const room = document.createElement("section");
@@ -4680,7 +4915,7 @@ function startPortalTransit(target: number, secretId?: string) {
     previousPlayerY = playerY;
     statusLabel.textContent = "Portal arena entered. Defeat the Void Warden to claim its key.";
     const bossX = Math.max(112, Math.min(room.clientWidth - 152, room.clientWidth * 0.68));
-    secretBoss = { x: bossX, y: secretRoomFloorY - SECRET_BOSS_HEIGHT, health: 12, maxHealth: 12, defeated: false };
+    secretBoss = { x: bossX, y: secretRoomFloorY - SECRET_BOSS_HEIGHT, health: 12, maxHealth: 12, defeated: false, attackTimer: 0 };
     const bossElement = document.createElement("div");
     bossElement.className = "boss secret-boss void-warden";
     bossElement.style.left = `${secretBoss.x}px`;
@@ -4719,6 +4954,7 @@ function exitSecretBossRoom() {
     secretRoomFloorY = FLOOR_Y;
     world.classList.remove("portal-boss-room-active");
     document.querySelector(".portal-key-room")?.remove();
+    redrawRouteObjects();
     updatePlayerPosition();
 }
 
@@ -4752,6 +4988,7 @@ function createButton(className: string, text: string, action: () => void) { con
 function createHoldButton(className: string, text: string, action: () => void) { const button = createButton(className, text, action); button.addEventListener("pointerdown", () => { shootingHeld = true; }); ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => button.addEventListener(eventName, () => { shootingHeld = false; })); return button; }
 function handleKeyDown(event: KeyboardEvent) {
     const targetElement = event.target instanceof HTMLElement ? event.target : null;
+    if (targetElement?.matches("input, textarea, select, [contenteditable]")) return;
     if (event.code === "Backspace" && !gameActive && !targetElement?.matches("input, textarea, select")) {
         event.preventDefault();
         if (!document.querySelector(".home-screen")) showMenu();
@@ -4779,6 +5016,8 @@ function handleKeyDown(event: KeyboardEvent) {
     if (action === "shoot") { shootingHeld = true; shoot(); }
 }
 function handleKeyUp(event: KeyboardEvent) {
+    const targetElement = event.target instanceof HTMLElement ? event.target : null;
+    if (targetElement?.matches("input, textarea, select, [contenteditable]")) return;
     const key = event.code.toLowerCase();
     pressedKeys.delete(key);
     if (controlKeysFor("shoot").includes(key)) shootingHeld = false;
@@ -4871,6 +5110,16 @@ function getPrestigeAttackMultiplier() {
         : gameConfig.enemyRules.prestigeAttackMultiplier;
 }
 
+type EnemyTypeKey = "sentry" | "darkKnight" | "titanCore" | "voidWarden";
+function getEnemyProfile(type: EnemyTypeKey) {
+    const configured = gameConfig.enemyRules.enemyTypes?.[type];
+    const legacySpeed = type === "sentry" ? gameConfig.enemyRules.projectileSpeed : type === "darkKnight" ? gameConfig.enemyRules.miniBossProjectileSpeed : type === "titanCore" ? gameConfig.enemyRules.bossProjectileSpeed : DEFAULT_GAME_CONFIG.enemyRules.enemyTypes!.voidWarden.projectileSpeed;
+    const fallback = { ...DEFAULT_GAME_CONFIG.enemyRules.enemyTypes![type], projectileSpeed: legacySpeed };
+    return configured && Number.isFinite(configured.attackIntervalMultiplier) && Number.isFinite(configured.projectileSpeed)
+        ? configured
+        : fallback;
+}
+
 function startGameLoop(timestamp = performance.now()) {
     if (!gameActive) return;
     animationFrame = requestAnimationFrame(startGameLoop);
@@ -4896,7 +5145,7 @@ function startGameLoop(timestamp = performance.now()) {
     verticalSpeed += (shipFlipped ? -1 : 1) * (inGravity ? gravity * 1.55 : gravity) * currentFrameScale; playerY += verticalSpeed * currentFrameScale;
     if (!shipFlipped && playerY >= FLOOR_Y) { playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; }
     if (shipFlipped && playerY <= CEILING_Y) { playerY = CEILING_Y; verticalSpeed = 0; jumpCount = 0; }
-    projectileTimer += currentFrameScale; trailTimer += currentFrameScale; playerShotTimer = Math.max(0, playerShotTimer - currentFrameScale); boostTimer = Math.max(0, boostTimer - currentFrameScale); cannonTimer = cannonTimer === Number.POSITIVE_INFINITY ? cannonTimer : Math.max(0, cannonTimer - currentFrameScale); rapidTimer = Math.max(0, rapidUntil - performance.now()); rapidCannonUntil = rapidCannonUntil > performance.now() ? rapidCannonUntil : 0;
+    trailTimer += currentFrameScale; playerShotTimer = Math.max(0, playerShotTimer - currentFrameScale); boostTimer = Math.max(0, boostTimer - currentFrameScale); cannonTimer = cannonTimer === Number.POSITIVE_INFINITY ? cannonTimer : Math.max(0, cannonTimer - currentFrameScale); rapidTimer = Math.max(0, rapidUntil - performance.now()); rapidCannonUntil = rapidCannonUntil > performance.now() ? rapidCannonUntil : 0;
     if (starPowerupActive) {
         starPowerupTimer -= currentFrameScale;
         if (starPowerupTimer <= 0) {
@@ -4915,7 +5164,15 @@ function startGameLoop(timestamp = performance.now()) {
     const projectileInterval = reducedEffects
         ? Math.max(15, Math.round(enemyRules.attackIntervalFrames * 1.33))
         : Math.max(15, Math.round(enemyRules.attackIntervalFrames * enemyDifficulty * rapidAttackMultiplier));
-    if (projectileTimer >= projectileInterval) { projectileTimer -= projectileInterval; levelEnemies.forEach(fireProjectile); levelMiniBosses.forEach(fireMiniBossProjectile); if (boss && !boss.defeated) fireBossProjectile(); }
+    const sentryInterval = Math.max(15, Math.round(projectileInterval * getEnemyProfile("sentry").attackIntervalMultiplier));
+    const darkKnightInterval = Math.max(15, Math.round(projectileInterval * getEnemyProfile("darkKnight").attackIntervalMultiplier));
+    const titanCoreInterval = Math.max(15, Math.round(projectileInterval * getEnemyProfile("titanCore").attackIntervalMultiplier));
+    enemyAttackTimer += currentFrameScale;
+    miniBossAttackTimer += currentFrameScale;
+    bossAttackTimer += currentFrameScale;
+    if (enemyAttackTimer >= sentryInterval) { enemyAttackTimer -= sentryInterval; levelEnemies.forEach(fireProjectile); }
+    if (miniBossAttackTimer >= darkKnightInterval) { miniBossAttackTimer -= darkKnightInterval; levelMiniBosses.forEach(fireMiniBossProjectile); }
+    if (boss && !boss.defeated && bossAttackTimer >= titanCoreInterval) { bossAttackTimer -= titanCoreInterval; fireBossProjectile(); }
     trailMovementFrames = Math.max(0, trailMovementFrames - currentFrameScale);
     if (lastJumpDirection !== 0) { trailDirection = lastJumpDirection; trailActive = true; trailPositions = []; lastJumpDirection = 0; }
     const airborne = Math.abs(verticalSpeed) > .2;
@@ -4981,10 +5238,10 @@ function fireProjectile(enemy: Enemy) {
     if (enemy.defeated) return;
     playSound("enemy");
     const startX = enemy.x + 18, startY = enemy.y + 25, directionX = playerX + 24 - startX, directionY = playerY + 28 - startY, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div");
-    element.className = "projectile"; world.append(element); projectiles.push({ x: startX, y: startY, vx: directionX / distance * gameConfig.enemyRules.projectileSpeed, vy: directionY / distance * gameConfig.enemyRules.projectileSpeed, element, owner: "enemy" });
+    element.className = "projectile"; world.append(element); const speed = getEnemyProfile("sentry").projectileSpeed; projectiles.push({ x: startX, y: startY, vx: directionX / distance * speed, vy: directionY / distance * speed, element, owner: "enemy" });
 }
-function fireBossProjectile() { if (!boss) return; playSound("enemy"); const directionX = playerX + 24 - boss.x, directionY = playerY + 28 - boss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "boss-projectile"; world.append(element); projectiles.push({ x: boss.x, y: boss.y + 50, vx: directionX / distance * gameConfig.enemyRules.bossProjectileSpeed, vy: directionY / distance * gameConfig.enemyRules.bossProjectileSpeed, element, owner: "enemy" }); }
-function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) return; playSound("enemy"); const directionX = playerX + 24 - miniBoss.x, directionY = playerY + 28 - miniBoss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "mini-projectile"; world.append(element); projectiles.push({ x: miniBoss.x, y: miniBoss.y + 36, vx: directionX / distance * gameConfig.enemyRules.miniBossProjectileSpeed, vy: directionY / distance * gameConfig.enemyRules.miniBossProjectileSpeed, element, owner: "enemy" }); }
+function fireBossProjectile() { if (!boss) return; playSound("enemy"); const directionX = playerX + 24 - boss.x, directionY = playerY + 28 - boss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "boss-projectile"; world.append(element); const speed = getEnemyProfile("titanCore").projectileSpeed; projectiles.push({ x: boss.x, y: boss.y + 50, vx: directionX / distance * speed, vy: directionY / distance * speed, element, owner: "enemy" }); }
+function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) return; playSound("enemy"); const directionX = playerX + 24 - miniBoss.x, directionY = playerY + 28 - miniBoss.y, distance = Math.max(1, Math.hypot(directionX, directionY)), element = document.createElement("div"); element.className = "mini-projectile"; world.append(element); const speed = getEnemyProfile("darkKnight").projectileSpeed; projectiles.push({ x: miniBoss.x, y: miniBoss.y + 36, vx: directionX / distance * speed, vy: directionY / distance * speed, element, owner: "enemy" }); }
 function createTrail(visible = true) {
     const trail = trails[selectedTrail] ?? trails[0];
     if (trailElement.length === 0) {
@@ -5132,7 +5389,7 @@ function checkCollisions() {
     levelHazards.forEach((hazard) => { if (!isStarInvincible() && hazard.kind === "spikes" && intersects(playerBox(), hazard)) { if (shieldCharges > 0) { shieldCharges--; playerY = 300; statusLabel.textContent = "Shield absorbed the spike hit."; } else showGameOver("The spike belt caught your ship."); } });
     levelPowerups.forEach((powerup, index) => { if (!powerup.collected && intersects(playerBox(), { x: powerup.x, y: powerup.y, width: 38, height: 38 }) && canActivatePowerup(powerup.kind)) { powerup.collected = true; activatePowerup(powerup.kind); document.querySelectorAll(".powerup")[index]?.classList.add("collected"); } });
     
-    const secretPortals = levels[currentLevel].secretPortals ?? [];
+    const secretPortals = getActiveSecretPortals(levels[currentLevel]);
     if (!portalTravelInProgress && performance.now() >= portalCooldownUntil) {
         secretPortals.some((portal) => {
             const portalBox = { x: 140 + portal.index * TILE_WIDTH, y: portal.y ?? PORTAL_Y, width: PORTAL_SIZE, height: PORTAL_SIZE };
@@ -5158,9 +5415,10 @@ function checkCollisions() {
     }
 if (portalTravelInProgress) return;
     if (levelKey && secretKeyRevealed && !levelKey.collected && intersects(playerBox(), { x: levelKey.x, y: levelKey.y, width: 38, height: 38 })) {
-        levelKey.collected = true; 
+        levelKey.collected = true;
         localStorage.setItem(`orbit-key-${levelKey.id}`, "1"); 
         if (levelKey.id === "eclipse") localStorage.setItem("orbit-secret-unlocked", "1"); 
+        hideSecretPortal(levelKey.id);
         document.querySelector(".level-key")?.classList.add("collected"); 
         statusLabel.textContent = `${levelKey.id} key claimed. Secret level unlocked.`;
         // Show boss when key is collected
@@ -5325,10 +5583,12 @@ function getNormalCompletedLevelCount() { return levels.filter((level, index) =>
 function getCompletedLevelCount() { return levels.filter((_, index) => localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
 function isProfileTitleUnlocked(title: ProfileTitle) {
     if (hasOwnerAccess() || localStorage.getItem("orbit-all-titles") === "1") return true;
+    if (localStorage.getItem(`orbit-title-unlock-${title.id}`) === "1") return true;
     const requirement = title.requirement ?? { type: "routes" as const, amount: title.routes };
+    if (requirement.type === "locked") return false;
     if (requirement.type === "golden") return getNormalCompletedLevelCount() >= requirement.amount;
     if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
-    if (requirement.type === "roulette") return localStorage.getItem(`orbit-title-unlock-${title.id}`) === "1";
+    if (requirement.type === "roulette") return false;
     return getCompletedLevelCount() >= requirement.amount;
 }
 function hasClearedPrestigeGate() { return localStorage.getItem("orbit-level-complete-prestige-gate") === "1" || levels.some((level, index) => level.secretId === "prestige-gate" && localStorage.getItem(`orbit-level-complete-${index}`) === "1"); }

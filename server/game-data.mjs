@@ -30,7 +30,7 @@ export function validateProfileTitles(value) {
       || !Number.isSafeInteger(entry.routes) || entry.routes < 0 || entry.routes > 100000) return null;
     const requirement = entry.requirement ?? { type: "routes", amount: entry.routes };
     if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)
-      || !["routes", "golden", "prestige", "roulette"].includes(requirement.type)
+      || !["routes", "golden", "prestige", "roulette", "locked"].includes(requirement.type)
       || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000) return null;
     ids.add(entry.id);
     const normalized = { id: entry.id, name: entry.name.trim(), routes: entry.routes };
@@ -84,6 +84,12 @@ export const DEFAULT_GAME_CONFIG = {
     projectileSpeed: 2.6,
     miniBossProjectileSpeed: 4.5,
     bossProjectileSpeed: 4.2,
+    enemyTypes: {
+      sentry: { attackIntervalMultiplier: 1, projectileSpeed: 2.6 },
+      darkKnight: { attackIntervalMultiplier: 1, projectileSpeed: 4.5 },
+      titanCore: { attackIntervalMultiplier: 1, projectileSpeed: 4.2 },
+      voidWarden: { attackIntervalMultiplier: 1, projectileSpeed: 5.04 },
+    },
   },
 };
 
@@ -147,7 +153,14 @@ export function isValidGameConfig(value) {
     && Number.isFinite(enemies.rapidAttackMultiplier) && enemies.rapidAttackMultiplier >= 0.25 && enemies.rapidAttackMultiplier <= 1
     && Number.isFinite(enemies.projectileSpeed) && enemies.projectileSpeed >= 0.5 && enemies.projectileSpeed <= 12
     && Number.isFinite(enemies.miniBossProjectileSpeed) && enemies.miniBossProjectileSpeed >= 0.5 && enemies.miniBossProjectileSpeed <= 16
-    && Number.isFinite(enemies.bossProjectileSpeed) && enemies.bossProjectileSpeed >= 0.5 && enemies.bossProjectileSpeed <= 16;
+    && Number.isFinite(enemies.bossProjectileSpeed) && enemies.bossProjectileSpeed >= 0.5 && enemies.bossProjectileSpeed <= 16
+    && (enemies.enemyTypes === undefined || (enemies.enemyTypes && typeof enemies.enemyTypes === "object" && !Array.isArray(enemies.enemyTypes)
+      && ["sentry", "darkKnight", "titanCore", "voidWarden"].every((type) => {
+        const profile = enemies.enemyTypes[type];
+        return profile && typeof profile === "object" && !Array.isArray(profile)
+          && Number.isFinite(profile.attackIntervalMultiplier) && profile.attackIntervalMultiplier >= 0.25 && profile.attackIntervalMultiplier <= 2
+          && Number.isFinite(profile.projectileSpeed) && profile.projectileSpeed >= 0.5 && profile.projectileSpeed <= 16;
+      })));
 }
 
 function parseTileList(value, length) {
@@ -280,7 +293,9 @@ export function validatePlayerProgress(value) {
 
 export function getEarnedProfileTitle(completedRouteCount, selectedTitle, titles = PROFILE_TITLE_MILESTONES) {
   if (!Number.isSafeInteger(completedRouteCount) || completedRouteCount < 0 || typeof selectedTitle !== "string") return "";
-  return titles.find((title) => title.id === selectedTitle && completedRouteCount >= (title.requirement?.type === "routes" ? title.requirement.amount : title.routes))?.name ?? "";
+  return titles.find((title) => title.id === selectedTitle
+    && title.requirement?.type !== "locked"
+    && completedRouteCount >= (title.requirement?.type === "routes" ? title.requirement.amount : title.routes))?.name ?? "";
 }
 
 export function normalizeUsername(value) {

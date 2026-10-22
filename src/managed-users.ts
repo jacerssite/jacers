@@ -91,6 +91,17 @@ export async function loadManagedUsers(container: HTMLElement) {
             banned.type = "checkbox";
             banned.checked = user.banned;
             banLabel.append(banned, document.createTextNode(" Ban account"));
+            const chatMute = createTextButton(user.chatMuted ? "Unmute chat" : "Mute chat", async () => {
+                chatMute.disabled = true;
+                try {
+                    const endpoint = user.chatMuted ? "chat-unmute" : "chat-mute";
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/${endpoint}`, { method: "POST", body: JSON.stringify({ reason: "Owner moderation" }) });
+                    chatMute.textContent = user.chatMuted ? "Mute chat" : "Unmute chat";
+                    user.chatMuted = !user.chatMuted;
+                } catch (error) {
+                    status.textContent = error instanceof Error ? error.message : "Could not update chat mute.";
+                } finally { chatMute.disabled = false; }
+            });
             const progress = document.createElement("textarea");
             progress.value = JSON.stringify(user.progress, null, 2);
             progress.setAttribute("aria-label", `Saved progress for ${user.username}`);
@@ -172,7 +183,8 @@ export async function loadManagedUsers(container: HTMLElement) {
             profileTitles.forEach((title) => {
                 const option = document.createElement("option");
                 option.value = title.id;
-                option.textContent = `${title.name} / ${title.routes} routes`;
+                const requirement = title.requirement?.type === "locked" ? "owner or code only" : title.requirement?.type === "golden" ? `${title.requirement.amount} Golden Body routes` : title.requirement?.type === "prestige" ? `prestige ${title.requirement.amount}` : title.requirement?.type === "roulette" ? "roulette prize" : `${title.requirement?.amount ?? title.routes} routes`;
+                option.textContent = `${title.name} / ${requirement}`;
                 option.selected = user.progress["orbit-title"] === title.id;
                 titleSelect.append(option);
             });
@@ -250,7 +262,7 @@ export async function loadManagedUsers(container: HTMLElement) {
             result.setAttribute("role", "status");
             const progressHeading = document.createElement("b");
             progressHeading.textContent = "Advanced saved profile data";
-            form.append(username, roleLabel, banLabel, progression, levelSection, progressHeading, progress, save, result);
+            form.append(username, roleLabel, banLabel, chatMute, progression, levelSection, progressHeading, progress, save, result);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 save.disabled = true;
@@ -277,8 +289,10 @@ export async function loadManagedUsers(container: HTMLElement) {
                         updatedInventory[input.dataset.powerup as PowerupKind] = value;
                     });
                     updatedProgress["orbit-powerups"] = JSON.stringify(updatedInventory);
-                    if (titleSelect.value) updatedProgress["orbit-title"] = titleSelect.value;
-                    else delete updatedProgress["orbit-title"];
+                    if (titleSelect.value) {
+                        updatedProgress["orbit-title"] = titleSelect.value;
+                        updatedProgress[`orbit-title-unlock-${titleSelect.value}`] = "1";
+                    } else delete updatedProgress["orbit-title"];
                     cosmeticUnlocks.querySelectorAll<HTMLInputElement>("input[data-cosmetic-unlock]").forEach((input) => {
                         const key = `orbit-unlock-${input.dataset.cosmeticUnlock}`;
                         if (input.checked) updatedProgress[key] = "1";

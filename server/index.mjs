@@ -7,10 +7,11 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { MongoClient, ObjectId } from "mongodb";
 import { attachDatabasePool } from "@vercel/functions";
+import { put } from "@vercel/blob";
 import argon2 from "argon2";
 import { getMongoDatabaseConfigurationError, getMongoDatabaseConnectionString } from "./database-config.mjs";
 import { dropLegacyRecoveryIndex } from "./database-setup.mjs";
-import { hasCurrencyConflict, initializePlayerProgress } from "./player-progress.mjs";
+import { getSuspiciousPlayerMutation, hasCurrencyConflict, initializePlayerProgress, sanitizeInitialPlayerProgress } from "./player-progress.mjs";
 import {
   ALLOWED_ABILITIES,
   isValidPassword,
@@ -78,7 +79,8 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
-      imgSrc: ["'self'", "data:"],
+      imgSrc: ["'self'", "data:", "https:"],
+      mediaSrc: ["'self'", "https:"],
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
@@ -103,6 +105,13 @@ const runSubmissionLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many run submissions. Wait a minute and try again." },
 });
+const progressWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many progress updates. Wait a moment and try again." },
+});
 let dummyPasswordHash = "";
 let dummyRecoveryHash = "";
 const recoveryLimiter = rateLimit({
@@ -119,10 +128,39 @@ const codeRedemptionLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many code attempts. Wait and try again." },
 });
+const friendRequestLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many friend requests. Wait a few minutes and try again." },
+});
+const chatMessageLimiter = rateLimit({
+  windowMs: 10 * 1000,
+  limit: 5,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "You are sending messages too quickly. Wait a moment." },
+});
+const chatUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many attachments. Wait before uploading more files." },
+});
 
 function noStore(res) {
   res.setHeader("Cache-Control", "no-store, private");
   res.setHeader("Pragma", "no-cache");
+}
+
+async function recordSecurityEvent(db, event) {
+  try {
+    await db.collection("security_events").insertOne({ ...event, createdAt: new Date() });
+  } catch (error) {
+    console.error("Could not record security event:", error);
+  }
 }
 
 function hashRedemptionCode(code) {
@@ -169,6 +207,7 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
     if (allTitlesGranted) return true;
     if (progress[`orbit-title-unlock-${candidate.id}`] === "1") return true;
     const requirement = candidate.requirement ?? { type: "routes", amount: candidate.routes };
+    if (requirement.type === "locked") return false;
     if (requirement.type === "golden") return goldenRouteCount >= requirement.amount;
     if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
     if (requirement.type === "roulette") return false;
@@ -215,7 +254,7 @@ async function getDatabase() {
   return (await mongoClientPromise).db();
 }
 
-async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined) {
+async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined, actorRole = "owner") {
   for (let attempt = 0; attempt < 5; attempt++) {
     const existing = await collection.findOne({ _id: userId }, session ? { session } : undefined);
     if (!replace && hasCurrencyConflict(existing?.data, progress, baseProgress)) return { progress: null, conflict: true };
@@ -229,6 +268,8 @@ async function writePlayerProgress(collection, userId, progress, baseProgress = 
         else delete mergedProgress[key];
       }
     }
+    const suspiciousMutation = getSuspiciousPlayerMutation(existing?.data, mergedProgress, actorRole);
+    if (suspiciousMutation) return { progress: null, conflict: false, suspiciousMutation };
     const validatedProgress = validatePlayerProgress(mergedProgress);
     if (!validatedProgress) return { progress: null, conflict: false };
     const revisionFilter = existing
@@ -291,12 +332,12 @@ function getCookie(req, name) {
 }
 
 function setSessionCookie(res, token) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = process.env.NODE_ENV === "production" || process.env.VERCEL ? "; Secure" : "";
   res.setHeader("Set-Cookie", `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionLifetimeMs / 1000}${secure}`);
 }
 
 function clearSessionCookie(res) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = process.env.NODE_ENV === "production" || process.env.VERCEL ? "; Secure" : "";
   res.setHeader("Set-Cookie", `${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
 
@@ -315,10 +356,10 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1 } },
+    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, chatMuted: 1 } },
   );
   return user && !user.banned && USER_ROLES.includes(user.role)
-    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false }
+    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, chatMuted: Boolean(user.chatMuted) }
     : null;
 }
 
@@ -390,6 +431,62 @@ async function getActiveUserIds(db, userIds) {
   return new Set(sessions.map((session) => session.userId.toHexString()));
 }
 
+function userIdString(value) {
+  return value instanceof ObjectId ? value.toHexString() : String(value);
+}
+
+function friendPairKey(first, second) {
+  return [userIdString(first), userIdString(second)].sort().join(":");
+}
+
+function validObjectId(value) {
+  return typeof value === "string" && ObjectId.isValid(value) ? new ObjectId(value) : null;
+}
+
+async function countDocumentsSafe(collection, filter) {
+  return typeof collection.countDocuments === "function" ? collection.countDocuments(filter) : 0;
+}
+
+async function isBlocked(db, first, second) {
+  const blocks = db.collection("user_blocks");
+  const [a, b] = await Promise.all([
+    blocks.findOne({ blockerId: first, blockedId: second }),
+    blocks.findOne({ blockerId: second, blockedId: first }),
+  ]);
+  return Boolean(a || b);
+}
+
+async function getFriendship(db, first, second) {
+  return db.collection("friendships").findOne({ pairKey: friendPairKey(first, second) });
+}
+
+async function ensureChatUser(db, id) {
+  return db.collection("users").findOne(
+    { _id: id, role: { $in: ["player", "tester", "owner"] }, banned: { $ne: true } },
+    { projection: { username: 1, role: 1, banned: 1, chatMuted: 1 } },
+  );
+}
+
+function chatAttachmentIsValid(attachment) {
+  if (attachment === undefined || attachment === null) return true;
+  if (!attachment || typeof attachment !== "object") return false;
+  const { kind, contentType, bytes, url } = attachment;
+  if (!["image", "gif", "video"].includes(kind) || typeof contentType !== "string" || typeof url !== "string" || !Number.isSafeInteger(bytes) || bytes < 1) return false;
+  const allowed = kind === "video" ? ["video/mp4", "video/webm"] : ["image/jpeg", "image/png", "image/webp", "image/gif"];
+  if (!allowed.includes(contentType)) return false;
+  const maxBytes = kind === "video" ? 25 * 1024 * 1024 : 8 * 1024 * 1024;
+  if (bytes > maxBytes) return false;
+  const blobOrigin = process.env.VERCEL_BLOB_PUBLIC_URL || process.env.BLOB_PUBLIC_URL;
+  return Boolean(blobOrigin && url.startsWith(blobOrigin.replace(/\/$/, "") + "/"));
+}
+
+async function unreadChatCount(db, userId) {
+  const conversations = db.collection("conversations");
+  if (typeof conversations.find !== "function") return 0;
+  const rows = await conversations.find({ userIds: userId }).toArray();
+  return rows.reduce((sum, row) => sum + (Number(row.unread?.[userIdString(userId)]) || 0), 0);
+}
+
 async function accountHandler(req, res, next, mode) {
   try {
     const credentials = req.body;
@@ -415,6 +512,7 @@ async function accountHandler(req, res, next, mode) {
           banned: false,
           appearOffline: false,
           leaderboardOptIn: true,
+          allowFriendRequests: true,
           createdAt: new Date(),
         });
         user = { _id: created.insertedId, username: username.display, role: "player" };
@@ -425,7 +523,7 @@ async function accountHandler(req, res, next, mode) {
       await createSession(user._id, res);
       noStore(res);
       return res.status(201).json({
-        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false, leaderboardOptIn: true },
+        user: { username: user.username, role: user.role, mustChangePassword: false, appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true },
         recoveryCode: code,
       });
     }
@@ -444,6 +542,7 @@ async function accountHandler(req, res, next, mode) {
         mustChangePassword: Boolean(user.mustChangePassword),
         appearOffline: Boolean(user.appearOffline),
         leaderboardOptIn: user.leaderboardOptIn !== false,
+        allowFriendRequests: user.allowFriendRequests !== false,
       },
     });
   } catch (error) {
@@ -585,7 +684,7 @@ app.get("/api/auth/session", async (req, res, next) => {
     const user = await getAuthenticatedUser(req);
     res.json({
       user: user
-        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false }
+        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false }
         : null,
     });
   } catch (error) {
@@ -604,7 +703,12 @@ app.post("/api/presence/heartbeat", requireSameOrigin, requireUser, async (req, 
       expiresAt: { $gt: now },
     }, { $set: { lastSeenAt: now } });
     if (!result.matchedCount) return res.status(401).json({ error: "Your login session has expired." });
-    res.status(204).end();
+    const db = await getDatabase();
+    const friendships = db.collection("friendships");
+    const pendingRequests = await countDocumentsSafe(friendships, { userIds: req.user.id, status: "pending", requestedBy: { $ne: req.user.id } });
+    const unreadMessages = await unreadChatCount(db, req.user.id);
+    noStore(res);
+    res.json({ pendingRequests, unreadMessages });
   } catch (error) {
     next(error);
   }
@@ -628,7 +732,7 @@ app.get("/api/presence", async (_req, res, next) => {
       .sort({ usernameNormalized: 1 })
       .toArray();
     res.json({
-      users: users.slice(0, 200).map((user) => ({ username: user.username, role: user.role })),
+      users: users.slice(0, 200).map((user) => ({ id: user._id.toHexString(), username: user.username, role: user.role })),
       truncated: users.length > 200,
     });
   } catch (error) {
@@ -652,6 +756,7 @@ app.post("/api/auth/logout", requireSameOrigin, async (req, res, next) => {
 
 app.get("/api/account/progress", requireUser, async (req, res, next) => {
   try {
+    noStore(res);
     const db = await getDatabase();
     const record = await db.collection("player_progress").findOne({ _id: req.user.id });
     const progress = record ? validatePlayerProgress(record.data) : null;
@@ -665,7 +770,7 @@ app.get("/api/account/progress", requireUser, async (req, res, next) => {
   }
 });
 
-app.put("/api/account/progress", requireSameOrigin, requireUser, async (req, res, next) => {
+app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requireUser, async (req, res, next) => {
   try {
     const progress = validatePlayerProgress(req.body?.progress);
     const baseProgress = req.body?.baseProgress === null
@@ -678,11 +783,19 @@ app.put("/api/account/progress", requireSameOrigin, requireUser, async (req, res
     const collection = db.collection("player_progress");
     if (req.body?.initializeOnly === true) {
       if (req.body.baseProgress !== null) return res.status(400).json({ error: "Initial progress must have a null base." });
-      const initialized = await initializePlayerProgress(collection, req.user.id, progress);
+      const safeInitialProgress = sanitizeInitialPlayerProgress(progress, req.user.role);
+      if (req.user.role === "player" && JSON.stringify(safeInitialProgress) !== JSON.stringify(progress)) {
+        await recordSecurityEvent(db, { type: "sanitized-initial-progress", userId: req.user.id, role: req.user.role });
+      }
+      const initialized = await initializePlayerProgress(collection, req.user.id, safeInitialProgress);
       if (!initialized) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
       return res.json({ progress: initialized });
     }
-    const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress);
+    const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress, false, undefined, req.user.role);
+    if (result.suspiciousMutation) {
+      await recordSecurityEvent(db, { type: "suspicious-progress-mutation", userId: req.user.id, role: req.user.role, reason: result.suspiciousMutation });
+      return res.status(403).json({ error: "This progress update was blocked by server-side anti-cheat protection." });
+    }
     if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
       error: result.conflict ? "Progress changed on another device. Cloud saving is paused; signing in again will replace unsaved local changes with cloud progress." : "Player progress exceeds the allowed size.",
     });
@@ -694,6 +807,7 @@ app.put("/api/account/progress", requireSameOrigin, requireUser, async (req, res
 
 app.get("/api/account/profile", requireUser, async (req, res, next) => {
   try {
+    noStore(res);
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
       { _id: req.user.id },
@@ -751,6 +865,21 @@ app.put("/api/account/leaderboard-preference", requireSameOrigin, requireUser, a
   }
 });
 
+app.put("/api/account/friend-requests", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (typeof req.body?.allowFriendRequests !== "boolean") return res.status(400).json({ error: "Choose whether your profile accepts friend requests." });
+    const result = await (await getDatabase()).collection("users").updateOne(
+      { _id: req.user.id, banned: { $ne: true } },
+      { $set: { allowFriendRequests: req.body.allowFriendRequests } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
+    noStore(res);
+    res.json({ allowFriendRequests: req.body.allowFriendRequests });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
     const username = normalizeUsername(req.body?.username);
@@ -795,18 +924,23 @@ app.get("/api/players/:id", async (req, res, next) => {
       { projection: { username: 1, role: 1, appearOffline: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Player not found." });
+    const [activeUserIds, profileTitles] = await Promise.all([
+      user.appearOffline ? Promise.resolve(new Set()) : getActiveUserIds(db, [user._id]),
+      getProfileTitles(db),
+    ]);
     if (user.role === "owner") {
       const publicEntry = await db.collection("leaderboard_entries").findOne({ userId: user._id, public: true }, { projection: { _id: 1 } });
-      if (!publicEntry) return res.status(404).json({ error: "Player not found." });
+      if (!publicEntry) {
+        return res.json({ player: {
+          id: user._id.toHexString(), username: user.username, role: user.role,
+          title: "", isOnline: activeUserIds.has(user._id.toHexString()), limited: true,
+        } });
+      }
     }
     const saved = await db.collection("player_progress").findOne(
       { _id: user._id },
       { projection: { data: 1 } },
     );
-    const [activeUserIds, profileTitles] = await Promise.all([
-      user.appearOffline ? Promise.resolve(new Set()) : getActiveUserIds(db, [user._id]),
-      getProfileTitles(db),
-    ]);
     res.json({
       player: {
         id: user._id.toHexString(),
@@ -814,6 +948,363 @@ app.get("/api/players/:id", async (req, res, next) => {
         isOnline: activeUserIds.has(user._id.toHexString()),
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function friendRowsForUser(db, userId) {
+  const rows = typeof db.collection("friendships").find === "function"
+    ? await db.collection("friendships").find({ userIds: userId }).sort({ createdAt: -1 }).toArray()
+    : [];
+  const otherIds = rows.map((row) => row.userIds?.find((id) => userIdString(id) !== userIdString(userId))).filter(Boolean);
+  const users = otherIds.length && typeof db.collection("users").find === "function"
+    ? await db.collection("users").find({ _id: { $in: otherIds } }, { projection: { username: 1, role: 1, banned: 1, appearOffline: 1 } }).toArray()
+    : [];
+  const usersById = new Map(users.map((user) => [userIdString(user._id), user]));
+  const active = await getActiveUserIds(db, otherIds);
+  const profileTitles = await getProfileTitles(db);
+  const progressCollection = db.collection("player_progress");
+  const result = { friends: [], incoming: [], outgoing: [] };
+  for (const row of rows) {
+    const otherId = otherIds[rows.indexOf(row)];
+    const id = userIdString(otherId);
+    const other = usersById.get(id);
+    if (!other || other.banned) continue;
+    const progress = await progressCollection.findOne({ _id: otherId }, { projection: { data: 1 } });
+    const profile = publicProfileFromProgress(other.username, other.role, progress?.data ?? {}, profileTitles);
+    const base = { userId: id, username: other.username, role: other.role, title: profile.title, isOnline: !other.appearOffline && active.has(id), unread: 0, createdAt: row.createdAt?.toISOString?.() ?? row.createdAt ?? null };
+    if (row.status === "accepted") {
+      const conversation = await db.collection("conversations").findOne({ pairKey: row.pairKey });
+      base.unread = Number(conversation?.unread?.[userIdString(userId)]) || 0;
+      result.friends.push(base);
+    } else if (row.status === "pending") {
+      const request = { ...base, id: userIdString(row._id), direction: userIdString(row.requestedBy) === userIdString(userId) ? "outgoing" : "incoming" };
+      (request.direction === "outgoing" ? result.outgoing : result.incoming).push(request);
+    }
+  }
+  return result;
+}
+
+app.get("/api/friends", requireUser, async (req, res, next) => {
+  try {
+    noStore(res);
+    res.json(await friendRowsForUser(await getDatabase(), req.user.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/friends/requests", requireSameOrigin, friendRequestLimiter, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.body?.userId);
+    if (!targetId) return res.status(400).json({ error: "Choose a valid player." });
+    if (targetId.equals(req.user.id)) return res.status(400).json({ error: "You cannot add yourself." });
+    const db = await getDatabase();
+    const target = await db.collection("users").findOne({ _id: targetId, role: { $in: ["player", "tester", "owner"] }, banned: { $ne: true } }, { projection: { username: 1, role: 1, allowFriendRequests: 1 } });
+    if (!target) return res.status(404).json({ error: "Player not found." });
+    if (await isBlocked(db, req.user.id, targetId)) return res.status(403).json({ error: "This player cannot receive a request from you." });
+    const friendships = db.collection("friendships");
+    const pairKey = friendPairKey(req.user.id, targetId);
+    const existing = await friendships.findOne({ pairKey });
+    if (existing?.status === "accepted") return res.json({ status: "accepted" });
+    if (existing?.status === "pending") {
+      if (userIdString(existing.requestedBy) !== userIdString(req.user.id)) {
+        await friendships.updateOne({ _id: existing._id, status: "pending" }, { $set: { status: "accepted", respondedAt: new Date() } });
+        return res.json({ status: "accepted" });
+      }
+      return res.json({ status: "pending" });
+    }
+    if (target.allowFriendRequests === false) return res.status(403).json({ error: "This player is not accepting friend requests." });
+    if (existing?.status === "declined" && existing.respondedAt && existing.respondedAt > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)) {
+      return res.status(429).json({ error: "You must wait 7 days before sending another request to this player." });
+    }
+    const acceptedFriends = await countDocumentsSafe(friendships, { userIds: req.user.id, status: "accepted" });
+    if (acceptedFriends >= 200) return res.status(429).json({ error: "You can have at most 200 friends." });
+    const outgoing = await countDocumentsSafe(friendships, { requestedBy: req.user.id, status: "pending" });
+    if (outgoing >= 25) return res.status(429).json({ error: "You can have at most 25 pending outgoing requests." });
+    const incoming = await countDocumentsSafe(friendships, { userIds: targetId, status: "pending", requestedBy: { $ne: targetId } });
+    if (incoming >= 100) return res.status(429).json({ error: "This player's request inbox is full." });
+    const document = { pairKey, userIds: [req.user.id, targetId], requestedBy: req.user.id, status: "pending", createdAt: new Date() };
+    try {
+      if (existing) await friendships.updateOne({ _id: existing._id, status: "declined" }, { $set: document });
+      else await friendships.insertOne(document);
+    } catch (error) {
+      if (error?.code === 11000) return res.json({ status: "pending" });
+      throw error;
+    }
+    res.status(201).json({ status: "pending" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/friends/requests/:id/accept", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const id = validObjectId(req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid request." });
+    const db = await getDatabase();
+    const row = await db.collection("friendships").findOne({ _id: id, status: "pending" });
+    if (!row || !row.userIds?.some((value) => userIdString(value) === userIdString(req.user.id))) return res.status(404).json({ error: "Friend request not found." });
+    if (userIdString(row.requestedBy) === userIdString(req.user.id)) return res.status(403).json({ error: "Only the recipient can accept this request." });
+    await db.collection("friendships").updateOne({ _id: id, status: "pending" }, { $set: { status: "accepted", respondedAt: new Date() } });
+    const conversations = db.collection("conversations");
+    await conversations.updateOne({ pairKey: row.pairKey }, { $setOnInsert: { pairKey: row.pairKey, userIds: row.userIds, lastMessageAt: null, lastMessagePreview: "", readAt: {}, unread: {}, createdAt: new Date() } }, { upsert: true });
+    res.json({ status: "accepted" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/friends/requests/:id/decline", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const id = validObjectId(req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid request." });
+    const db = await getDatabase();
+    const row = await db.collection("friendships").findOne({ _id: id, status: "pending" });
+    if (!row || !row.userIds?.some((value) => userIdString(value) === userIdString(req.user.id))) return res.status(404).json({ error: "Friend request not found." });
+    if (userIdString(row.requestedBy) === userIdString(req.user.id)) return res.status(403).json({ error: "Only the recipient can decline this request." });
+    await db.collection("friendships").updateOne({ _id: id, status: "pending" }, { $set: { status: "declined", respondedAt: new Date() } });
+    res.json({ status: "declined" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/friends/:userId", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.params.userId);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    const pairKey = friendPairKey(req.user.id, targetId);
+    const row = await db.collection("friendships").findOne({ pairKey });
+    if (!row) return res.status(404).json({ error: "Friendship not found." });
+    if (row.status === "pending" && userIdString(row.requestedBy) !== userIdString(req.user.id)) return res.status(403).json({ error: "Only the sender can cancel a request." });
+    await db.collection("friendships").deleteOne({ _id: row._id });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/blocks", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.body?.userId);
+    if (!targetId || targetId.equals(req.user.id)) return res.status(400).json({ error: "Choose another player." });
+    const db = await getDatabase();
+    await db.collection("user_blocks").updateOne({ blockerId: req.user.id, blockedId: targetId }, { $setOnInsert: { blockerId: req.user.id, blockedId: targetId, createdAt: new Date() } }, { upsert: true });
+    await db.collection("friendships").deleteOne({ pairKey: friendPairKey(req.user.id, targetId) });
+    res.json({ blocked: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/blocks/:userId", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.params.userId);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    await db.collection("user_blocks").deleteOne({ blockerId: req.user.id, blockedId: targetId });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function chatTargetAccess(db, userId, targetId) {
+  const target = await ensureChatUser(db, targetId);
+  if (!target || target.chatMuted) return { error: "Chat is unavailable for this account.", status: 403 };
+  if (await isBlocked(db, userId, targetId)) return { error: "You cannot message this player.", status: 403 };
+  const friendship = await getFriendship(db, userId, targetId);
+  if (!friendship || friendship.status !== "accepted") return { error: "You can only message accepted friends.", status: 403 };
+  return { target, friendship };
+}
+
+app.get("/api/chat/conversations", requireUser, async (req, res, next) => {
+  try {
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const db = await getDatabase();
+    const rows = typeof db.collection("friendships").find === "function"
+      ? await db.collection("friendships").find({ userIds: req.user.id, status: "accepted" }).toArray()
+      : [];
+    const active = await getActiveUserIds(db, rows.flatMap((row) => row.userIds ?? []).filter((id) => userIdString(id) !== userIdString(req.user.id)));
+    const users = rows.length && typeof db.collection("users").find === "function"
+      ? await db.collection("users").find({ _id: { $in: rows.flatMap((row) => row.userIds ?? []).filter((id) => userIdString(id) !== userIdString(req.user.id)) } }, { projection: { username: 1, role: 1, appearOffline: 1, banned: 1 } }).toArray()
+      : [];
+    const byId = new Map(users.map((user) => [userIdString(user._id), user]));
+    const conversations = [];
+    for (const row of rows) {
+      const otherId = row.userIds.find((id) => userIdString(id) !== userIdString(req.user.id));
+      const other = byId.get(userIdString(otherId));
+      if (!other || other.banned) continue;
+      const conversation = await db.collection("conversations").findOne({ pairKey: row.pairKey });
+      conversations.push({ id: row.pairKey, userId: userIdString(otherId), username: other.username, role: other.role, isOnline: !other.appearOffline && active.has(userIdString(otherId)), lastMessagePreview: conversation?.lastMessagePreview ?? "", lastMessageAt: conversation?.lastMessageAt?.toISOString?.() ?? conversation?.lastMessageAt ?? null, unread: Number(conversation?.unread?.[userIdString(req.user.id)]) || 0 });
+    }
+    conversations.sort((a, b) => String(b.lastMessageAt ?? "").localeCompare(String(a.lastMessageAt ?? "")));
+    noStore(res);
+    res.json({ conversations });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/chat/conversations/:userId/messages", requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.params.userId);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const access = await chatTargetAccess(db, req.user.id, targetId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    const pairKey = friendPairKey(req.user.id, targetId);
+    const limit = Math.max(1, Math.min(30, Number(req.query.limit) || 30));
+    const filter = { conversationId: pairKey };
+    if (req.query.after && ObjectId.isValid(req.query.after)) filter._id = { $gt: new ObjectId(req.query.after) };
+    if (req.query.before && ObjectId.isValid(req.query.before)) filter._id = { $lt: new ObjectId(req.query.before) };
+    const messages = typeof db.collection("chat_messages").find === "function"
+      ? await db.collection("chat_messages").find(filter).sort({ _id: -1 }).limit(limit).toArray()
+      : [];
+    const mapped = messages.reverse().map((message) => ({ id: userIdString(message._id), conversationId: pairKey, senderId: userIdString(message.senderId), sender: message.sender ?? (userIdString(message.senderId) === userIdString(req.user.id) ? req.user.username : access.target.username), role: message.role ?? (userIdString(message.senderId) === userIdString(req.user.id) ? req.user.role : access.target.role), text: message.deletedAt ? "Message deleted" : message.text, attachment: message.deletedAt ? undefined : message.attachment, createdAt: message.createdAt?.toISOString?.() ?? message.createdAt, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null }));
+    res.json({ messages: mapped, hasMore: messages.length === limit });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/conversations/:userId/messages", requireSameOrigin, chatMessageLimiter, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.params.userId);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const access = await chatTargetAccess(db, req.user.id, targetId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    const rawText = typeof req.body?.text === "string" ? req.body.text : "";
+    const text = rawText.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+    const attachment = req.body?.attachment;
+    if (!text && !attachment) return res.status(400).json({ error: "Write a message or attach an image/video." });
+    if (text.length > 300) return res.status(400).json({ error: "Messages are limited to 300 characters." });
+    if (!chatAttachmentIsValid(attachment)) return res.status(400).json({ error: "That attachment is not allowed or has not been uploaded." });
+    const pairKey = friendPairKey(req.user.id, targetId);
+    const messages = db.collection("chat_messages");
+    const recent = typeof messages.find === "function" ? await messages.find({ conversationId: pairKey, senderId: req.user.id, deletedAt: { $exists: false } }).sort({ _id: -1 }).limit(3).toArray() : [];
+    if (text && recent.length >= 3 && recent.every((message) => message.text === text)) return res.status(429).json({ error: "Please do not repeat the same message." });
+    const now = new Date();
+    const message = { conversationId: pairKey, senderId: req.user.id, sender: req.user.username, role: req.user.role, text, ...(attachment ? { attachment } : {}), createdAt: now };
+    const inserted = await messages.insertOne(message);
+    const conversations = db.collection("conversations");
+    await conversations.updateOne(
+      { pairKey },
+      { $set: { pairKey, userIds: [req.user.id, targetId], lastMessageAt: now, lastMessagePreview: text || "Attachment" }, $inc: { [`unread.${userIdString(targetId)}`]: 1 }, $setOnInsert: { createdAt: now } },
+      { upsert: true },
+    );
+    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: pairKey, senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text, ...(attachment ? { attachment } : {}), createdAt: now.toISOString() } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/conversations/:userId/read", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const targetId = validObjectId(req.params.userId);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    const access = await chatTargetAccess(db, req.user.id, targetId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    await db.collection("conversations").updateOne({ pairKey: friendPairKey(req.user.id, targetId) }, { $set: { [`unread.${userIdString(req.user.id)}`]: 0, [`readAt.${userIdString(req.user.id)}`]: new Date() } });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/chat/messages/:id", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const db = await getDatabase();
+    const message = await db.collection("chat_messages").findOne({ _id: new ObjectId(req.params.id) });
+    if (!message) return res.status(404).json({ error: "Message not found." });
+    if (req.user.role !== "owner" && userIdString(message.senderId) !== userIdString(req.user.id)) return res.status(403).json({ error: "You can only delete your own messages." });
+    await db.collection("chat_messages").updateOne({ _id: message._id }, { $set: { deletedAt: new Date(), deletedBy: req.user.id } });
+    if (req.user.role === "owner") await db.collection("chat_audit").insertOne({ action: "delete", messageId: message._id, actorId: req.user.id, targetUserId: message.senderId, createdAt: new Date() });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/messages/:id/report", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 200) : "Reported by player";
+    const db = await getDatabase();
+    const message = await db.collection("chat_messages").findOne({ _id: new ObjectId(req.params.id) });
+    if (!message) return res.status(404).json({ error: "Message not found." });
+    const access = await chatTargetAccess(db, req.user.id, message.senderId);
+    if (access.error && userIdString(message.senderId) !== userIdString(req.user.id)) return res.status(access.status).json({ error: access.error });
+    await db.collection("chat_reports").insertOne({ messageId: message._id, reporterId: req.user.id, reason: reason || "Reported by player", createdAt: new Date(), status: "open" });
+    res.status(201).json({ reported: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/chat/reports", requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const reports = typeof db.collection("chat_reports").find === "function" ? await db.collection("chat_reports").find({ status: "open" }).sort({ createdAt: -1 }).limit(100).toArray() : [];
+    res.json({ reports });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function setChatMute(req, res, next, muted) {
+  try {
+    const targetId = validObjectId(req.params.id);
+    if (!targetId) return res.status(400).json({ error: "Invalid player." });
+    const db = await getDatabase();
+    const result = await db.collection("users").updateOne({ _id: targetId, role: { $in: ["player", "tester"] }, banned: { $ne: true } }, { $set: { chatMuted: muted } });
+    if (!result.matchedCount) return res.status(404).json({ error: "Player not found." });
+    await db.collection("chat_audit").insertOne({ action: muted ? "mute" : "unmute", actorId: req.user.id, targetUserId: targetId, reason: typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : "", createdAt: new Date() });
+    res.json({ chatMuted: muted });
+  } catch (error) {
+    next(error);
+  }
+}
+
+app.post("/api/admin/users/:id/chat-mute", requireSameOrigin, requireOwner, (req, res, next) => setChatMute(req, res, next, true));
+app.post("/api/admin/users/:id/chat-unmute", requireSameOrigin, requireOwner, (req, res, next) => setChatMute(req, res, next, false));
+
+app.post("/api/chat/uploads", requireSameOrigin, chatUploadLimiter, requireUser, express.raw({ type: ["image/*", "video/*"], limit: "25mb" }), async (req, res, next) => {
+  try {
+    if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
+    const db = await getDatabase();
+    if (!process.env.BLOB_READ_WRITE_TOKEN || !(process.env.VERCEL_BLOB_PUBLIC_URL || process.env.BLOB_PUBLIC_URL)) {
+      return res.status(503).json({ error: "Attachment uploads are not configured yet." });
+    }
+    const targetId = validObjectId(String(req.headers["x-chat-user-id"] ?? ""));
+    if (!targetId) return res.status(400).json({ error: "Choose a chat recipient before uploading." });
+    const access = await chatTargetAccess(db, req.user.id, targetId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    const body = Buffer.isBuffer(req.body) ? req.body : null;
+    const contentType = typeof req.headers["content-type"] === "string" ? req.headers["content-type"].split(";", 1)[0].toLowerCase() : "";
+    const allowedImages = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+    const allowedVideos = new Set(["video/mp4", "video/webm"]);
+    const kind = allowedVideos.has(contentType) ? "video" : allowedImages.has(contentType) ? (contentType === "image/gif" ? "gif" : "image") : "";
+    const maxBytes = kind === "video" ? 25 * 1024 * 1024 : 8 * 1024 * 1024;
+    if (!body || !kind || body.byteLength < 1 || body.byteLength > maxBytes) return res.status(400).json({ error: "That file type or size is not allowed." });
+    const rawName = typeof req.headers["x-file-name"] === "string" ? req.headers["x-file-name"] : "attachment";
+    const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80) || "attachment";
+    const blob = await put(`jacer-chat/${userIdString(req.user.id)}/${Date.now()}-${safeName}`, body, {
+      access: "public",
+      addRandomSuffix: true,
+      contentType,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    });
+    noStore(res);
+    res.status(201).json({ attachment: { kind, contentType, bytes: body.byteLength, url: blob.url } });
   } catch (error) {
     next(error);
   }
@@ -905,6 +1396,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         usernameNormalized: 1,
         role: 1,
         banned: 1,
+        chatMuted: 1,
         appearOffline: 1,
         createdAt: 1,
         usernameChangedAt: 1,
@@ -939,6 +1431,7 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         username: user.username,
         role: user.role,
         banned: Boolean(user.banned),
+        chatMuted: Boolean(user.chatMuted),
         status: user.banned ? "banned" : "active",
         isOnline: !user.banned && !user.appearOffline && onlineUserIds.has(user._id.toHexString()),
         createdAt: user.createdAt,
@@ -1832,6 +2325,10 @@ app.post("/api/admin/codes", requireSameOrigin, requireOwner, async (req, res, n
       return res.status(400).json({ error: "Code settings are invalid." });
     }
     const db = await getDatabase();
+    if (reward.type === "title") {
+      const titles = await getProfileTitles(db);
+      if (!titles.some((title) => title.id === reward.titleId)) return res.status(400).json({ error: "That title does not exist." });
+    }
     const document = {
       codeHash: hashRedemptionCode(code),
       maxUses,
@@ -1886,6 +2383,10 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
           { session },
         );
         if (!codeRecord) throw Object.assign(new Error("Code is invalid or unavailable."), { statusCode: 404 });
+        if (codeRecord.reward?.type === "title") {
+          const titles = await getProfileTitles(db);
+          if (!titles.some((title) => title.id === codeRecord.reward.titleId)) throw Object.assign(new Error("That title no longer exists."), { statusCode: 409 });
+        }
         if (codeRecord.enabled === false) throw Object.assign(new Error("This code has been disabled."), { statusCode: 410 });
         if (codeRecord.expiresAt && codeRecord.expiresAt <= now) {
           throw Object.assign(new Error("This code has expired."), { statusCode: 410 });
@@ -2044,6 +2545,15 @@ async function initializeDatabaseOnce() {
     db.collection("code_redemption_logs").createIndex({ userId: 1, redeemedAt: -1 }),
     db.collection("owner_messages").createIndex({ userId: 1, createdAt: -1 }),
     db.collection("message_deliveries").createIndex({ messageId: 1, userId: 1 }, { unique: true }),
+    db.collection("friendships").createIndex({ pairKey: 1 }, { unique: true }),
+    db.collection("friendships").createIndex({ userIds: 1, status: 1, createdAt: -1 }),
+    db.collection("user_blocks").createIndex({ blockerId: 1, blockedId: 1 }, { unique: true }),
+    db.collection("conversations").createIndex({ pairKey: 1 }, { unique: true }),
+    db.collection("conversations").createIndex({ userIds: 1, lastMessageAt: -1 }),
+    db.collection("chat_messages").createIndex({ conversationId: 1, _id: -1 }),
+    db.collection("chat_reports").createIndex({ status: 1, createdAt: -1 }),
+    db.collection("chat_audit").createIndex({ createdAt: -1 }),
+    db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }),
     db.collection("setting_history").createIndex({ settingKey: 1, changedAt: -1 }),
   ]);
   await users.updateMany({ role: { $exists: false } }, { $set: { role: "player" } });

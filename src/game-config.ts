@@ -6,6 +6,7 @@ export const powerupLabels: Record<PowerupKind, string> = { shield: "Shield", bo
 export const PORTAL_Y = 175;
 export const PORTAL_SIZE = 58;
 export const SECRET_LEVEL_COOLDOWN_MS = 30 * 60 * 1000;
+export const COOLDOWN_RESET_COST = 1000;
 export const CEILING_Y = 20;
 export const FLOOR_Y = 300;
 export const FLIPPED_WORLD_HEIGHT = 400;
@@ -48,6 +49,12 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
         projectileSpeed: 2.6,
         miniBossProjectileSpeed: 4.5,
         bossProjectileSpeed: 4.2,
+        enemyTypes: {
+            sentry: { attackIntervalMultiplier: 1, projectileSpeed: 2.6 },
+            darkKnight: { attackIntervalMultiplier: 1, projectileSpeed: 4.5 },
+            titanCore: { attackIntervalMultiplier: 1, projectileSpeed: 4.2 },
+            voidWarden: { attackIntervalMultiplier: 1, projectileSpeed: 5.04 },
+        },
     },
 };
 export const DEFAULT_ROULETTE_TIERS: RouletteTier[] = [

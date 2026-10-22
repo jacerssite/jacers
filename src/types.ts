@@ -2,13 +2,13 @@ export type Box = { x: number; y: number; width: number; height: number };
 export type Obstacle = Box & { airborne?: boolean; barrier?: boolean; block?: boolean; goalLock?: boolean; boundary?: boolean };
 export type Asteroid = { x: number; y: number; claimed: boolean; special: boolean };
 export type Hazard = { x: number; y: number; width: number; height: number; kind: "spikes" | "gravity" };
-export type Enemy = { x: number; y: number; defeated: boolean };
+export type Enemy = { x: number; y: number; defeated: boolean; attackTimer?: number };
 export type Projectile = { x: number; y: number; vx: number; vy: number; angle?: number; element: HTMLElement; owner: "player" | "enemy" };
 export type PowerupKind = "shield" | "boost" | "rapid" | "cannon" | "star";
 export type Powerup = { x: number; y: number; kind: PowerupKind; collected: boolean };
 export type LevelKey = { id: string; x: number; y: number; collected: boolean; requiresPortal: boolean };
-export type Boss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean };
-export type MiniBoss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean };
+export type Boss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean; attackTimer?: number };
+export type MiniBoss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean; attackTimer?: number };
 export type SkinStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean };
 export type TrailStyle = { name: string; color: string; secondaryColor?: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; secret?: boolean; boss?: boolean; golden?: boolean; jackpot?: boolean; prestige?: number };
 export type PrestigeShipArt = "stellar-guard" | "quantum-dancer" | "cosmic-queen" | "void-knight" | "eclipse-oracle" | "infinity-pilot" | "stellar-legend";
@@ -20,6 +20,7 @@ export type LevelMakerDraft = {
     name: string;
     briefing: string;
     prestige: boolean;
+    prestigeRequirement?: number;
     tiles: string[];
     flippedTiles: string[];
     length?: number;
@@ -41,12 +42,13 @@ export type Level = { name: string; briefing: string; length: number; asteroids:
 export type ControlAction = "left" | "right" | "jump" | "down" | "shoot";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
-export type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean };
+export type OnlineUser = { username: string; role: "player" | "tester" | "owner"; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean; allowFriendRequests?: boolean };
 export type ManagedUser = {
     id: string;
     username: string;
     role: "player" | "tester" | "owner";
     banned: boolean;
+    chatMuted?: boolean;
     isOnline: boolean;
     createdAt: string;
     usernameChangedAt: string | null;
@@ -60,9 +62,9 @@ export type ManagedUser = {
     progress: Record<string, string>;
 };
 export type OnlineLeaderboardEntry = { id: string; userId: string; username: string; role?: OnlineUser["role"]; level: string; timeMs: number; abilities: string[]; achievedAt: string };
-export type OnlinePlayerPresence = { username: string; role?: OnlineUser["role"] };
+export type OnlinePlayerPresence = { id: string; username: string; role?: OnlineUser["role"] };
 export type ProfileTitleRequirement = {
-    type: "routes" | "golden" | "prestige" | "roulette";
+    type: "routes" | "golden" | "prestige" | "roulette" | "locked";
     amount: number;
 };
 export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement };
@@ -85,7 +87,13 @@ export type PublicPlayerProfile = {
     trail: number;
     title: string;
     isOnline: boolean;
+    limited?: boolean;
 };
+export type FriendEntry = { userId: string; username: string; role: OnlineUser["role"]; title: string; isOnline: boolean; unread: number; createdAt?: string };
+export type FriendRequest = { id: string; userId: string; username: string; role: OnlineUser["role"]; title: string; createdAt: string; direction: "incoming" | "outgoing" };
+export type ChatAttachment = { kind: "image" | "gif" | "video"; url: string; contentType: string; bytes: number };
+export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; createdAt: string; deletedAt?: string | null };
+export type ChatConversation = { id: string; userId: string; username: string; role: OnlineUser["role"]; isOnline: boolean; lastMessagePreview: string; lastMessageAt: string | null; unread: number };
 export type RouletteTier = {
     buyIn: 5 | 10 | 25;
     chances: Record<"claims" | "specialClaims" | "color" | "trail" | "avatar" | "title", number>;
@@ -130,6 +138,12 @@ export type GameConfig = {
         projectileSpeed: number;
         miniBossProjectileSpeed: number;
         bossProjectileSpeed: number;
+        enemyTypes?: {
+            sentry: { attackIntervalMultiplier: number; projectileSpeed: number };
+            darkKnight: { attackIntervalMultiplier: number; projectileSpeed: number };
+            titanCore: { attackIntervalMultiplier: number; projectileSpeed: number };
+            voidWarden: { attackIntervalMultiplier: number; projectileSpeed: number };
+        };
     };
 };
 

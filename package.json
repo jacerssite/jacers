@@ -17,6 +17,7 @@
     "vite": "^8.0.12"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.2",
     "@vercel/functions": "^3.10.1",
     "argon2": "^0.45.1",
     "dotenv": "^18.0.8",

@@ -510,6 +510,13 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-reward-settings > .setting-title, .tester-reward-settings > .menu-copy { margin: 0; }
 .tester-reward-settings > .menu-copy { font: .64rem/1.5 'DM Mono', monospace; }
 .tester-reward-settings > label { display: grid; grid-template-columns: 1fr minmax(90px, 140px); align-items: center; gap: 12px; color: #f3f5e9; font: .7rem 'DM Mono', monospace; }
+.enemy-roster { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 8px; border-top: 1px solid #385267; }
+.enemy-roster-card { display: grid; gap: 7px; padding: 11px; border: 1px solid color-mix(in srgb, var(--enemy-accent) 55%, #385267); background: #0d1c2caa; }
+.enemy-roster-card h3 { margin: 0; color: var(--enemy-accent); font: 700 .78rem 'Space Grotesk', sans-serif; }
+.enemy-roster-card p { margin: 0 0 3px; color: #9eb7ba; font: .62rem/1.35 'DM Mono', monospace; }
+.enemy-roster-card label { display: grid; grid-template-columns: 1fr minmax(68px, 88px); align-items: center; gap: 8px; color: #f3f5e9; font: .64rem 'DM Mono', monospace; }
+.enemy-roster-card input { min-width: 0; }
+@media (max-width: 640px) { .enemy-roster { grid-template-columns: 1fr; } }
 .tester-reward-settings > .tester-rarity-settings { grid-template-columns: 1fr; gap: 6px; padding-top: 8px; border-top: 1px solid #385267; }
 .tester-rarity-settings > b { color: #f6c46e; font: 700 .66rem 'DM Mono', monospace; text-transform: uppercase; }
 .tester-rarity-inputs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -911,6 +918,93 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @media (prefers-reduced-motion: reduce) {
 	*, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Social panel */
+.chat-launch-button {
+    position: fixed; right: 16px; bottom: 16px; z-index: 1250; width: 54px; height: 54px;
+    display: grid; place-items: center; border-radius: 50%; border: 1px solid #f6c46e; background: #111216; color: #f6c46e;
+    box-shadow: 0 0 18px rgba(246,196,110,.25); font-size: 1.35rem; cursor: pointer;
+}
+.chat-launch-icon {
+	position: relative; display: block; width: 18px; height: 13px; border: 2px solid currentColor;
+	border-radius: 3px;
+}
+.chat-launch-icon::before {
+	content: ""; position: absolute; left: 3px; top: 3px; width: 8px; border-top: 2px solid currentColor;
+	box-shadow: 0 3px 0 currentColor;
+}
+.chat-launch-icon::after {
+	content: ""; position: absolute; left: 2px; bottom: -5px; border-width: 4px 4px 0 0;
+	border-style: solid; border-color: currentColor transparent transparent transparent;
+}
+.chat-launch-icon.open { width: 18px; height: 18px; border: 0; }
+.chat-launch-icon.open::before {
+	content: "\00d7"; left: 0; top: -4px; width: 18px; border: 0; box-shadow: none;
+	font: 1.6rem/1 sans-serif; text-align: center;
+}
+.chat-launch-icon.open::after { display: none; }
+.chat-launch-button[hidden] { display: none; }
+.chat-unread-badge, .pending-friend-badge {
+    position: absolute; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 10px;
+    background: #ef6d62; color: #fff; font: 700 .68rem/18px "DM Mono", monospace; text-align: center;
+}
+.chat-unread-badge { right: -4px; top: -5px; }
+.pending-friend-badge { right: -8px; top: -8px; }
+.chat-panel {
+    position: fixed; right: 16px; bottom: 82px; z-index: 1240; width: min(360px, calc(100vw - 24px));
+    max-height: 70vh; display: flex; flex-direction: column; background: #111216; color: #d9dbe3;
+    border: 1px solid #2b2d36; border-radius: 14px; box-shadow: 0 18px 45px rgba(0,0,0,.55); overflow: hidden;
+}
+.chat-panel[hidden] { display: none; }
+@media (max-width: 480px) {
+    .chat-panel { right: 8px; bottom: 78px; width: calc(100vw - 16px); max-height: 72vh; }
+    .chat-launch-button { right: 12px; bottom: 12px; }
+}
+.chat-panel-header { display: flex; align-items: stretch; gap: 2px; min-height: 42px; padding: 0 8px 0 10px; border-bottom: 1px solid #2b2d36; }
+.chat-panel-header h2 { display: none; }
+.chat-tabs { display: flex; align-items: stretch; flex: 1; gap: 2px; overflow-x: auto; }
+.chat-close-button, .chat-refresh-button, .chat-back-button { border: 0; background: transparent; color: #a7a9b4; cursor: pointer; }
+.chat-close-button, .chat-refresh-button { width: 28px; padding: 0; font-size: 1.1rem; }
+.chat-close-button:hover, .chat-refresh-button:hover { color: #f6c46e; }
+.chat-tab { flex: 0 0 auto; padding: 12px 8px 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #999ba7; cursor: pointer; font: 600 .75rem "Space Grotesk", sans-serif; white-space: nowrap; }
+.chat-tab.selected { color: #f6c46e; border-bottom-color: #f6c46e; }
+.chat-tab-count { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin-left: 4px; padding: 0 4px; border-radius: 9px; background: #393a42; color: #f6c46e; font: 700 .62rem/15px "DM Mono", monospace; }
+.chat-panel-content { padding: 10px; overflow: auto; min-height: 120px; font: .76rem "DM Mono", monospace; }
+.chat-panel-content h3 { margin: 8px 0; color: #f6c46e; font-size: .78rem; }
+.chat-list-row { display: flex; align-items: center; gap: 8px; padding: 9px 4px; border-bottom: 1px solid rgba(74,76,88,.5); }
+.chat-avatar { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 28px; border: 1px solid #686b78; border-radius: 50%; background: #2a2b32; color: #f0f0f3; font: 700 .72rem "Space Grotesk", sans-serif; }
+.chat-player-name { border: 0; background: transparent; color: #d9e5e7; cursor: pointer; font: inherit; text-align: left; flex: 1; }
+.chat-role-badge { margin-left: 5px; color: #f6c46e; }
+.chat-role-badge.tester { color: #c88cff; }
+.chat-online-dot { width: 8px; height: 8px; border-radius: 50%; background: #66757a; }
+.chat-online-dot.online { background: #66e0ab; box-shadow: 0 0 7px #66e0ab; }
+.chat-action-button { border: 1px solid #385267; background: #163244; color: #f6c46e; padding: 5px 8px; cursor: pointer; font: .7rem "DM Mono", monospace; }
+.chat-action-button:disabled { opacity: .45; cursor: not-allowed; }
+.chat-action-button.danger { color: #ef8e81; }
+.chat-row-unread { color: #ef6d62; margin-left: auto; }
+.chat-message-list { display: flex; flex-direction: column; gap: 8px; max-height: 38vh; overflow: auto; padding: 8px 0; }
+.chat-message { width: fit-content; max-width: 84%; padding: 8px 10px; background: #202126; border: 1px solid #2b2d36; border-radius: 10px; }
+.chat-message.mine { margin-left: auto; background: #2a2b31; }
+.chat-message small { display: block; color: #9eb7ba; margin-bottom: 4px; }
+.chat-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: .78rem/1.4 "DM Mono", monospace; }
+.chat-message img, .chat-message video { display: block; max-width: 100%; max-height: 240px; margin-top: 6px; }
+.chat-composer { display: grid; grid-template-columns: 1fr auto; gap: 6px; border-top: 1px solid #385267; padding-top: 9px; }
+.chat-composer textarea { grid-column: 1 / -1; resize: vertical; min-height: 48px; background: #17181d; color: #e9eaf0; border: 1px solid #3b3d47; border-radius: 9px; padding: 9px; font: .76rem "DM Mono", monospace; }
+.chat-composer .chat-action-button[type="submit"] { border-radius: 8px; background: #292a31; color: #777985; border-color: #292a31; }
+.chat-composer .chat-action-button[type="submit"]:not(:disabled) { background: #f6c46e; color: #17181d; border-color: #f6c46e; }
+.chat-composer small { align-self: center; color: #9eb7ba; }
+.chat-attachment-status { grid-column: 1 / -1; min-height: 1em; }
+.chat-attachment-remove { margin-left: 6px; border: 0; background: transparent; color: #f6c46e; cursor: pointer; font: inherit; text-decoration: underline; }
+.account-inbox-list { display: grid; gap: 8px; }
+.account-inbox-row { display: flex; align-items: center; gap: 8px; padding: 9px; border: 1px solid #385267; background: #112638; }
+.account-inbox-row > span { flex: 1; }
+.leaderboard-add-friend { margin-left: auto; border: 1px solid #f6c46e; background: transparent; color: #f6c46e; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; }
+.profile-friend-action { margin: 8px 0; }
+.player-profile-card { position: fixed; z-index: 1240; padding: 12px; border: 1px solid #385267; background: #101b2b; color: #d9e5e7; box-shadow: 0 14px 32px #0009; font: .72rem "DM Mono", monospace; }
+.player-profile-card h3 { margin: 0 0 5px; color: #f6c46e; font-family: "Space Grotesk", sans-serif; }
+.player-profile-card p { margin: 8px 0; color: #b5c8c4; line-height: 1.4; }
+.player-profile-card .ship-preview { min-height: 54px; margin: 7px 0; transform: scale(.72); transform-origin: left center; }
+.player-profile-card > button { margin: 4px 5px 0 0; }
 .account-sync-warning {
   position: fixed;
   z-index: 10000;
