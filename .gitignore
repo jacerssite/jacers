@@ -28,6 +28,7 @@ dist-ssr
 *.tmp-ui-browser
 *.tmp-ui-browser-2
 *.tmp-ui-browser-3
+backups/
 %SystemDrive%
 .kilo
 .github
