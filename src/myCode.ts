@@ -1850,7 +1850,7 @@ function showAccount(initialMessage = "") {
     const render = (messageText = initialMessage) => {
         const menu = document.createElement("main");
         menu.className = "menu-screen account-screen";
-        menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${currentOnlineUser ? "Your" : registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">${currentOnlineUser ? "Your account is signed in on this device." : "Choose a unique username and password. Passwords are salted and hashed on the server."}</p>`;
+        menu.innerHTML = `<p class="eyebrow">ONLINE ACCOUNT / PLAYER DATA</p><h1>${currentOnlineUser ? "Your" : registrationMode ? "Create an" : "Sign in to your"} <em>account</em></h1><p class="menu-copy">${currentOnlineUser ? "Your account is signed in on this device." : "Choose a unique username, email, and password. Passwords are salted and hashed on the server."}</p>`;
         if (currentOnlineUser) {
             const signedIn = document.createElement("p");
             signedIn.textContent = `Signed in as ${currentOnlineUser.username}${currentOnlineUser.role === "owner" ? " / OWNER" : currentOnlineUser.role === "tester" ? " / TESTER" : ""}.`;
@@ -2311,6 +2311,21 @@ function showAccount(initialMessage = "") {
             username.pattern = "[A-Za-z0-9_]{3,20}";
             username.title = "3-20 letters, numbers, or underscores.";
             usernameLabel.append(username);
+            let email: HTMLInputElement | null = null;
+            let emailLabel: HTMLLabelElement | null = null;
+            if (registrationMode) {
+                emailLabel = document.createElement("label");
+                emailLabel.textContent = "Email address";
+                email = document.createElement("input");
+                email.name = "email";
+                email.type = "email";
+                email.autocomplete = "email";
+                email.required = true;
+                email.maxLength = 254;
+                email.placeholder = "you@example.com";
+                email.title = "Enter a valid email address.";
+                emailLabel.append(email);
+            }
             const passwordLabel = document.createElement("label");
             passwordLabel.textContent = "Password";
             const password = document.createElement("input");
@@ -2330,16 +2345,18 @@ function showAccount(initialMessage = "") {
             submit.type = "submit";
             submit.textContent = registrationMode ? "Create account" : "Sign in";
             const switchMode = createTextButton(registrationMode ? "I already have an account" : "Create a new account", () => { registrationMode = !registrationMode; render(); });
-            form.append(usernameLabel, passwordLabel, submit, message);
+            form.append(usernameLabel, ...(emailLabel ? [emailLabel] : []), passwordLabel, submit, message);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 submit.disabled = true;
                 message.textContent = "Connecting to the account service...";
                 try {
                     const wasRegistration = registrationMode;
+                    const credentials: Record<string, string> = { username: username.value, password: password.value };
+                    if (wasRegistration && email) credentials.email = email.value;
                     const response = await apiRequest<{ user: OnlineUser; recoveryCode?: string }>(`/auth/${wasRegistration ? "register" : "login"}`, {
                         method: "POST",
-                        body: JSON.stringify({ username: username.value, password: password.value }),
+                        body: JSON.stringify(credentials),
                     });
                     setOnlineUser(response.user);
                     void sendPresenceHeartbeat();

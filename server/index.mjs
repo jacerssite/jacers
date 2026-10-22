@@ -358,11 +358,43 @@ function hashClientIp(value) {
   return normalized ? crypto.createHash("sha256").update(normalized).digest("hex") : null;
 }
 
+function normalizeEmail(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized.length < 5 || normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalized)) return null;
+  return normalized;
+}
+
+function hashEmail(value) {
+  const normalized = normalizeEmail(value);
+  return normalized ? crypto.createHash("sha256").update(normalized).digest("hex") : null;
+}
+
+function maskEmail(value) {
+  const normalized = normalizeEmail(value);
+  if (!normalized) return null;
+  const at = normalized.lastIndexOf("@");
+  const local = normalized.slice(0, at);
+  const domain = normalized.slice(at + 1);
+  const maskedLocal = local.length <= 2 ? `${local[0] ?? "*"}***` : `${local[0]}${"*".repeat(Math.min(8, Math.max(3, local.length - 2)))}${local.at(-1)}`;
+  const domainParts = domain.split(".");
+  const maskedDomain = `${domainParts[0]?.[0] ?? "*"}***.${domainParts.slice(1).join(".")}`;
+  return `${maskedLocal}@${maskedDomain}`;
+}
+
 async function isIpBanned(db, ipHash) {
   if (!ipHash) return false;
   const bans = db.collection("ip_bans");
   if (typeof bans.findOne !== "function") return false;
   const ban = await bans.findOne({ _id: ipHash, active: { $ne: false } });
+  return Boolean(ban);
+}
+
+async function isEmailBanned(db, emailHash) {
+  if (!emailHash) return false;
+  const bans = db.collection("email_bans");
+  if (typeof bans.findOne !== "function") return false;
+  const ban = await bans.findOne({ _id: emailHash, active: { $ne: false } });
   return Boolean(ban);
 }
 
@@ -379,8 +411,9 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, chatMuted: 1 } },
+    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, chatMuted: 1, emailHash: 1 } },
   );
+  if (user?.emailHash && await isEmailBanned(db, user.emailHash)) return null;
   return user && !user.banned && USER_ROLES.includes(user.role)
     ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, chatMuted: Boolean(user.chatMuted) }
     : null;
@@ -515,8 +548,15 @@ async function accountHandler(req, res, next, mode) {
   try {
     const credentials = req.body;
     const username = normalizeUsername(credentials?.username);
+    const suppliedEmail = credentials?.email;
+    const email = suppliedEmail === undefined || suppliedEmail === null || suppliedEmail === ""
+      ? null
+      : normalizeEmail(suppliedEmail);
     if (!username || !isValidPassword(credentials?.password)) {
       return res.status(400).json({ error: "Use a 3-20 character username (letters, numbers, underscore) and a 10-128 character password." });
+    }
+    if (suppliedEmail !== undefined && suppliedEmail !== null && suppliedEmail !== "" && !email) {
+      return res.status(400).json({ error: "Enter a valid email address." });
     }
 
     const db = await getDatabase();
@@ -526,6 +566,10 @@ async function accountHandler(req, res, next, mode) {
     }
 
     if (mode === "register") {
+      const emailHash = hashEmail(email);
+      if (emailHash && await isEmailBanned(db, emailHash)) {
+        return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
+      }
       const passwordHash = await argon2.hash(credentials.password, passwordHashOptions);
       const code = recoveryCode();
       const recoveryCodeCreatedAt = new Date();
@@ -543,6 +587,7 @@ async function accountHandler(req, res, next, mode) {
           leaderboardOptIn: true,
           allowFriendRequests: true,
           ...(ipHash ? { lastSeenIpHash: ipHash } : {}),
+          ...(emailHash ? { emailHash, emailMasked: maskEmail(email) } : {}),
           createdAt: new Date(),
         });
         user = { _id: created.insertedId, username: username.display, role: "player" };
@@ -562,6 +607,7 @@ async function accountHandler(req, res, next, mode) {
     const valid = await argon2.verify(user?.passwordHash ?? dummyPasswordHash, credentials.password);
     if (!valid || !user) return res.status(401).json({ error: "Username or password is incorrect." });
     if (user.banned) return res.status(403).json({ error: "This account has been banned. Contact the owner for help." });
+    if (user.emailHash && await isEmailBanned(db, user.emailHash)) return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
     await db.collection("users").updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date(), ...(ipHash ? { lastSeenIpHash: ipHash } : {}) } });
     await createSession(user._id, res, ipHash);
     return res.json({
@@ -603,6 +649,9 @@ app.post("/api/auth/recover", requireSameOrigin, recoveryLimiter, async (req, re
     if (lock?.lockedUntil && lock.lockedUntil > now) return res.status(401).json(genericFailure);
     const users = db.collection("users");
     const user = await users.findOne({ usernameNormalized: username.normalized });
+    if (user?.emailHash && await isEmailBanned(db, user.emailHash)) {
+      return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
+    }
     const normalizedCode = normalizeRecoveryCode(req.body?.recoveryCode);
     let valid = false;
     if (user?.recoveryCodeHash) {
@@ -1421,6 +1470,7 @@ app.get("/api/admin/presence", requireOwner, async (_req, res, next) => {
 
 app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
   try {
+    noStore(res);
     const db = await getDatabase();
     const users = await db.collection("users")
       .find({}, { projection: {
@@ -1434,6 +1484,8 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         usernameChangedAt: 1,
         lastLoginAt: 1,
         lastSeenIpHash: 1,
+        emailHash: 1,
+        emailMasked: 1,
         passwordChangedAt: 1,
         wipeVersion: 1,
         recoveryCodeHash: 1,
@@ -1449,6 +1501,12 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
       ? await ipBanCollection.find({ _id: { $in: ipHashes }, active: { $ne: false } }, { projection: { _id: 1 } }).toArray()
       : [];
     const activeIpBanHashes = new Set(activeIpBans.map((ban) => String(ban._id)));
+    const emailHashes = users.map((user) => user.emailHash).filter((hash) => typeof hash === "string" && hash.length > 0);
+    const emailBanCollection = db.collection("email_bans");
+    const activeEmailBans = emailHashes.length && typeof emailBanCollection.find === "function"
+      ? await emailBanCollection.find({ _id: { $in: emailHashes }, active: { $ne: false } }, { projection: { _id: 1 } }).toArray()
+      : [];
+    const activeEmailBanHashes = new Set(activeEmailBans.map((ban) => String(ban._id)));
     const progressRecords = await db.collection("player_progress")
       .find({ _id: { $in: users.map((user) => user._id) } }, { projection: { data: 1 } })
       .toArray();
@@ -1478,6 +1536,9 @@ app.get("/api/admin/users", requireOwner, async (_req, res, next) => {
         lastLoginAt: user.lastLoginAt ?? null,
         lastSeenIpAvailable: Boolean(user.lastSeenIpHash),
         ipBanned: Boolean(user.lastSeenIpHash && activeIpBanHashes.has(user.lastSeenIpHash)),
+        emailMasked: user.emailMasked ?? null,
+        emailSet: Boolean(user.emailHash),
+        emailBanned: Boolean(user.emailHash && activeEmailBanHashes.has(user.emailHash)),
         passwordChangedAt: user.passwordChangedAt ?? null,
         wipeVersion: user.wipeVersion ?? 0,
         progress: progressByUser.get(user._id.toHexString()) ?? {},
@@ -1498,7 +1559,7 @@ async function getTargetManagedUser(db, rawId) {
   if (!userId) return { error: { status: 400, message: "Invalid account." } };
   const user = await db.collection("users").findOne(
     { _id: userId },
-    { projection: { role: 1, username: 1, usernameNormalized: 1, lastSeenIpHash: 1 } },
+    { projection: { role: 1, username: 1, usernameNormalized: 1, lastSeenIpHash: 1, emailHash: 1, emailMasked: 1 } },
   );
   if (!user) return { error: { status: 404, message: "Account not found." } };
   if (user.role === "owner") return { error: { status: 403, message: "Owner accounts are protected from player management." } };
@@ -1542,6 +1603,48 @@ app.delete("/api/admin/users/:id/ip-ban", requireSameOrigin, requireOwner, async
     );
     await recordSecurityEvent(db, { type: "ip_unban", actorId: req.user.id, targetUserId: target.userId, ipHash: target.user.lastSeenIpHash });
     res.json({ ok: true, ipBanned: false });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/email-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    if (!target.user.emailHash) return res.status(400).json({ error: "This account does not have an email address on file." });
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 200) : "Owner email ban";
+    const now = new Date();
+    await db.collection("email_bans").updateOne(
+      { _id: target.user.emailHash },
+      { $set: { active: true, emailMasked: target.user.emailMasked ?? null, reason: reason || "Owner email ban", bannedAt: now, bannedBy: req.user.id }, $setOnInsert: { createdAt: now } },
+      { upsert: true },
+    );
+    const affectedUsers = typeof db.collection("users").find === "function"
+      ? await db.collection("users").find({ emailHash: target.user.emailHash }, { projection: { _id: 1 } }).toArray()
+      : [];
+    const affectedIds = affectedUsers.map((user) => user._id);
+    if (affectedIds.length) await db.collection("user_sessions").deleteMany({ userId: { $in: affectedIds } });
+    await recordSecurityEvent(db, { type: "email_ban", actorId: req.user.id, targetUserId: target.userId, emailHash: target.user.emailHash, reason: reason || "Owner email ban" });
+    res.json({ ok: true, emailBanned: true, affectedAccounts: affectedIds.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/users/:id/email-ban", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    if (!target.user.emailHash) return res.status(400).json({ error: "This account does not have an email address on file." });
+    await db.collection("email_bans").updateOne(
+      { _id: target.user.emailHash },
+      { $set: { active: false, unbannedAt: new Date(), unbannedBy: req.user.id } },
+    );
+    await recordSecurityEvent(db, { type: "email_unban", actorId: req.user.id, targetUserId: target.userId, emailHash: target.user.emailHash });
+    res.json({ ok: true, emailBanned: false });
   } catch (error) {
     next(error);
   }
@@ -1593,10 +1696,12 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
     const db = await getDatabase();
     const userId = new ObjectId(req.params.id);
-    const target = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1 } });
+    const target = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1, emailHash: 1, emailMasked: 1 } });
     if (!target) return res.status(404).json({ error: "Account not found." });
     if (target.role === "owner") return res.status(403).json({ error: "Owner accounts cannot be changed from player management." });
     const updates = {};
+    const unsets = {};
+    let emailMasked = target.emailMasked ?? null;
     if (req.body?.username !== undefined) {
       const username = normalizeUsername(req.body.username);
       if (!username) return res.status(400).json({ error: "Use a 3-20 character username (letters, numbers, underscore)." });
@@ -1614,16 +1719,35 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
       }
       updates.role = req.body.role;
     }
+    if (req.body?.email !== undefined) {
+      const suppliedEmail = req.body.email;
+      if (suppliedEmail === null || (typeof suppliedEmail === "string" && suppliedEmail.trim() === "")) {
+        unsets.emailHash = "";
+        unsets.emailMasked = "";
+        emailMasked = null;
+      } else {
+        const email = normalizeEmail(suppliedEmail);
+        if (!email) return res.status(400).json({ error: "Enter a valid email address or leave it blank to clear the saved email." });
+        const emailHash = hashEmail(email);
+        if (emailHash && await isEmailBanned(db, emailHash)) return res.status(403).json({ error: "That email address is permanently banned." });
+        updates.emailHash = emailHash;
+        updates.emailMasked = maskEmail(email);
+        emailMasked = updates.emailMasked;
+      }
+    }
     let progress;
     if (req.body?.progress !== undefined) {
       progress = validatePlayerProgress(req.body.progress);
       if (!progress) return res.status(400).json({ error: "Player progress is invalid or exceeds the allowed size." });
     }
-    if (Object.keys(updates).length) {
+    if (Object.keys(updates).length || Object.keys(unsets).length) {
       try {
-        await db.collection("users").updateOne({ _id: userId }, { $set: updates });
+        const updateDocument = {};
+        if (Object.keys(updates).length) updateDocument.$set = updates;
+        if (Object.keys(unsets).length) updateDocument.$unset = unsets;
+        await db.collection("users").updateOne({ _id: userId }, updateDocument);
       } catch (error) {
-        if (error?.code === 11000) return res.status(409).json({ error: "That username is already taken." });
+        if (error?.code === 11000) return res.status(409).json({ error: "That username or email is already in use." });
         throw error;
       }
     }
@@ -1641,7 +1765,7 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requireOwner, async (req, r
     if (updates.role && updates.role !== "player") {
       await db.collection("leaderboard_entries").deleteMany({ userId });
     }
-    res.json({ ok: true });
+    res.json({ ok: true, emailMasked, emailSet: Boolean(emailMasked) });
   } catch (error) {
     next(error);
   }
@@ -2667,6 +2791,7 @@ async function initializeDatabaseOnce() {
 
   await Promise.all([
     users.createIndex({ usernameNormalized: 1 }, { unique: true }),
+    users.createIndex({ emailHash: 1 }, { unique: true, sparse: true }),
     sessions.createIndex({ tokenHash: 1 }, { unique: true }),
     sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     sessions.createIndex({ lastSeenAt: 1 }),
@@ -2692,6 +2817,7 @@ async function initializeDatabaseOnce() {
     db.collection("chat_audit").createIndex({ createdAt: -1 }),
     db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }),
     db.collection("ip_bans").createIndex({ active: 1, bannedAt: -1 }),
+    db.collection("email_bans").createIndex({ active: 1, bannedAt: -1 }),
     db.collection("setting_history").createIndex({ settingKey: 1, changedAt: -1 }),
   ]);
   await users.updateMany({ role: { $exists: false } }, { $set: { role: "player" } });

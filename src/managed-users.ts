@@ -15,7 +15,7 @@ export async function loadManagedUsers(container: HTMLElement) {
     const heading = document.createElement("h2");
     heading.textContent = "Player accounts";
     const description = document.createElement("p");
-    description.textContent = "Review player stats and live online status, ban or restore access, rename accounts, and edit saved profile data.";
+    description.textContent = "Review player stats and live online status, ban or restore access, manage email and network bans, rename accounts, and edit saved profile data.";
     const status = document.createElement("small");
     status.className = "tester-error";
     status.setAttribute("role", "status");
@@ -64,7 +64,13 @@ export async function loadManagedUsers(container: HTMLElement) {
                 : user.lastSeenIpAvailable
                     ? "Latest login network is recorded (the address is hidden for privacy)."
                     : "No login network has been recorded yet.";
-            card.append(stats, created, recoveryStatus, passwordStatus, lockStatus, ipStatus);
+            const emailStatus = document.createElement("small");
+            emailStatus.textContent = user.emailBanned
+                ? `Email ${user.emailMasked ?? "on file"} is permanently banned.`
+                : user.emailSet
+                    ? `Email on file: ${user.emailMasked ?? "hidden"}.`
+                    : "No email address has been recorded.";
+            card.append(stats, created, recoveryStatus, passwordStatus, lockStatus, ipStatus, emailStatus);
             if (user.role === "owner") {
                 const protectedMessage = document.createElement("small");
                 protectedMessage.textContent = "Owner accounts are protected from player management.";
@@ -80,6 +86,14 @@ export async function loadManagedUsers(container: HTMLElement) {
             username.pattern = "[A-Za-z0-9_]{3,20}";
             username.required = true;
             username.setAttribute("aria-label", `Username for ${user.username}`);
+            const emailLabel = document.createElement("label");
+            emailLabel.append(document.createTextNode("Email address (optional)"));
+            const email = document.createElement("input");
+            email.type = "email";
+            email.autocomplete = "off";
+            email.placeholder = user.emailMasked ? `Current: ${user.emailMasked}` : "Enter an email address";
+            email.setAttribute("aria-label", `Email address for ${user.username}`);
+            emailLabel.append(email);
             const roleLabel = document.createElement("label");
             roleLabel.append(document.createTextNode("Role"));
             const role = document.createElement("select");
@@ -92,6 +106,7 @@ export async function loadManagedUsers(container: HTMLElement) {
                 role.append(option);
             });
             roleLabel.append(role);
+            let emailBanButton: HTMLButtonElement | null = null;
             const banLabel = document.createElement("label");
             const banned = document.createElement("input");
             banned.type = "checkbox";
@@ -268,7 +283,7 @@ export async function loadManagedUsers(container: HTMLElement) {
             result.setAttribute("role", "status");
             const progressHeading = document.createElement("b");
             progressHeading.textContent = "Advanced saved profile data";
-            form.append(username, roleLabel, banLabel, chatMute, progression, levelSection, progressHeading, progress, save, result);
+            form.append(username, emailLabel, roleLabel, banLabel, chatMute, progression, levelSection, progressHeading, progress, save, result);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 save.disabled = true;
@@ -328,10 +343,24 @@ export async function loadManagedUsers(container: HTMLElement) {
                         if (input.checked) updatedProgress[key] = "1";
                         else delete updatedProgress[key];
                     });
-                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
+                    const submittedEmail = email.value.trim();
+                    const profileUpdate: Record<string, unknown> = { username: username.value, role: role.value, banned: banned.checked, progress: updatedProgress };
+                    if (submittedEmail) profileUpdate.email = submittedEmail;
+                    const updatedProfile = await apiRequest<{ emailMasked?: string | null; emailSet?: boolean }>(`/admin/users/${encodeURIComponent(user.id)}`, {
                         method: "PATCH",
-                        body: JSON.stringify({ username: username.value, role: role.value, banned: banned.checked, progress: updatedProgress }),
+                        body: JSON.stringify(profileUpdate),
                     });
+                    user.emailMasked = updatedProfile.emailMasked ?? user.emailMasked ?? null;
+                    user.emailSet = updatedProfile.emailSet ?? user.emailSet;
+                    if (submittedEmail) {
+                        user.emailBanned = false;
+                        if (emailBanButton) emailBanButton.textContent = "Permanently ban email";
+                    }
+                    emailStatus.textContent = user.emailSet
+                        ? `Email on file: ${user.emailMasked ?? "hidden"}.`
+                        : "No email address has been recorded.";
+                    email.value = "";
+                    email.placeholder = user.emailMasked ? `Current: ${user.emailMasked}` : "Enter an email address";
                     result.textContent = "Profile saved. Changes are available on the player's signed-in devices.";
                     summary.textContent = `${username.value} / ${banned.checked ? "BANNED" : "ACTIVE"} / ${role.value.toUpperCase()}`;
                 } catch (error) {
@@ -411,6 +440,33 @@ export async function loadManagedUsers(container: HTMLElement) {
                     actionStatus.textContent = error instanceof Error ? error.message : "Could not update the network ban.";
                 } finally {
                     ipBanButton.disabled = false;
+                }
+            });
+            emailBanButton = createTextButton(user.emailBanned ? "Unban email permanently" : "Permanently ban email", () => {});
+            emailBanButton.addEventListener("click", async () => {
+                if (!user.emailSet) {
+                    actionStatus.textContent = "This account has no email address on file. Save one in the profile first.";
+                    return;
+                }
+                const banning = !user.emailBanned;
+                const warning = banning
+                    ? `Permanently block ${user.emailMasked ?? "this email address"} from registering, signing in, or recovering accounts?`
+                    : `Allow ${user.emailMasked ?? "this email address"} to be used again?`;
+                if (!window.confirm(warning)) return;
+                emailBanButton.disabled = true;
+                actionStatus.textContent = banning ? "Permanently banning email..." : "Removing permanent email ban...";
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/email-ban`, { method: banning ? "POST" : "DELETE", ...(banning ? { body: JSON.stringify({ reason: "Owner moderation" }) } : {}) });
+                    user.emailBanned = banning;
+                    emailBanButton.textContent = banning ? "Unban email permanently" : "Permanently ban email";
+                    emailStatus.textContent = banning
+                        ? `Email ${user.emailMasked ?? "on file"} is permanently banned.`
+                        : `Email on file: ${user.emailMasked ?? "hidden"}.`;
+                    actionStatus.textContent = banning ? "Email banned and active sessions signed out." : "Permanent email ban removed.";
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not update the email ban.";
+                } finally {
+                    emailBanButton.disabled = false;
                 }
             });
             const wipeTitle = document.createElement("b");
@@ -511,7 +567,7 @@ export async function loadManagedUsers(container: HTMLElement) {
                     deleteAccount.disabled = false;
                 }
             });
-            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, ipBanButton, deleteAccount, actionStatus);
+            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, ipBanButton, emailBanButton, deleteAccount, actionStatus);
             card.append(accountActions);
             void loadBackups();
             container.append(card);

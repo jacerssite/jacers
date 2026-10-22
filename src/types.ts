@@ -51,6 +51,9 @@ export type ManagedUser = {
     chatMuted?: boolean;
     lastSeenIpAvailable?: boolean;
     ipBanned?: boolean;
+    emailMasked?: string | null;
+    emailSet?: boolean;
+    emailBanned?: boolean;
     isOnline: boolean;
     createdAt: string;
     usernameChangedAt: string | null;
