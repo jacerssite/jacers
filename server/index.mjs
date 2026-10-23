@@ -3327,7 +3327,6 @@ async function initializeDatabaseOnce() {
     db.collection("conversations").createIndex({ pairKey: 1 }, { unique: true }),
     db.collection("conversations").createIndex({ userIds: 1, lastMessageAt: -1 }),
     db.collection("chat_messages").createIndex({ conversationId: 1, _id: -1 }),
-    db.collection("global_chat_messages").createIndex({ _id: -1 }),
     db.collection("global_chat_messages").createIndex({ senderId: 1, _id: -1 }),
     db.collection("chat_reports").createIndex({ status: 1, createdAt: -1 }),
     db.collection("chat_audit").createIndex({ createdAt: -1 }),
