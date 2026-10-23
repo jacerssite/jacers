@@ -240,7 +240,7 @@ export function createChat(context: ChatContext) {
             bubble.append(meta, text);
             const canModerateGlobal = mode === "global" && ["moderator", "admin", "owner", "developer"].includes(context.getUser()?.role ?? "");
             if ((mine || canModerateGlobal) && !message.deletedAt) {
-                const more = document.createElement("button"); more.type = "button"; more.className = "chat-message-more"; more.textContent = "⋯"; more.setAttribute("aria-label", "Message actions");
+                const more = document.createElement("button"); more.type = "button"; more.className = "chat-message-more"; more.textContent = "⋯"; more.setAttribute("aria-label", "Message actions"); more.setAttribute("aria-expanded", "false");
                 const actions = document.createElement("div"); actions.className = "chat-message-actions"; actions.hidden = true;
                 const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.hidden = !mine; edit.addEventListener("click", async () => {
                     const nextText = globalThis.prompt("Edit message", message.text);
@@ -253,7 +253,7 @@ export function createChat(context: ChatContext) {
                     try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}`, { method: "DELETE" }); await refreshActiveMessages(mode); }
                     catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not delete message."); }
                 });
-                more.addEventListener("click", () => { actions.hidden = !actions.hidden; });
+                more.addEventListener("click", (event) => { event.stopPropagation(); actions.hidden = !actions.hidden; more.setAttribute("aria-expanded", String(!actions.hidden)); });
                 actions.append(edit, remove); bubble.append(more, actions);
             }
             if (mode === "direct" && message.sender === context.getUser()?.username) {

@@ -1067,6 +1067,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .chat-message-more { position: absolute; top: 3px; right: 5px; border: 0; padding: 1px 4px; background: transparent; color: #c6cad2; cursor: pointer; font: 700 1.05rem/1 "DM Mono", monospace; opacity: 0; }
 .chat-message.mine:hover .chat-message-more, .chat-message-more:focus-visible { opacity: 1; }
 .chat-message-actions { position: absolute; z-index: 4; top: 25px; right: 6px; display: grid; min-width: 76px; border: 1px solid #465468; background: #101b2b; box-shadow: 0 7px 18px #0008; }
+.chat-message-actions[hidden] { display: none; }
 .chat-message-actions button { border: 0; padding: 7px 9px; color: #dce8e6; background: transparent; cursor: pointer; font: .65rem "DM Mono", monospace; text-align: left; }
 .chat-message-actions button:hover, .chat-message-actions button:focus-visible { background: #24465a; color: #f6c46e; outline: none; }
 .chat-message-actions button:last-child { color: #ef9b90; }
