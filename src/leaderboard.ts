@@ -244,14 +244,15 @@ export function createLeaderboard(context: LeaderboardContext) {
                     try { const result = await sendFriendRequest(player.id); friendButton.textContent = result.status === "accepted" ? "Friends" : "Request sent"; }
                     catch (error) { friendButton.disabled = false; friendButton.textContent = error instanceof Error ? error.message : "Could not add friend."; }
                 });
-                try {
-                    const friends = await loadFriends();
-                    if (friends.friends.some((friend) => friend.userId === player.id)) { friendButton.textContent = "Friends"; friendButton.disabled = true; }
-                    else if (friends.outgoing.some((request) => request.userId === player.id)) { friendButton.textContent = "Request sent"; }
-                    else if (friends.incoming.some((request) => request.userId === player.id)) { friendButton.textContent = "Incoming request"; friendButton.disabled = true; }
-                } catch { /* signed-in but offline API: leave the add action available */ }
-                if (player.username.toLowerCase() === currentUserName()?.toLowerCase()) friendButton.remove();
-                friendAction.append(friendButton);
+                if (player.username.toLowerCase() !== currentUserName()?.toLowerCase()) {
+                    friendAction.append(friendButton);
+                    void loadFriends().then((friends) => {
+                        if (!menu.isConnected) return;
+                        if (friends.friends.some((friend) => friend.userId === player.id)) { friendButton.textContent = "Friends"; friendButton.disabled = true; }
+                        else if (friends.outgoing.some((request) => request.userId === player.id)) { friendButton.textContent = "Request sent"; }
+                        else if (friends.incoming.some((request) => request.userId === player.id)) { friendButton.textContent = "Incoming request"; friendButton.disabled = true; }
+                    }).catch(() => undefined);
+                }
             }
             dashboard.append(title, presence, friendAction, stats, character);
             menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);

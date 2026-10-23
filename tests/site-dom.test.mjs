@@ -291,6 +291,34 @@ test("leaderboard profiles show the player's presence and character", async () =
   }
 });
 
+test("signed-in player profiles animate their character before friend data finishes loading", async () => {
+  let releaseFriends;
+  const friendsGate = new Promise((resolve) => { releaseFriends = resolve; });
+  const user = { username: "Viewer", role: "player", appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true };
+  const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Quiet Orbit", timeMs: 12000, abilities: [] };
+  const player = { id: "player1", username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1 };
+  const { dom, document, errors } = await createPage({
+    "/api/auth/session": { user },
+    "/api/account/progress": { progress: {} },
+    "/api/leaderboard": { entries: [entry] },
+    "/api/players/player1": { player },
+    "/api/friends": async () => { await friendsGate; return { friends: [], incoming: [], outgoing: [] }; },
+  });
+  try {
+    await delay(30);
+    clickButton(document, "Launch mission");
+    clickButton(document, "Online leaderboard");
+    await waitFor(() => document.querySelector(".leaderboard-player-button"), "Leaderboard did not load");
+    clickButton(document, "Pilot_7");
+    await waitFor(() => document.querySelector(".profile-character-card .trail-preview-ship")?.style.transform, "Profile character did not begin animating");
+    assert.ok(document.querySelector(".profile-friend-action .text-button"), "Friend action should render without waiting for friend data");
+    assert.deepEqual(errors, []);
+  } finally {
+    releaseFriends();
+    dom.window.close();
+  }
+});
+
 test("leaderboard keeps the latest level selection when responses arrive out of order", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
