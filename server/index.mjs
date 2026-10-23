@@ -33,6 +33,7 @@ import {
   validateBuiltinLevelOverrides,
   validatePortalAssignments,
   hasRolePermission,
+  isOwnerEquivalentRole,
 } from "./game-data.mjs";
 
 const app = express();
@@ -40,6 +41,7 @@ const ownerAccounts = [
   { username: "vslxped", password: process.env.OWNER_PASSWORD },
   { username: "riverwth", password: process.env.ADDITIONAL_OWNER_PASSWORD },
 ];
+const developerUsername = "dayvidfrl";
 const cookieName = "jacer_session";
 const sessionLifetimeMs = 14 * 24 * 60 * 60 * 1000;
 const presenceActiveWindowMs = 30 * 1000;
@@ -48,10 +50,20 @@ const humanChallengeTtlMs = 10 * 60 * 1000;
 const humanChallengeMinAgeMs = 1200;
 const humanChallengeSecret = process.env.HUMAN_CHALLENGE_SECRET || ownerAccounts.map(({ password }) => password ?? "").join("|");
 const defaultRouletteTiers = [
-  { buyIn: 5, chances: { claims: 45, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 0 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
-  { buyIn: 10, chances: { claims: 30, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 0 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
-  { buyIn: 25, chances: { claims: 15, specialClaims: 20, color: 22, trail: 25, avatar: 18, title: 0 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
+  { buyIn: 5, chances: { claims: 42, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 3 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
+  { buyIn: 10, chances: { claims: 24, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 6 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
+  { buyIn: 25, chances: { claims: 5, specialClaims: 20, color: 22, trail: 25, avatar: 18, title: 10 }, rewards: { claims: [300, 1000], specialClaims: [2, 5] } },
 ];
+// Older installations saved the wheel before title prizes existed. Move a
+// small part of the asteroid chance into titles when loading that legacy shape.
+function includeRouletteTitleOdds(tiers) {
+  const titleChances = [3, 6, 10];
+  return tiers.map((tier, index) => {
+    if ((tier.chances.title ?? 0) > 0) return tier;
+    const title = titleChances[index] ?? 0;
+    return { ...tier, chances: { ...tier.chances, claims: Math.max(0, tier.chances.claims - title), title } };
+  });
+}
 const isVercel = Boolean(process.env.VERCEL);
 const databaseUrl = getMongoDatabaseConnectionString();
 const databaseConfigurationError = getMongoDatabaseConfigurationError(databaseUrl, { vercel: isVercel });
@@ -343,7 +355,7 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
   const goldenRouteCount = Object.keys(progress).filter((key) => key.startsWith("orbit-golden-level-") && progress[key] === "1").length;
   const prestigeLevel = readCount("orbit-prestige");
   const selectedTitle = equippedValue("orbit-title");
-  const allTitlesGranted = (role === "owner" || role === "tester") && progress["orbit-all-titles"] === "1";
+  const allTitlesGranted = (isOwnerEquivalentRole(role) || role === "tester") && progress["orbit-all-titles"] === "1";
   const titleDefinition = profileTitles.find((candidate) => {
     if (candidate.id !== selectedTitle) return false;
     if (allTitlesGranted) return true;
@@ -352,6 +364,8 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
     if (requirement.type === "locked") return false;
     if (requirement.type === "golden") return goldenRouteCount >= requirement.amount;
     if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
+    if (requirement.type === "enemies") return readCount("orbit-enemies-killed") >= requirement.amount;
+    if (requirement.type === "bosses") return readCount("orbit-bosses-killed") >= requirement.amount;
     if (requirement.type === "roulette") return false;
     return completedRouteCount >= requirement.amount;
   });
@@ -387,9 +401,13 @@ function publicProfileFromProgress(username, role, progress = {}, profileTitles 
   };
 }
 
+function includeRouletteTitles(titles) {
+  const ids = new Set(titles.map((title) => title.id));
+  return [...titles, ...PROFILE_TITLE_MILESTONES.filter((title) => title.requirement?.type === "roulette" && !ids.has(title.id))];
+}
 async function getProfileTitles(db) {
   const setting = await db.collection("game_settings").findOne({ _id: "profile_titles" });
-  return validateProfileTitles(setting?.value) ?? PROFILE_TITLE_MILESTONES;
+  return includeRouletteTitles(validateProfileTitles(setting?.value) ?? PROFILE_TITLE_MILESTONES);
 }
 
 function isValidDateString(value) {
@@ -566,10 +584,10 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, readReceipts: 1, typingIndicators: 1, chatMuted: 1, emailHash: 1, humanVerified: 1 } },
+    { projection: { username: 1, usernameNormalized: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, readReceipts: 1, typingIndicators: 1, chatMuted: 1, emailHash: 1, humanVerified: 1 } },
   );
   if (user?.emailHash && await isEmailBanned(db, user.emailHash)) return null;
-  return user && !user.banned && USER_ROLES.includes(user.role)
+  return user && !user.banned && USER_ROLES.includes(user.role) && (user.role !== "developer" || user.usernameNormalized === developerUsername)
     ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false, chatMuted: Boolean(user.chatMuted), offlineOwnerEligible: user.role === "owner" && user.emailHash === offlineOwnerEmailHash }
     : null;
 }
@@ -594,7 +612,7 @@ async function requireOwner(req, res, next) {
     req.user = await getAuthenticatedUser(req);
     if (!req.user) return res.status(401).json({ error: "Log in to continue." });
     if (req.user.mustChangePassword) return res.status(403).json({ error: "Change your temporary password before continuing." });
-    if (req.user.role !== "owner") return res.status(403).json({ error: "Owner access is required." });
+    if (!isOwnerEquivalentRole(req.user.role)) return res.status(403).json({ error: "Owner access is required." });
     next();
   } catch (error) {
     next(error);
@@ -1106,7 +1124,7 @@ app.get("/api/account/profile", requireUser, async (req, res, next) => {
     const db = await getDatabase();
     const user = await db.collection("users").findOne(
       { _id: req.user.id },
-      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1, mustChangePassword: 1, recoveryCodeHash: 1, recoveryCodeCreatedAt: 1 } },
+      { projection: { username: 1, usernameChangedAt: 1, createdAt: 1, role: 1, mustChangePassword: 1, recoveryCodeHash: 1, recoveryCodeCreatedAt: 1, emailMasked: 1, emailHash: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Account not found." });
     res.json({
@@ -1116,11 +1134,33 @@ app.get("/api/account/profile", requireUser, async (req, res, next) => {
       createdAt: user.createdAt,
       usernameChangedAt: user.usernameChangedAt ?? null,
       hasRecoveryCode: Boolean(user.recoveryCodeHash),
+      emailMasked: user.emailMasked ?? null,
+      emailSet: Boolean(user.emailHash),
       recoveryCodeCreatedAt: user.recoveryCodeCreatedAt ?? null,
       nextUsernameChangeAt: user.usernameChangedAt
         ? new Date(user.usernameChangedAt.getTime() + 7 * 24 * 60 * 60 * 1000)
         : null,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/account/email", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const rawEmail = typeof req.body?.email === "string" ? req.body.email.trim() : req.body?.email;
+    const email = rawEmail === "" || rawEmail === null || rawEmail === undefined ? null : normalizeEmail(rawEmail);
+    if (rawEmail !== "" && rawEmail !== null && rawEmail !== undefined && !email) return res.status(400).json({ error: "Enter a valid email address." });
+    const db = await getDatabase();
+    const emailHash = hashEmail(email);
+    if (emailHash && await isEmailBanned(db, emailHash)) return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
+    const result = await db.collection("users").updateOne(
+      { _id: req.user.id, banned: { $ne: true } },
+      emailHash ? { $set: { emailHash, emailMasked: maskEmail(email) } } : { $unset: { emailHash: "", emailMasked: "" } },
+    );
+    if (!result.matchedCount) return res.status(404).json({ error: "Account not found." });
+    noStore(res);
+    res.json({ emailMasked: emailHash ? maskEmail(email) : null, emailSet: Boolean(emailHash) });
   } catch (error) {
     next(error);
   }
@@ -1219,7 +1259,7 @@ app.patch("/api/account/profile", requireSameOrigin, requireUser, async (req, re
     const current = await users.findOne({ _id: req.user.id }, { projection: { username: 1, usernameChangedAt: 1, role: 1 } });
     if (!current) return res.status(404).json({ error: "Account not found." });
     if (current.username === username.display) return res.json({ user: { username: current.username }, usernameChangedAt: current.usernameChangedAt ?? null });
-    if (current.role === "owner") return res.status(403).json({ error: "Owner usernames are managed through the deployment account settings." });
+    if (isOwnerEquivalentRole(current.role)) return res.status(403).json({ error: "Owner usernames are managed through the deployment account settings." });
     const now = new Date();
     const cooldownStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     if (current.usernameChangedAt && current.usernameChangedAt > cooldownStart) {
@@ -1442,6 +1482,27 @@ async function chatTargetAccess(db, userId, targetId) {
   return { target, friendship };
 }
 
+const CHAT_REACTION_EMOJIS = new Set(["👍", "❤️", "😂", "😮", "🎉", "🚀"]);
+function publicChatReactions(reactions, viewerId) {
+  if (!reactions || typeof reactions !== "object" || Array.isArray(reactions)) return [];
+  const viewer = userIdString(viewerId);
+  return Object.entries(reactions)
+    .filter(([emoji, userIds]) => CHAT_REACTION_EMOJIS.has(emoji) && Array.isArray(userIds) && userIds.length)
+    .map(([emoji, userIds]) => ({ emoji, count: userIds.length, reacted: userIds.includes(viewer) }));
+}
+async function findChatMessage(db, id) {
+  const objectId = new ObjectId(id);
+  const direct = await db.collection("chat_messages").findOne({ _id: objectId });
+  if (direct) return { message: direct, collection: "chat_messages", global: false };
+  const global = await db.collection("global_chat_messages").findOne({ _id: objectId });
+  return global ? { message: global, collection: "global_chat_messages", global: true } : null;
+}
+async function canAccessChatMessage(db, located, user) {
+  if (located.global) return true;
+  const conversation = await db.collection("conversations").findOne({ pairKey: located.message.conversationId, userIds: user.id });
+  return Boolean(conversation);
+}
+
 app.get("/api/chat/global", requireUser, async (req, res, next) => {
   try {
     if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
@@ -1456,7 +1517,8 @@ app.get("/api/chat/global", requireUser, async (req, res, next) => {
     res.json({ messages: messages.reverse().map((message) => ({
       id: userIdString(message._id), conversationId: "global", senderId: userIdString(message.senderId),
       sender: message.sender, role: message.role, text: message.deletedAt ? "Message deleted" : message.text,
-      createdAt: message.createdAt?.toISOString?.() ?? message.createdAt, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
+      reactions: message.deletedAt ? [] : publicChatReactions(message.reactions, req.user.id),
+      createdAt: message.createdAt?.toISOString?.() ?? message.createdAt, editedAt: message.editedAt?.toISOString?.() ?? message.editedAt ?? null, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
     })) });
   } catch (error) {
     next(error);
@@ -1553,7 +1615,8 @@ app.get("/api/chat/conversations/:userId/messages", requireUser, async (req, res
         role: message.role ?? (senderId === userIdString(req.user.id) ? req.user.role : access.target.role),
         text: message.deletedAt ? "Message deleted" : message.text,
         attachment: message.deletedAt ? undefined : message.attachment,
-        createdAt, readAt, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
+        reactions: message.deletedAt ? [] : publicChatReactions(message.reactions, req.user.id),
+        createdAt, readAt, editedAt: message.editedAt?.toISOString?.() ?? message.editedAt ?? null, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
       };
     });
     res.json({ messages: mapped, hasMore: messages.length === limit, typing, readAt: readAtDate && Number.isFinite(readAtDate.getTime()) && access.target.readReceipts !== false ? readAtDate.toISOString() : null });
@@ -1632,15 +1695,60 @@ app.post("/api/chat/conversations/:userId/typing", requireSameOrigin, requireUse
   }
 });
 
+app.patch("/api/chat/messages/:id", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const db = await getDatabase();
+    const located = await findChatMessage(db, req.params.id);
+    if (!located) return res.status(404).json({ error: "Message not found." });
+    if (!await canAccessChatMessage(db, located, req.user)) return res.status(403).json({ error: "You cannot edit this message." });
+    if (located.message.deletedAt) return res.status(409).json({ error: "Deleted messages cannot be edited." });
+    if (!isOwnerEquivalentRole(req.user.role) && userIdString(located.message.senderId) !== userIdString(req.user.id)) return res.status(403).json({ error: "You can only edit your own messages." });
+    const text = sanitizeChatText(req.body?.text);
+    if (!text) return res.status(400).json({ error: "Write a message first." });
+    if (text.length > 300) return res.status(400).json({ error: "Messages are limited to 300 characters." });
+    const moderatedText = moderateChatText(text, await getChatFilterTerms(db));
+    const editedAt = new Date();
+    await db.collection(located.collection).updateOne({ _id: located.message._id }, { $set: { text: moderatedText, editedAt, editedBy: req.user.id } });
+    res.json({ message: { id: req.params.id, text: moderatedText, editedAt: editedAt.toISOString() } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/messages/:id/reactions", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
+    const emoji = typeof req.body?.emoji === "string" ? req.body.emoji : "";
+    if (!CHAT_REACTION_EMOJIS.has(emoji)) return res.status(400).json({ error: "That reaction is not available." });
+    const db = await getDatabase();
+    const located = await findChatMessage(db, req.params.id);
+    if (!located) return res.status(404).json({ error: "Message not found." });
+    if (!await canAccessChatMessage(db, located, req.user) || located.message.deletedAt) return res.status(403).json({ error: "You cannot react to this message." });
+    const reactions = located.message.reactions && typeof located.message.reactions === "object" && !Array.isArray(located.message.reactions) ? { ...located.message.reactions } : {};
+    const viewer = userIdString(req.user.id);
+    const users = Array.isArray(reactions[emoji]) ? reactions[emoji].filter((id) => id !== viewer) : [];
+    const reacted = !Array.isArray(reactions[emoji]) || !reactions[emoji].includes(viewer);
+    reactions[emoji] = reacted ? [...users, viewer] : users;
+    if (!reactions[emoji].length) delete reactions[emoji];
+    await db.collection(located.collection).updateOne({ _id: located.message._id }, { $set: { reactions } });
+    res.json({ reactions: publicChatReactions(reactions, req.user.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/chat/messages/:id", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
     const db = await getDatabase();
-    const message = await db.collection("chat_messages").findOne({ _id: new ObjectId(req.params.id) });
-    if (!message) return res.status(404).json({ error: "Message not found." });
-    if (req.user.role !== "owner" && userIdString(message.senderId) !== userIdString(req.user.id)) return res.status(403).json({ error: "You can only delete your own messages." });
-    await db.collection("chat_messages").updateOne({ _id: message._id }, { $set: { deletedAt: new Date(), deletedBy: req.user.id } });
-    if (req.user.role === "owner") await db.collection("chat_audit").insertOne({ action: "delete", messageId: message._id, actorId: req.user.id, targetUserId: message.senderId, createdAt: new Date() });
+    const located = await findChatMessage(db, req.params.id);
+    if (!located) return res.status(404).json({ error: "Message not found." });
+    if (!await canAccessChatMessage(db, located, req.user)) return res.status(403).json({ error: "You cannot delete this message." });
+    const canModerateGlobal = located.global && (isOwnerEquivalentRole(req.user.role) || req.user.role === "admin" || req.user.role === "moderator");
+    if (!canModerateGlobal && userIdString(located.message.senderId) !== userIdString(req.user.id)) return res.status(403).json({ error: "You can only delete your own messages." });
+    await db.collection(located.collection).updateOne({ _id: located.message._id }, { $set: { deletedAt: new Date(), deletedBy: req.user.id, reactions: {} } });
+    if (isOwnerEquivalentRole(req.user.role)) await db.collection("chat_audit").insertOne({ action: "delete", messageId: located.message._id, actorId: req.user.id, targetUserId: located.message.senderId, createdAt: new Date() });
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -1774,7 +1882,7 @@ app.post("/api/account/password", requireSameOrigin, requireUser, async (req, re
     const db = await getDatabase();
     const users = db.collection("users");
     const user = await users.findOne({ _id: req.user.id }, { projection: { passwordHash: 1, role: 1 } });
-    if (user?.role === "owner") return res.status(403).json({ error: "Owner passwords are managed through deployment account settings." });
+    if (isOwnerEquivalentRole(user?.role)) return res.status(403).json({ error: "Owner passwords are managed through deployment account settings." });
     if (!user || !await argon2.verify(user.passwordHash ?? dummyPasswordHash, currentPassword)) {
       return res.status(401).json({ error: "The current password is incorrect." });
     }
@@ -1802,7 +1910,7 @@ app.post("/api/account/recovery-code", requireSameOrigin, requireUser, async (re
     const db = await getDatabase();
     const users = db.collection("users");
     const user = await users.findOne({ _id: req.user.id }, { projection: { passwordHash: 1, role: 1 } });
-    if (user?.role === "owner") return res.status(403).json({ error: "Recovery codes are unavailable for owner accounts." });
+    if (isOwnerEquivalentRole(user?.role)) return res.status(403).json({ error: "Recovery codes are unavailable for owner accounts." });
     if (!user || !await argon2.verify(user.passwordHash ?? dummyPasswordHash, currentPassword)) {
       return res.status(401).json({ error: "The current password is incorrect." });
     }
@@ -1935,7 +2043,7 @@ async function getTargetManagedUser(db, rawId, actorRole = "owner") {
     { projection: { role: 1, username: 1, usernameNormalized: 1, lastSeenIpHash: 1, emailHash: 1, emailMasked: 1 } },
   );
   if (!user) return { error: { status: 404, message: "Account not found." } };
-  if (user.role === "owner") return { error: { status: 403, message: "Owner accounts are protected from player management." } };
+  if (isOwnerEquivalentRole(user.role)) return { error: { status: 403, message: "Owner accounts are protected from player management." } };
   if (actorRole === "moderator" && ["admin", "moderator", "level-maker"].includes(user.role)) {
     return { error: { status: 403, message: "Moderators can only take action on player accounts." } };
   }
@@ -2082,7 +2190,7 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderati
     // Moderators and admins may suspend/restore an account, but only the owner
     // can edit identity, role, email, or progress (all of which can grant or
     // alter valuable game data).
-    if (req.user.role !== "owner") {
+    if (!isOwnerEquivalentRole(req.user.role)) {
       const allowedKeys = new Set(["banned"]);
       const suppliedKeys = Object.keys(req.body ?? {});
       if (suppliedKeys.some((key) => !allowedKeys.has(key))) {
@@ -2104,7 +2212,7 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderati
       updates.banned = req.body.banned;
     }
     if (req.body?.role !== undefined) {
-      if (!USER_ROLES.includes(req.body.role) || req.body.role === "owner") {
+      if (!USER_ROLES.includes(req.body.role) || ["owner", "developer"].includes(req.body.role)) {
         return res.status(400).json({ error: "Role must be player, tester, moderator, admin, or level-maker; owner access cannot be assigned here." });
       }
       updates.role = req.body.role;
@@ -2382,10 +2490,10 @@ app.get("/api/settings", async (_req, res, next) => {
     ]);
     res.json({
       goldenTimeLimitMs: parseGoldenTimeLimit(golden?.value) ? golden.value : 60000,
-      rouletteTiers: validateRouletteTiers(roulette?.value) ?? defaultRouletteTiers,
+      rouletteTiers: includeRouletteTitleOdds(validateRouletteTiers(roulette?.value) ?? defaultRouletteTiers),
       version: version?.value ?? "1",
       updateLog: validateUpdateLog(updateLog?.value) ?? [],
-      profileTitles: validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES,
+      profileTitles: includeRouletteTitles(validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES),
       builtinLevelOverrides: validateBuiltinLevelOverrides(builtinLevelOverrides?.value) ?? {},
       portalAssignments: validatePortalAssignments(portalAssignments?.value) ?? {},
     });
@@ -2698,7 +2806,7 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
     }
     const runId = typeof run.proofId === "string" && /^[A-Za-z0-9_-]{32,80}$/.test(run.proofId) ? run.proofId : "";
     if (!runId) return res.status(400).json({ error: "This run could not be verified. Start the level again while online." });
-    const ownerSubmission = req.user.role === "owner" && req.body?.submitOwner === true;
+    const ownerSubmission = isOwnerEquivalentRole(req.user.role) && req.body?.submitOwner === true;
     if (req.user.role !== "player" && !ownerSubmission) return res.json({ improved: false, ignored: true, reason: "owner-private", entry: null });
     if (req.user.role === "player" && req.user.leaderboardOptIn === false) return res.json({ improved: false, ignored: true, reason: "opted-out", entry: null });
     const levelName = run.level.trim();
@@ -3397,6 +3505,12 @@ async function initializeDatabaseOnce() {
       await users.updateOne({ usernameNormalized: username.normalized }, { $set: ownerUpdate.$set });
     }
   }
+  // The developer role is reserved for this existing account. Do not upsert it:
+  // a password must be created through the normal registration flow first.
+  await users.updateOne(
+    { usernameNormalized: developerUsername },
+    { $set: { role: "developer", updatedAt: new Date() } },
+  );
   console.log(`Owner accounts ${ownerAccounts.map(({ username }) => `"${username}"`).join(" and ")} are ready.`);
 }
 

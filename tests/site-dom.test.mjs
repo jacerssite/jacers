@@ -677,10 +677,11 @@ test("control center keeps sections separate and preserves drafts while switchin
     clickButton(document, "Save roulette tiers");
     assert.match(document.querySelector('.roulette-settings-editor [role="status"]').textContent, /totaling 100%/);
     assert.equal(rouletteWrites, 0);
+    asteroidChance.value = "41";
     colorChance.value = "21";
     clickButton(document, "Save roulette tiers");
     await waitFor(() => savedRoulette, "Roulette tiers did not save");
-    assert.equal(savedRoulette[0].chances.claims, 44);
+    assert.equal(savedRoulette[0].chances.claims, 41);
     assert.equal(savedRoulette[0].chances.color, 21);
 
     clickButton(document, "Reward codes");

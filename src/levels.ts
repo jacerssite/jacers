@@ -82,7 +82,66 @@ export function normalizeNonPrestigeLevels(levelList: Level[]) {
     });
 }
 
+/**
+ * Prestige routes have a matching upside-down route. Keep both halves active
+ * across the full distance, including routes created before flipped areas were
+ * saved as part of a level. Each five-tile section gets an obstacle, enemy, or
+ * hazard so there are no long empty stretches.
+ */
+export function normalizePrestigeLevels(levelList: Level[]) {
+    const isUsableTile = (index: number, length: number) => Number.isInteger(index) && index >= 2 && index <= length - 3;
+    const normalizeTiles = (tiles: number[], length: number) => [...new Set(tiles.filter((index) => isUsableTile(index, length)))].sort((a, b) => a - b);
+    const paceRoute = (level: Level, route: Pick<Level, "walls" | "enemies" | "spikes" | "gravity" | "powerups">) => {
+        route.walls = normalizeTiles(route.walls, level.length);
+        route.enemies = normalizeTiles(route.enemies, level.length);
+        route.spikes = normalizeTiles(route.spikes, level.length);
+        route.gravity = normalizeTiles(route.gravity, level.length);
+        const protectedTiles = new Set([
+            ...level.asteroids,
+            ...(level.portals ?? []),
+            ...(level.secretPortals ?? []).map((portal) => portal.index),
+            ...(level.miniBosses ?? []),
+            ...(route.powerups ?? []).map((powerup) => powerup.index),
+        ]);
+        const challengeTiles = () => new Set([...route.walls, ...route.enemies, ...route.spikes, ...route.gravity]);
+        const targets = [route.walls, route.enemies, route.spikes, route.gravity];
+        const lastTile = level.length - 3;
+        for (let start = 2; start <= lastTile; start += 5) {
+            const end = Math.min(lastTile, start + 4);
+            const challenges = challengeTiles();
+            if ([...challenges].some((index) => index >= start && index <= end)) continue;
+            const candidates = Array.from({ length: end - start + 1 }, (_, offset) => start + offset)
+                .filter((index) => !protectedTiles.has(index) && !challenges.has(index));
+            const placement = candidates[Math.floor(candidates.length / 2)];
+            if (placement === undefined) continue;
+            const target = targets[Math.floor((start - 2) / 5) % targets.length];
+            target.push(placement);
+        }
+        route.walls = normalizeTiles(route.walls, level.length);
+        route.enemies = normalizeTiles(route.enemies, level.length);
+        route.spikes = normalizeTiles(route.spikes, level.length);
+        route.gravity = normalizeTiles(route.gravity, level.length);
+    };
+
+    levelList.forEach((level) => {
+        if (!level.prestige) return;
+        paceRoute(level, level);
+        const flippedRoute = level.flippedRoute ?? {
+            walls: [...level.walls],
+            enemies: [...level.enemies],
+            spikes: [...level.spikes],
+            gravity: [...level.gravity],
+            powerups: level.powerups?.map((powerup) => ({ ...powerup })),
+            key: level.length - 3,
+        };
+        paceRoute(level, flippedRoute);
+        flippedRoute.key = Math.max(2, Math.min(level.length - 3, flippedRoute.key ?? level.length - 3));
+        level.flippedRoute = flippedRoute;
+    });
+}
+
 // Normalize the built-ins immediately for modules that consume `levels`
 // before the application bootstrap finishes (for example the level picker).
 normalizeNonPrestigeLevels(levels);
+normalizePrestigeLevels(levels);
 

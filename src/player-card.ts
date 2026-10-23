@@ -52,7 +52,7 @@ export function attachPlayerCard(anchor: HTMLElement, presence: Pick<OnlinePlaye
         try { if (!profile) { profile = (await apiRequest<{ player: PublicPlayerProfile }>(`/players/${encodeURIComponent(presence.id)}`)).player; cache.set(presence.id, { profile, expires: Date.now() + 60_000 }); } } catch (error) { if (card) card.textContent = error instanceof Error ? error.message : "Profile unavailable."; return; }
         if (!card || activeAnchor !== anchor) return;
         card.replaceChildren();
-        const roleBadge = profile.role === "owner" ? " ★" : profile.role === "admin" ? " A" : profile.role === "moderator" ? " M" : profile.role === "level-maker" ? " L" : profile.role === "tester" ? " T" : "";
+        const roleBadge = profile.role === "owner" ? " ★" : profile.role === "developer" ? " D" : profile.role === "admin" ? " A" : profile.role === "moderator" ? " M" : profile.role === "level-maker" ? " L" : profile.role === "tester" ? " T" : "";
         const title = document.createElement("h3"); title.textContent = `${profile.username}${roleBadge}`;
         const status = document.createElement("small"); status.textContent = profile.isOnline ? "ONLINE NOW" : "OFFLINE";
         const profileTitle = document.createElement("p");

@@ -1,7 +1,7 @@
 import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, LevelMakerDraft, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward } from "./types";
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_RESET_COST, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
-import { levels, normalizeNonPrestigeLevels } from "./levels";
+import { levels, normalizeNonPrestigeLevels, normalizePrestigeLevels } from "./levels";
 import { ApiError, apiRequest, setApiLocalOnlyMode } from "./api";
 import { createMenuButton, createPasswordField, createTextButton } from "./ui";
 import { createShipArtMarkup, createCssShipArtMarkup } from "./ship-art";
@@ -170,6 +170,7 @@ const DEFAULT_CONTROL_BINDINGS: Record<ControlAction, string> = {
     restart: "keyr",
     back: "backspace",
     confirm: "enter",
+    switchPlanet: "keyp",
 };
 function readControlBindings(): Record<ControlAction, string> {
     try {
@@ -232,12 +233,12 @@ const gameAppPage: AppPage = () => startGame(currentLevel);
 const OWNER_TEST_INVENTORY_AMOUNT = 100000;
 // These helpers only decide which controls to show. The server repeats the
 // same checks, so editing the browser cannot grant a staff permission.
-function hasOwnerAccess() { return currentOnlineUser?.role === "owner"; }
-function hasTesterTools() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester"; }
-function hasModerationTools() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "moderator"; }
-function hasWorkshopTools() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "level-maker"; }
+function hasOwnerAccess() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "developer"; }
+function hasTesterTools() { return hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester"; }
+function hasModerationTools() { return hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "moderator"; }
+function hasWorkshopTools() { return hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "level-maker"; }
 function roleLabel(role: OnlineUser["role"]) {
-    return role === "owner" ? "OWNER" : role === "admin" ? "ADMIN" : role === "moderator" ? "MOD" : role === "level-maker" ? "LEVEL MAKER" : role === "tester" ? "TESTER" : "PLAYER";
+    return role === "owner" ? "OWNER" : role === "developer" ? "DEVELOPER" : role === "admin" ? "ADMIN" : role === "moderator" ? "MOD" : role === "level-maker" ? "LEVEL MAKER" : role === "tester" ? "TESTER" : "PLAYER";
 }
 
 function accountIdentity(user: OnlineUser | null) {
@@ -253,6 +254,10 @@ function readOfflineOwnerGrant(): { username: string } | null {
     } catch {
         return null;
     }
+}
+
+function isOnlineServiceUnavailable(error: unknown) {
+    return (error instanceof ApiError && error.status >= 500) || error instanceof TypeError;
 }
 
 function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
@@ -285,7 +290,7 @@ const levelMakerRenderer = createLevelMaker({
     configurePortalDistribution,
     showLevelMenu,
     showTesterPanel,
-    canEditBuiltInLevels: () => currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "admin",
+    canEditBuiltInLevels: () => hasOwnerAccess() || currentOnlineUser?.role === "admin",
     saveBuiltInLevel: async (index, level) => {
         const result = await apiRequest<{ level: Level; builtinLevelOverrides?: Record<string, Level> }>("/settings/builtin-level-overrides", {
             method: "PUT",
@@ -296,6 +301,7 @@ const levelMakerRenderer = createLevelMaker({
         if (existing) {
             levels[index] = { ...existing, ...result.level, customId: existing.customId, localOnly: existing.localOnly };
             normalizeNonPrestigeLevels(levels);
+            normalizePrestigeLevels(levels);
         }
         return levels[index] ?? result.level;
     },
@@ -421,6 +427,7 @@ function loadCustomLevels() {
         ...(level.customId ? {} : { customId: `local-${index + 1}` }),
     }));
     normalizeNonPrestigeLevels(levels);
+    normalizePrestigeLevels(levels);
 }
 
 function getHiddenPortalIndex(level: Level) {
@@ -569,6 +576,7 @@ function reloadLocalCustomLevels() {
         ...(level.customId ? {} : { customId: `local-${index + 1}` }),
     }));
     normalizeNonPrestigeLevels(levels);
+    normalizePrestigeLevels(levels);
     configurePortalDistribution();
 }
 
@@ -769,6 +777,7 @@ function applyBuiltinLevelOverrides() {
         levels[levelIndex] = { ...base, ...structuredClone(override), customId: undefined, localOnly: undefined };
     });
     normalizeNonPrestigeLevels(levels);
+    normalizePrestigeLevels(levels);
     if (levels.length) configurePortalDistribution();
 }
 
@@ -832,6 +841,7 @@ export function startApp() {
     refreshProgressStateFromStorage();
     loadCustomLevels();
     normalizeNonPrestigeLevels(levels);
+    normalizePrestigeLevels(levels);
     configurePortalDistribution();
     document.body.innerHTML = "";
     chatController?.remove();
@@ -1404,7 +1414,7 @@ function showOfflineOwnerUnlock() {
             }
             status.textContent = "The online service is available. Sign in to the owner account to continue.";
         } catch (error) {
-            const unavailable = (error instanceof ApiError && error.status >= 500) || error instanceof TypeError;
+            const unavailable = isOnlineServiceUnavailable(error);
             if (!unavailable) {
                 status.textContent = error instanceof Error ? error.message : "Could not confirm online service status.";
                 return;
@@ -1459,8 +1469,24 @@ function showMenu() {
     const offlineOwnerButton = createTextButton("Offline owner", showOfflineOwnerUnlock);
     offlineOwnerButton.classList.add("offline-owner-button");
     offlineOwnerButton.setAttribute("aria-label", "Open offline owner access");
+    offlineOwnerButton.hidden = true;
     menu.append(accountRail, menuActions, secondaryActions, offlineOwnerButton);
     menu.append(createPageCounter()); document.body.replaceChildren(menu);
+    if (readOfflineOwnerGrant()) {
+        const updateOfflineOwnerControl = async () => {
+            try {
+                await apiRequest("/health");
+                if (menu.isConnected) offlineOwnerButton.hidden = true;
+            } catch (error) {
+                if (menu.isConnected && isOnlineServiceUnavailable(error)) offlineOwnerButton.hidden = false;
+            }
+        };
+        void updateOfflineOwnerControl();
+        const offlineOwnerCheck = globalThis.setInterval(() => {
+            if (!menu.isConnected) return globalThis.clearInterval(offlineOwnerCheck);
+            void updateOfflineOwnerControl();
+        }, 10_000);
+    }
 }
 
 function showLevelMenu() {
@@ -1478,8 +1504,8 @@ function showLevelMenu() {
         const menu = document.createElement("main");
         menu.className = "menu-screen level-menu";
         menu.innerHTML = `<p class="eyebrow">MISSION SELECT / ${activePlanet === "prestige" ? "RINGED PLANET" : "BLUE PLANET"}</p><h1>Choose your <em>sector</em></h1><p class="menu-copy">Claim the asteroids in order. New sectors unlock after the previous beacon is reached.</p>`;
-        const planetButton = createMenuButton(activePlanet === "normal" ? "Fly to prestige planet" : "Return to blue planet", switchPlanet);
-        if (activePlanet === "normal" && prestigeLevel < 1 && !hasOwnerAccess()) {
+        const planetButton = createMenuButton(activePlanet === "normal" ? `Fly to prestige planet (${formatControlBinding(controlBindings.switchPlanet)})` : `Return to blue planet (${formatControlBinding(controlBindings.switchPlanet)})`, switchPlanet);
+        if (activePlanet === "normal" && !canVisitPrestigePlanet()) {
             planetButton.disabled = true;
             planetButton.textContent = "Prestige planet locked / reach prestige 1";
             planetButton.classList.add("locked");
@@ -1703,6 +1729,7 @@ function showSettings() {
         restart: "Restart level",
         back: "Back / exit menu",
         confirm: "Select level",
+        switchPlanet: "Switch normal / prestige planet",
     };
     (Object.keys(controlLabels) as ControlAction[]).forEach((action) => {
         const button = createTextButton(`${controlLabels[action]}: ${formatControlBinding(controlBindings[action])}`, () => {
@@ -2127,6 +2154,28 @@ function showAccount(initialMessage = "") {
             usernameLabel.append(usernameInput);
             const profileHint = document.createElement("small");
             profileHint.setAttribute("role", "status");
+            const emailLabel = document.createElement("label");
+            emailLabel.textContent = "Email address";
+            const emailInput = document.createElement("input");
+            emailInput.type = "email";
+            emailInput.autocomplete = "email";
+            emailInput.placeholder = "Add an email address";
+            emailInput.setAttribute("aria-label", "Email address");
+            emailLabel.append(emailInput);
+            const emailStatus = document.createElement("small");
+            emailStatus.setAttribute("role", "status");
+            const saveEmail = createTextButton("Save email", async () => {
+                saveEmail.disabled = true;
+                emailStatus.textContent = "Saving email...";
+                try {
+                    const result = await apiRequest<{ emailMasked: string | null; emailSet: boolean }>("/account/email", { method: "PUT", body: JSON.stringify({ email: emailInput.value }) });
+                    emailInput.value = "";
+                    emailInput.placeholder = result.emailMasked ? `Saved: ${result.emailMasked}` : "Add an email address";
+                    emailStatus.textContent = result.emailSet ? "Email saved." : "Email removed.";
+                } catch (error) {
+                    emailStatus.textContent = error instanceof Error ? error.message : "Could not save email.";
+                } finally { saveEmail.disabled = false; }
+            });
             const privacyRow = document.createElement("label");
             privacyRow.className = "account-presence-setting";
             privacyRow.innerHTML = `<span><b>Appear offline</b><small>Hide your online status from the leaderboard, player profiles, and owner player list.</small></span>`;
@@ -2359,7 +2408,7 @@ function showAccount(initialMessage = "") {
             saveProfile.className = "menu-button";
             saveProfile.type = "submit";
             saveProfile.textContent = "Save profile";
-            profileForm.append(usernameLabel, saveProfile, profileHint, privacyRow, privacyStatus, friendRequestsRow, friendRequestsStatus, readReceiptsRow, readReceiptsStatus, typingIndicatorsRow, typingIndicatorsStatus, ...(humanVerificationSection ? [humanVerificationSection] : []), ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
+            profileForm.append(usernameLabel, saveProfile, profileHint, emailLabel, saveEmail, emailStatus, privacyRow, privacyStatus, friendRequestsRow, friendRequestsStatus, readReceiptsRow, readReceiptsStatus, typingIndicatorsRow, typingIndicatorsStatus, ...(humanVerificationSection ? [humanVerificationSection] : []), ...(leaderboardRow ? [leaderboardRow] : []), ...(leaderboardStatus ? [leaderboardStatus] : []), titleRow, titleStatus);
             profileForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 saveProfile.disabled = true;
@@ -2583,9 +2632,10 @@ function showAccount(initialMessage = "") {
                     });
             }
             menu.append(dashboard);
-            void apiRequest<{ role: OnlineUser["role"]; nextUsernameChangeAt: string | null; mustChangePassword?: boolean }>("/account/profile")
+            void apiRequest<{ role: OnlineUser["role"]; nextUsernameChangeAt: string | null; mustChangePassword?: boolean; emailMasked?: string | null }>("/account/profile")
                 .then((profile) => {
                     if (!menu.isConnected) return;
+                    if (profile.emailMasked) emailInput.placeholder = `Saved: ${profile.emailMasked}`;
                     if (profile.role === "owner") {
                         usernameInput.disabled = true;
                         saveProfile.disabled = true;
@@ -2779,6 +2829,7 @@ const secondaryControlKeys: Record<ControlAction, string[]> = {
     restart: [],
     back: [],
     confirm: [],
+    switchPlanet: [],
 };
 function controlKeysFor(action: ControlAction) {
     return controlBindings[action] === DEFAULT_CONTROL_BINDINGS[action]
@@ -3238,6 +3289,7 @@ function showDropRates() {
         title: "Profile title",
     };
     const rewardTypes = Object.keys(rewardLabels) as (keyof RouletteTier["chances"])[];
+    const rouletteTitles = profileTitles.filter((profileTitle) => profileTitle.requirement?.type === "roulette");
     [...rouletteTiers].sort((first, second) => first.buyIn - second.buyIn).forEach((tier) => {
         const card = document.createElement("article");
         card.className = "roulette-odds-card";
@@ -3257,6 +3309,14 @@ function showDropRates() {
                 range.textContent = `Reward: ${minimum.toLocaleString()}-${maximum.toLocaleString()}`;
                 row.append(range);
             }
+            if (type === "title") {
+                const titleDetails = document.createElement("small");
+                const chance = tier.chances.title ?? 0;
+                titleDetails.textContent = rouletteTitles.length
+                    ? `${rouletteTitles.map((profileTitle) => profileTitle.name).join(" or ")} · ${chance}% total${chance ? `, up to ${(chance / rouletteTitles.length).toLocaleString(undefined, { maximumFractionDigits: 2 })}% each while available` : ""}`
+                    : "No roulette titles are configured.";
+                row.append(titleDetails);
+            }
             rows.append(row);
         });
         card.append(title, rows);
@@ -3270,7 +3330,13 @@ function showDropRates() {
     document.body.replaceChildren(menu);
 }
 
+function canVisitPrestigePlanet() { return prestigeLevel >= 1 || hasOwnerAccess(); }
+
 function switchPlanet() {
+    if (activePlanet === "normal" && !canVisitPrestigePlanet()) {
+        showLevelMenu();
+        return;
+    }
     activePlanet = activePlanet === "normal" ? "prestige" : "normal";
     document.body.classList.toggle("prestige-theme", activePlanet === "prestige");
     showLevelMenu();
@@ -3365,7 +3431,7 @@ function showTesterLogin() {
             setOnlineUser(response.user);
             void sendPresenceHeartbeat();
             updateOwnerAccountIndicator();
-            if (!(response.user.role === "owner" || response.user.role === "admin" || response.user.role === "moderator" || response.user.role === "level-maker" || response.user.role === "tester")) {
+            if (!(response.user.role === "owner" || response.user.role === "developer" || response.user.role === "admin" || response.user.role === "moderator" || response.user.role === "level-maker" || response.user.role === "tester")) {
                 message.textContent = "This account does not have staff access.";
                 submit.disabled = false;
                 return;
@@ -3407,13 +3473,13 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         console.error("Could not verify owner account:", error);
         return;
     }
-    if (!user || !(user.role === "owner" || user.role === "admin" || user.role === "moderator" || user.role === "level-maker" || user.role === "tester")) {
+    if (!user || !(user.role === "owner" || user.role === "developer" || user.role === "admin" || user.role === "moderator" || user.role === "level-maker" || user.role === "tester")) {
         showTesterLogin();
         return;
     }
     setOnlineUser(user);
     updateOwnerAccountIndicator();
-    const isOwner = user.role === "owner";
+    const isOwner = user.role === "owner" || user.role === "developer";
     const isAdmin = user.role === "admin";
     const isModerator = user.role === "moderator";
     const isLevelMaker = user.role === "level-maker";
@@ -3472,11 +3538,11 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             name: row.querySelector<HTMLInputElement>("[data-title-name]")!.value,
             routes: Number(row.querySelector<HTMLInputElement>("[data-title-routes]")!.value),
             requirement: {
-                type: row.querySelector<HTMLSelectElement>("[data-title-requirement]")!.value as "routes" | "golden" | "prestige" | "roulette" | "locked",
+                type: row.querySelector<HTMLSelectElement>("[data-title-requirement]")!.value as "routes" | "golden" | "prestige" | "roulette" | "locked" | "enemies" | "bosses",
                 amount: Number(row.querySelector<HTMLInputElement>("[data-title-requirement-amount]")!.value),
             },
             ...(row.querySelector<HTMLInputElement>("[data-title-color]")!.value.trim() ? { color: row.querySelector<HTMLInputElement>("[data-title-color]")!.value.trim() } : {}),
-            ...(row.querySelector<HTMLSelectElement>("[data-title-animation]")!.value !== "none" ? { animation: row.querySelector<HTMLSelectElement>("[data-title-animation]")!.value as "pulse" | "shimmer" | "rainbow" } : {}),
+            ...(row.querySelector<HTMLSelectElement>("[data-title-animation]")!.value !== "none" ? { animation: row.querySelector<HTMLSelectElement>("[data-title-animation]")!.value as "pulse" | "shimmer" | "rainbow" | "dark-matter" | "star-shimmer" | "comet-trail" | "nebula-drift" | "aurora-wave" | "solar-flare" } : {}),
         }));
         profileTitles.forEach((title, index) => {
             const row = document.createElement("div");
@@ -3513,7 +3579,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const animation = document.createElement("select");
             animation.dataset.titleAnimation = String(index);
             animation.setAttribute("aria-label", `Title ${index + 1} animation`);
-            [["none", "No animation"], ["pulse", "Pulse glow"], ["shimmer", "Shimmer"], ["rainbow", "Rainbow shift"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; animation.append(option); });
+            [["none", "No animation"], ["pulse", "Pulse glow"], ["shimmer", "Shimmer"], ["rainbow", "Rainbow shift"], ["dark-matter", "Dark matter orbit"], ["star-shimmer", "Star shimmer"], ["comet-trail", "Comet trail"], ["nebula-drift", "Nebula drift"], ["aurora-wave", "Aurora wave"], ["solar-flare", "Solar flare"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; animation.append(option); });
             animation.value = title.animation ?? "none";
             const routes = document.createElement("input");
             routes.type = "number";
@@ -3527,7 +3593,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const requirement = document.createElement("select");
             requirement.dataset.titleRequirement = String(index);
             requirement.setAttribute("aria-label", `Title ${index + 1} requirement type`);
-            [["routes", "Routes cleared"], ["golden", "Golden Body routes"], ["prestige", "Prestige level"], ["roulette", "Roulette prize"], ["locked", "Unobtainable (owner or code only)"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; requirement.append(option); });
+            [["routes", "Routes cleared"], ["enemies", "Enemies defeated"], ["bosses", "Bosses defeated"], ["golden", "Golden Body routes"], ["prestige", "Prestige level"], ["roulette", "Roulette prize"], ["locked", "Unobtainable (owner or code only)"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; requirement.append(option); });
             requirement.value = title.requirement?.type ?? "routes";
             const requirementAmount = document.createElement("input");
             requirementAmount.type = "number";
@@ -4706,9 +4772,11 @@ function buildLevel(levelIndex: number) {
         }))
         : [];
     levelObstacles = [...groundObstacles, ...airborneObstacles];
-    // Keep the spike hitbox over the playable floor (not below the ship's
-    // collision box) so spikes damage normal, secret, and prestige worlds.
-    levelHazards = [...level.spikes.map((index) => ({ x: 140 + index * TILE_WIDTH, y: FLOOR_Y + 30, width: 76, height: 30, kind: "spikes" as const })), ...level.gravity.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 110, width: 115, height: 250, kind: "gravity" as const }))];
+    // Anchor each spike strip to the floor surface rather than an independent
+    // screen coordinate, so it remains flush with the ground if ship sizing changes.
+    const floorSpikeHeight = 30;
+    const floorSpikeY = FLOOR_Y + playerHeight - floorSpikeHeight;
+    levelHazards = [...level.spikes.map((index) => ({ x: 140 + index * TILE_WIDTH, y: floorSpikeY, width: 76, height: floorSpikeHeight, kind: "spikes" as const })), ...level.gravity.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 110, width: 115, height: 250, kind: "gravity" as const }))];
     levelEnemies = enemyIndices.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 285, defeated: false, attackTimer: 0 }));
     const blockedPowerupTiles = [...obstacleIndices, ...enemyIndices, ...level.spikes, ...level.gravity];
     levelPowerups = createLevelPowerups(level, [...(level.powerups ?? [])], blockedPowerupTiles);
@@ -4950,8 +5018,11 @@ function enterFlippedRoute() {
         height: 54,
     }));
     levelObstacles = routeWalls;
+    // The flipped planet's ceiling is its ground: place spike strips directly on
+    // that surface so they extend down into the route instead of floating below it.
+    const ceilingSpikeHeight = 30;
     levelHazards = [
-        ...[...new Set(route.spikes)].filter(validTile).map((index) => ({ x: 140 + index * TILE_WIDTH, y: 112, width: 76, height: 20, kind: "spikes" as const })),
+        ...[...new Set(route.spikes)].filter(validTile).map((index) => ({ x: 140 + index * TILE_WIDTH, y: CEILING_Y, width: 76, height: ceilingSpikeHeight, kind: "spikes" as const })),
         ...[...new Set(route.gravity)].filter(validTile).map((index) => ({ x: 140 + index * TILE_WIDTH, y: 74, width: 115, height: 270, kind: "gravity" as const })),
     ];
     levelEnemies = routeEnemyTiles.map((index) => ({ x: 140 + index * TILE_WIDTH, y: 94, defeated: false }));
@@ -5547,6 +5618,11 @@ function handleKeyDown(event: KeyboardEvent) {
     if (controlKeysFor("confirm").includes(key) && !gameActive && document.querySelector(".level-menu")) {
         const firstAvailable = document.querySelector<HTMLButtonElement>(".level-list .level-button:not([disabled])");
         if (firstAvailable) { event.preventDefault(); firstAvailable.click(); }
+        return;
+    }
+    if (controlKeysFor("switchPlanet").includes(key) && !gameActive && document.querySelector(".level-menu")) {
+        event.preventDefault();
+        switchPlanet();
         return;
     }
     if (controlKeysFor("restart").includes(key) && !gameActive && document.querySelector(".game-over-screen")) {
@@ -6164,6 +6240,8 @@ function isProfileTitleUnlocked(title: ProfileTitle) {
     if (requirement.type === "locked") return false;
     if (requirement.type === "golden") return getNormalCompletedLevelCount() >= requirement.amount;
     if (requirement.type === "prestige") return prestigeLevel >= requirement.amount;
+    if (requirement.type === "enemies") return enemiesKilled >= requirement.amount;
+    if (requirement.type === "bosses") return bossesKilled >= requirement.amount;
     if (requirement.type === "roulette") return false;
     return getCompletedLevelCount() >= requirement.amount;
 }

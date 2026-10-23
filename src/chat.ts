@@ -9,7 +9,7 @@ type ChatContext = {
     onMessage?: () => void;
 };
 
-function roleLabel(role: OnlineUser["role"]) { return role === "owner" ? "\u2605" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : ""; }
+function roleLabel(role: OnlineUser["role"]) { return role === "owner" ? "\u2605" : role === "developer" ? "D" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : ""; }
 function ageLabel(value: string | null | undefined) {
     if (!value) return "";
     const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
@@ -49,6 +49,7 @@ export function createChat(context: ChatContext) {
     let ownTyping = false;
     let typingStopTimer = 0;
     let hasUnreadSnapshot = false;
+    const chatEmojis = ["👍", "❤️", "😂", "😮", "🎉", "🚀"];
 
     const setUnread = (nextPending: number, nextUnread: number) => {
         const previousUnread = unread;
@@ -202,6 +203,19 @@ export function createChat(context: ChatContext) {
         }, 1800);
     };
 
+    const refreshActiveMessages = async (mode: "direct" | "global") => {
+        if (mode === "global") await loadGlobalMessages(false);
+        else await loadMessages(false);
+    };
+    const addEmojiToInput = (input: HTMLTextAreaElement, emoji: string) => {
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? input.value.length;
+        input.value = `${input.value.slice(0, start)}${emoji}${input.value.slice(end)}`;
+        input.focus();
+        input.setSelectionRange(start + emoji.length, start + emoji.length);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+
     const renderConversation = (messages: ChatMessage[], mode: "direct" | "global" = "direct") => {
         const target = content(); if (!target) return;
         const draftKey = mode === "global" ? "global" : activeUserId ? `dm:${activeUserId}` : "";
@@ -219,10 +233,29 @@ export function createChat(context: ChatContext) {
         target.append(back, heading, typingIndicator);
         const list = document.createElement("div"); list.className = "chat-message-list";
         messages.forEach((message) => {
-            const bubble = document.createElement("article"); bubble.className = `chat-message ${message.sender === context.getUser()?.username ? "mine" : ""}`;
-            const meta = document.createElement("small"); meta.textContent = `${message.sender} · ${ageLabel(message.createdAt)}`;
+            const mine = message.sender === context.getUser()?.username;
+            const bubble = document.createElement("article"); bubble.className = `chat-message ${mine ? "mine" : ""}${message.deletedAt ? " deleted" : ""}`;
+            const meta = document.createElement("small"); meta.textContent = `${message.sender} · ${ageLabel(message.createdAt)}${message.editedAt ? " · edited" : ""}`;
             const text = document.createElement("p"); text.textContent = message.text;
             bubble.append(meta, text);
+            const canModerateGlobal = mode === "global" && ["moderator", "admin", "owner", "developer"].includes(context.getUser()?.role ?? "");
+            if ((mine || canModerateGlobal) && !message.deletedAt) {
+                const more = document.createElement("button"); more.type = "button"; more.className = "chat-message-more"; more.textContent = "⋯"; more.setAttribute("aria-label", "Message actions");
+                const actions = document.createElement("div"); actions.className = "chat-message-actions"; actions.hidden = true;
+                const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.hidden = !mine; edit.addEventListener("click", async () => {
+                    const nextText = globalThis.prompt("Edit message", message.text);
+                    if (nextText === null || nextText.trim() === message.text) return;
+                    try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}`, { method: "PATCH", body: JSON.stringify({ text: nextText }) }); await refreshActiveMessages(mode); }
+                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not edit message."); }
+                });
+                const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Delete"; remove.addEventListener("click", async () => {
+                    if (!globalThis.confirm("Delete this message?")) return;
+                    try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}`, { method: "DELETE" }); await refreshActiveMessages(mode); }
+                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not delete message."); }
+                });
+                more.addEventListener("click", () => { actions.hidden = !actions.hidden; });
+                actions.append(edit, remove); bubble.append(more, actions);
+            }
             if (mode === "direct" && message.sender === context.getUser()?.username) {
                 const receipt = document.createElement("small");
                 receipt.className = `chat-read-receipt${message.readAt ? " is-read" : ""}`;
@@ -230,6 +263,21 @@ export function createChat(context: ChatContext) {
                 bubble.append(receipt);
             }
             if (message.attachment) { const media = message.attachment.kind === "video" ? document.createElement("video") : document.createElement("img"); if (media instanceof HTMLVideoElement) { media.controls = true; media.preload = "metadata"; media.playsInline = true; } else { media.loading = "lazy"; media.alt = "Attachment"; } media.src = message.attachment.url; bubble.append(media); }
+            if (!message.deletedAt) {
+                const reactions = document.createElement("div"); reactions.className = "chat-reactions";
+                const toggleReaction = async (emoji: string) => {
+                    try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) }); await refreshActiveMessages(mode); }
+                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not add reaction."); }
+                };
+                (message.reactions ?? []).forEach((reaction) => {
+                    const reactionButton = document.createElement("button"); reactionButton.type = "button"; reactionButton.className = `chat-reaction${reaction.reacted ? " selected" : ""}`; reactionButton.textContent = `${reaction.emoji} ${reaction.count}`; reactionButton.setAttribute("aria-label", `React ${reaction.emoji}`); reactionButton.addEventListener("click", () => { void toggleReaction(reaction.emoji); }); reactions.append(reactionButton);
+                });
+                const addReaction = document.createElement("button"); addReaction.type = "button"; addReaction.className = "chat-reaction-add"; addReaction.textContent = "☺"; addReaction.setAttribute("aria-label", "Add reaction");
+                const reactionPicker = document.createElement("div"); reactionPicker.className = "chat-emoji-picker chat-reaction-picker"; reactionPicker.hidden = true;
+                chatEmojis.forEach((emoji) => { const choice = document.createElement("button"); choice.type = "button"; choice.textContent = emoji; choice.setAttribute("aria-label", `React ${emoji}`); choice.addEventListener("click", () => { void toggleReaction(emoji); }); reactionPicker.append(choice); });
+                addReaction.addEventListener("click", () => { reactionPicker.hidden = !reactionPicker.hidden; });
+                reactions.append(addReaction, reactionPicker); bubble.append(reactions);
+            }
             list.append(bubble); if (mode === "global") globalLastMessageId = message.id; else lastMessageId = message.id;
         });
         target.append(list);
@@ -239,7 +287,11 @@ export function createChat(context: ChatContext) {
         input.value = draftKey ? messageDrafts.get(draftKey) ?? "" : "";
         const count = document.createElement("small"); count.textContent = `${input.value.length}/300`;
         const attachmentInput = document.createElement("input"); attachmentInput.type = "file"; attachmentInput.accept = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"; attachmentInput.hidden = true; attachmentInput.setAttribute("aria-label", "Choose an image, GIF, or video");
-        const attachmentButton = document.createElement("button"); attachmentButton.type = "button"; attachmentButton.className = "chat-action-button"; attachmentButton.textContent = "Attach"; attachmentButton.hidden = mode === "global"; attachmentButton.addEventListener("click", () => attachmentInput.click());
+        const attachmentButton = document.createElement("button"); attachmentButton.type = "button"; attachmentButton.className = "chat-action-button chat-attachment-button"; attachmentButton.textContent = "+"; attachmentButton.setAttribute("aria-label", "Attach an image, GIF, or video"); attachmentButton.hidden = mode === "global"; attachmentButton.addEventListener("click", () => attachmentInput.click());
+        const emojiButton = document.createElement("button"); emojiButton.type = "button"; emojiButton.className = "chat-action-button chat-emoji-button"; emojiButton.textContent = "☺"; emojiButton.setAttribute("aria-label", "Add emoji");
+        const emojiPicker = document.createElement("div"); emojiPicker.className = "chat-emoji-picker"; emojiPicker.hidden = true;
+        chatEmojis.forEach((emoji) => { const choice = document.createElement("button"); choice.type = "button"; choice.textContent = emoji; choice.setAttribute("aria-label", `Add ${emoji}`); choice.addEventListener("click", () => { addEmojiToInput(input, emoji); emojiPicker.hidden = true; }); emojiPicker.append(choice); });
+        emojiButton.addEventListener("click", () => { emojiPicker.hidden = !emojiPicker.hidden; });
         const attachmentStatus = document.createElement("small"); attachmentStatus.className = "chat-attachment-status"; attachmentStatus.hidden = mode === "global";
         const send = document.createElement("button"); send.type = "submit"; send.className = "chat-action-button"; send.textContent = "Send";
         const updateSendState = () => { count.textContent = `${input.value.length}/300`; send.disabled = !input.value.trim() && (mode === "global" || !pendingAttachment); };
@@ -263,7 +315,7 @@ export function createChat(context: ChatContext) {
         });
         input.addEventListener("input", () => { if (draftKey) messageDrafts.set(draftKey, input.value); if (mode === "direct" && input.value.trim()) scheduleTypingStop(); else if (mode === "direct" && ownTyping) { ownTyping = false; sendTypingState(false); } updateSendState(); });
         input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
-        form.append(input, attachmentInput, attachmentButton, attachmentStatus, count, send); updateSendState();
+        form.append(input, attachmentInput, attachmentButton, emojiButton, emojiPicker, attachmentStatus, count, send); updateSendState();
         form.addEventListener("submit", async (event) => {
             event.preventDefault();
             if ((mode === "direct" && !activeUserId) || (!input.value.trim() && (mode === "global" || !pendingAttachment))) return;

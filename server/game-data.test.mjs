@@ -26,8 +26,9 @@ import {
 } from "./game-data.mjs";
 
 test("staff roles keep permissions separated", () => {
-  assert.deepEqual(USER_ROLES, ["owner", "admin", "moderator", "level-maker", "tester", "player"]);
+  assert.deepEqual(USER_ROLES, ["owner", "developer", "admin", "moderator", "level-maker", "tester", "player"]);
   assert.equal(hasRolePermission("owner", "anything"), true);
+  assert.equal(hasRolePermission("developer", "anything"), true);
   assert.equal(hasRolePermission("admin", "content:codes"), true);
   assert.equal(hasRolePermission("admin", "game-config"), false);
   assert.equal(hasRolePermission("moderator", "moderation"), true);
@@ -59,7 +60,7 @@ test("profile titles unlock at route milestones and require an earned selected t
 });
 
 test("profile titles accept bounded colors and animations", () => {
-  const titles = [{ id: "aurora", name: "Aurora", routes: 1, color: "#12AbEf", animation: "shimmer", requirement: { type: "routes", amount: 1 } }];
+  const titles = [{ id: "aurora", name: "Aurora", routes: 1, color: "#12AbEf", animation: "nebula-drift", requirement: { type: "routes", amount: 1 } }];
   assert.deepEqual(validateProfileTitles(titles), [{ ...titles[0], color: "#12abef" }]);
   assert.equal(validateProfileTitles([{ ...titles[0], color: "red" }]), null);
   assert.equal(validateProfileTitles([{ ...titles[0], animation: "spin" }]), null);

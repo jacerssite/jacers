@@ -39,10 +39,10 @@ export type UnflippedRouteSnapshot = {
     playerX: number;
 };
 export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; prestigeRequirement?: number; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
-export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "restart" | "back" | "confirm";
+export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "restart" | "back" | "confirm" | "switchPlanet";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
-export type UserRole = "player" | "tester" | "moderator" | "admin" | "level-maker" | "owner";
+export type UserRole = "player" | "tester" | "moderator" | "admin" | "level-maker" | "developer" | "owner";
 export type OnlineUser = { username: string; role: UserRole; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean; allowFriendRequests?: boolean; readReceipts?: boolean; typingIndicators?: boolean; humanVerified?: boolean; offlineOwnerEligible?: boolean };
 export type ManagedUser = {
     id: string;
@@ -70,10 +70,10 @@ export type ManagedUser = {
 export type OnlineLeaderboardEntry = { id: string; userId: string; username: string; role?: OnlineUser["role"]; level: string; timeMs: number; abilities: string[]; achievedAt: string };
 export type OnlinePlayerPresence = { id: string; username: string; role?: OnlineUser["role"] };
 export type ProfileTitleRequirement = {
-    type: "routes" | "golden" | "prestige" | "roulette" | "locked";
+    type: "routes" | "golden" | "prestige" | "roulette" | "locked" | "enemies" | "bosses";
     amount: number;
 };
-export type TitleAnimation = "none" | "pulse" | "shimmer" | "rainbow";
+export type TitleAnimation = "none" | "pulse" | "shimmer" | "rainbow" | "dark-matter" | "star-shimmer" | "comet-trail" | "nebula-drift" | "aurora-wave" | "solar-flare";
 export type ProfileTitleStyle = { color?: string; animation?: TitleAnimation };
 export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement } & ProfileTitleStyle;
 export type CodeReward =
@@ -103,7 +103,8 @@ export type PublicPlayerProfile = {
 export type FriendEntry = { userId: string; username: string; role: OnlineUser["role"]; title: string; isOnline: boolean; unread: number; createdAt?: string };
 export type FriendRequest = { id: string; userId: string; username: string; role: OnlineUser["role"]; title: string; createdAt: string; direction: "incoming" | "outgoing" };
 export type ChatAttachment = { kind: "image" | "gif" | "video"; url: string; contentType: string; bytes: number };
-export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; createdAt: string; readAt?: string | null; deletedAt?: string | null };
+export type ChatReaction = { emoji: string; count: number; reacted: boolean };
+export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; reactions?: ChatReaction[]; createdAt: string; readAt?: string | null; editedAt?: string | null; deletedAt?: string | null };
 export type ChatConversation = { id: string; userId: string; username: string; role: OnlineUser["role"]; isOnline: boolean; lastMessagePreview: string; lastMessageAt: string | null; unread: number };
 export type RouletteTier = {
     buyIn: 5 | 10 | 25;

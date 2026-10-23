@@ -122,7 +122,7 @@ export function createLeaderboard(context: LeaderboardContext) {
                 accountButton.textContent = session.user ? "Account / Sign out" : "Sign in / Create account";
                 renderLeaderboardEntries(list, response.entries, session.user);
                 serviceStatus.textContent = response.entries.length ? `${response.entries.length} online best runs` : "No online runs have been submitted yet.";
-                if (session.user?.role === "owner") renderOwnerControls(adminPanel, settings, () => showLeaderboard());
+                if (session.user?.role === "owner" || session.user?.role === "developer") renderOwnerControls(adminPanel, settings, () => showLeaderboard());
                 else adminPanel.replaceChildren();
             } catch (error) {
                 if (!menu.isConnected || requestNumber !== latestLoad) return;
@@ -175,13 +175,13 @@ export function createLeaderboard(context: LeaderboardContext) {
                 });
                 row.append(add);
             }
-            if (user?.role === "owner") row.append(createOwnerEntryControls(entry, () => showLeaderboard()));
+            if (user?.role === "owner" || user?.role === "developer") row.append(createOwnerEntryControls(entry, () => showLeaderboard()));
             container.append(row);
         });
     }
 
     function getRoleBadge(role: OnlineUser["role"]) {
-        return role === "owner" ? "★" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : "";
+        return role === "owner" ? "★" : role === "developer" ? "D" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : "";
     }
 
     async function showLeaderboardPlayerProfile(playerId: string, returnTo: () => void) {

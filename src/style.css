@@ -818,9 +818,21 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .title-animation-pulse { animation: title-pulse 1.8s ease-in-out infinite; }
 .title-animation-shimmer { background: linear-gradient(110deg, #101b2b 25%, color-mix(in srgb, var(--title-color) 32%, #101b2b) 50%, #101b2b 75%); background-size: 220% 100%; animation: title-shimmer 2.2s linear infinite; }
 .title-animation-rainbow { animation: title-rainbow 3.2s linear infinite; }
+.title-animation-dark-matter { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--title-color) 52%, #28134a) 0 8%, #101b2b 38%, #080b1b 75%); animation: title-dark-matter 3.4s ease-in-out infinite; }
+.title-animation-star-shimmer { background: linear-gradient(115deg, #101b2b 18%, color-mix(in srgb, var(--title-color) 28%, #101b2b) 34%, #f7fbff 42%, color-mix(in srgb, var(--title-color) 38%, #101b2b) 49%, #101b2b 62%); background-size: 290% 100%; animation: title-star-shimmer 2.8s linear infinite; }
+.title-animation-comet-trail { background: linear-gradient(105deg, #101b2b 12%, color-mix(in srgb, var(--title-color) 20%, #101b2b) 32%, var(--title-color) 50%, #ffffff 54%, #101b2b 70%); background-size: 260% 100%; animation: title-comet-trail 2.1s ease-in-out infinite; }
+.title-animation-nebula-drift { background: radial-gradient(ellipse at 15% 50%, color-mix(in srgb, var(--title-color) 56%, #622a99), transparent 32%), radial-gradient(ellipse at 84% 40%, #4b2a88, transparent 38%), #101b2b; background-size: 180% 170%, 190% 180%; animation: title-nebula-drift 4.6s ease-in-out infinite; }
+.title-animation-aurora-wave { background: linear-gradient(100deg, #101b2b 12%, #2dcf9a 31%, color-mix(in srgb, var(--title-color) 72%, #70f0d3) 49%, #768cff 67%, #101b2b 88%); background-size: 240% 100%; animation: title-aurora-wave 3.6s ease-in-out infinite; }
+.title-animation-solar-flare { background: radial-gradient(circle at 50% 130%, #ff6740, color-mix(in srgb, var(--title-color) 80%, #ffd66b) 38%, #101b2b 73%); animation: title-solar-flare 2.5s ease-in-out infinite; }
 @keyframes title-pulse { 0%, 100% { box-shadow: 0 0 6px color-mix(in srgb, var(--title-color) 18%, transparent); } 50% { box-shadow: 0 0 18px color-mix(in srgb, var(--title-color) 70%, transparent); } }
 @keyframes title-shimmer { from { background-position: 200% 0; } to { background-position: -20% 0; } }
 @keyframes title-rainbow { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
+@keyframes title-dark-matter { 0%, 100% { box-shadow: 0 0 7px color-mix(in srgb, var(--title-color) 34%, #5a22a8); filter: saturate(.8); } 50% { box-shadow: 0 0 20px color-mix(in srgb, var(--title-color) 70%, #7e31ca), inset 0 0 10px #4b1b86; filter: saturate(1.35); } }
+@keyframes title-star-shimmer { from { background-position: 220% 0; box-shadow: 0 0 7px color-mix(in srgb, var(--title-color) 30%, transparent); } 48% { box-shadow: 0 0 18px color-mix(in srgb, var(--title-color) 78%, #ffffff); } to { background-position: -30% 0; box-shadow: 0 0 7px color-mix(in srgb, var(--title-color) 30%, transparent); } }
+@keyframes title-comet-trail { from { background-position: 210% 0; box-shadow: -2px 0 8px color-mix(in srgb, var(--title-color) 25%, transparent); } 48% { box-shadow: -12px 0 18px color-mix(in srgb, var(--title-color) 65%, transparent), 5px 0 9px #ffffffaa; } to { background-position: -40% 0; box-shadow: -2px 0 8px color-mix(in srgb, var(--title-color) 25%, transparent); } }
+@keyframes title-nebula-drift { 0%, 100% { background-position: 0% 45%, 100% 50%; box-shadow: 0 0 9px #9a62d855; } 50% { background-position: 100% 52%, 0% 42%; box-shadow: 0 0 20px color-mix(in srgb, var(--title-color) 62%, #9a62d8); } }
+@keyframes title-aurora-wave { from { background-position: 190% 0; filter: saturate(.9); } 50% { filter: saturate(1.4) brightness(1.15); } to { background-position: -30% 0; filter: saturate(.9); } }
+@keyframes title-solar-flare { 0%, 100% { box-shadow: 0 0 7px #ff983f77; filter: brightness(.95); } 50% { box-shadow: 0 0 22px #ffbd5a, inset 0 -5px 12px #ff603d88; filter: brightness(1.2); } }
 .profile-presence { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 0; color: #adb7b0; font: 700 .62rem 'DM Mono', monospace; }
 .profile-presence::before { width: 8px; height: 8px; border-radius: 50%; background: #89929a; content: ""; }
 .profile-presence.is-online { color: #71dc91; }
@@ -875,11 +887,16 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-player-management { width: min(850px, 94vw); margin: 0 auto 18px; padding: 18px; border: 1px solid #385267; background: #143746cc; text-align: left; }
 .tester-player-management h2 { color: #f6c46e; }
 .tester-player-management > p, .tester-player-card p, .tester-player-card small { color: #c4d1bd; font: .65rem/1.5 'DM Mono', monospace; overflow-wrap: anywhere; }
+.tester-player-lookup-panel { display: grid; gap: 8px; margin-top: 14px; padding: 12px; border: 1px solid #385267; background: #101b2b; }
+.tester-player-lookup { width: 100%; padding: 10px 12px; border: 1px solid #547185; color: #f3f5e9; background: #08121f; font: .72rem 'DM Mono', monospace; }
+.tester-player-lookup:focus { border-color: #f6c46e; outline: 1px solid #f6c46e; }
+.tester-player-lookup-status { color: #9fb8ae; font: .62rem 'DM Mono', monospace; }
+.tester-player-lookup-results { display: grid; gap: 8px; }
 .tester-player-card .player-presence-status { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0; color: #a6b0aa; font-weight: 700; }
 .tester-player-card .player-presence-status::before { width: 7px; height: 7px; border-radius: 50%; background: #89929a; content: ""; }
 .tester-player-card .player-presence-status.is-online { color: #71dc91; }
 .tester-player-card .player-presence-status.is-online::before { background: #71dc91; box-shadow: 0 0 8px #71dc91aa; }
-.tester-player-card { margin: 10px 0; padding: 12px; border: 1px solid #385267; background: #101b2b; }
+.tester-player-card { margin: 0; padding: 12px; border: 1px solid #385267; background: #101b2b; }
 .tester-player-card summary { color: #f6c46e; font: .75rem 'DM Mono', monospace; cursor: pointer; }
 .tester-player-form { display: grid; gap: 8px; margin-top: 10px; }
 .tester-player-form input:not([type="checkbox"]), .tester-player-form textarea { width: 100%; min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
@@ -1039,18 +1056,35 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .chat-action-button.danger { color: #ef8e81; }
 .chat-row-unread { color: #ef6d62; margin-left: auto; }
 .chat-message-list { display: flex; flex-direction: column; gap: 8px; max-height: 38vh; overflow: auto; padding: 8px 0; }
-.chat-message { width: fit-content; max-width: 84%; padding: 8px 10px; background: #202126; border: 1px solid #2b2d36; border-radius: 10px; }
+.chat-message { position: relative; width: fit-content; max-width: 84%; padding: 8px 10px; background: #202126; border: 1px solid #2b2d36; border-radius: 10px; }
 .chat-message.mine { margin-left: auto; background: #2a2b31; }
+.chat-message.deleted { opacity: .72; font-style: italic; }
 .chat-message small { display: block; color: #9eb7ba; margin-bottom: 4px; }
 .chat-message .chat-read-receipt { margin: 5px 0 0; color: #79868b; font-size: .56rem; text-align: right; }
 .chat-message .chat-read-receipt.is-read { color: #f6c46e; }
 .chat-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: .78rem/1.4 "DM Mono", monospace; }
 .chat-message img, .chat-message video { display: block; max-width: 100%; max-height: 240px; margin-top: 6px; }
+.chat-message-more { position: absolute; top: 3px; right: 5px; border: 0; padding: 1px 4px; background: transparent; color: #c6cad2; cursor: pointer; font: 700 1.05rem/1 "DM Mono", monospace; opacity: 0; }
+.chat-message.mine:hover .chat-message-more, .chat-message-more:focus-visible { opacity: 1; }
+.chat-message-actions { position: absolute; z-index: 4; top: 25px; right: 6px; display: grid; min-width: 76px; border: 1px solid #465468; background: #101b2b; box-shadow: 0 7px 18px #0008; }
+.chat-message-actions button { border: 0; padding: 7px 9px; color: #dce8e6; background: transparent; cursor: pointer; font: .65rem "DM Mono", monospace; text-align: left; }
+.chat-message-actions button:hover, .chat-message-actions button:focus-visible { background: #24465a; color: #f6c46e; outline: none; }
+.chat-message-actions button:last-child { color: #ef9b90; }
+.chat-reactions { display: flex; position: relative; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.chat-reaction, .chat-reaction-add { min-height: 23px; border: 1px solid #465468; border-radius: 12px; padding: 2px 6px; color: #dce8e6; background: #161f2c; cursor: pointer; font: .61rem "DM Mono", monospace; }
+.chat-reaction.selected { border-color: #f6c46e; background: #594a27; color: #fff0bd; }
+.chat-reaction-add { color: #a9c1d1; }
 .chat-composer { display: grid; grid-template-columns: 1fr auto; gap: 6px; border-top: 1px solid #385267; padding-top: 9px; }
 .chat-composer textarea { grid-column: 1 / -1; resize: vertical; min-height: 48px; background: #17181d; color: #e9eaf0; border: 1px solid #3b3d47; border-radius: 9px; padding: 9px; font: .76rem "DM Mono", monospace; }
 .chat-composer .chat-action-button[type="submit"] { border-radius: 8px; background: #292a31; color: #777985; border-color: #292a31; }
 .chat-composer .chat-action-button[type="submit"]:not(:disabled) { background: #f6c46e; color: #17181d; border-color: #f6c46e; }
 .chat-composer small { align-self: center; color: #9eb7ba; }
+.chat-attachment-button, .chat-emoji-button { min-width: 31px; padding: 4px 7px; font-size: 1rem; line-height: 1; }
+.chat-emoji-picker { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; border: 1px solid #385267; background: #101b2b; }
+.chat-emoji-picker[hidden] { display: none; }
+.chat-emoji-picker button { width: 29px; height: 28px; border: 1px solid transparent; background: #172634; cursor: pointer; font-size: .92rem; }
+.chat-emoji-picker button:hover, .chat-emoji-picker button:focus-visible { border-color: #f6c46e; background: #24465a; outline: none; }
+.chat-reaction-picker { position: absolute; z-index: 5; bottom: 28px; left: 0; grid-column: auto; width: max-content; max-width: 170px; }
 .chat-attachment-status { grid-column: 1 / -1; min-height: 1em; }
 .chat-attachment-remove { margin-left: 6px; border: 0; background: transparent; color: #f6c46e; cursor: pointer; font: inherit; text-decoration: underline; }
 .account-inbox-list { display: grid; gap: 8px; }

@@ -43,9 +43,27 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
         }
         if (!container.isConnected) return;
         status.textContent = users.length ? `${users.length} account${users.length === 1 ? "" : "s"} loaded (up to 200).` : "No player accounts found.";
+        const lookup = document.createElement("input");
+        lookup.className = "tester-player-lookup";
+        lookup.type = "search";
+        lookup.placeholder = "Search by player name, role, or status";
+        lookup.autocomplete = "off";
+        lookup.setAttribute("aria-label", "Find a player account");
+        const lookupStatus = document.createElement("small");
+        lookupStatus.className = "tester-player-lookup-status";
+        lookupStatus.setAttribute("role", "status");
+        lookupStatus.textContent = "Search to open a player account.";
+        const results = document.createElement("div");
+        results.className = "tester-player-lookup-results";
+        const lookupPanel = document.createElement("section");
+        lookupPanel.className = "tester-player-lookup-panel";
+        lookupPanel.append(lookup, lookupStatus, results);
+        container.append(lookupPanel);
         users.forEach((user) => {
             const card = document.createElement("details");
             card.className = "tester-player-card";
+            card.hidden = true;
+            card.dataset.playerSearch = `${user.username} ${user.role} ${user.banned ? "banned" : "active"}`.toLowerCase();
             const summary = document.createElement("summary");
             summary.textContent = `${user.username} / ${user.banned ? "BANNED" : "ACTIVE"} / ${user.role.toUpperCase()}`;
             card.append(summary);
@@ -85,7 +103,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 const protectedMessage = document.createElement("small");
                 protectedMessage.textContent = "Owner accounts are protected from player management.";
                 card.append(protectedMessage);
-                container.append(card);
+                results.append(card);
                 return;
             }
             const form = document.createElement("form");
@@ -607,8 +625,23 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             }
             card.append(accountActions);
             void loadBackups();
-            container.append(card);
+            results.append(card);
         });
+        const filterPlayers = () => {
+            const query = lookup.value.trim().toLowerCase();
+            let matchCount = 0;
+            results.querySelectorAll<HTMLDetailsElement>(".tester-player-card").forEach((card) => {
+                const matches = Boolean(query) && (card.dataset.playerSearch ?? "").includes(query);
+                card.hidden = !matches;
+                if (matches) matchCount += 1;
+            });
+            lookupStatus.textContent = !query
+                ? "Search to open a player account."
+                : matchCount
+                    ? `${matchCount} matching account${matchCount === 1 ? "" : "s"}.`
+                    : "No matching player accounts.";
+        };
+        lookup.addEventListener("input", filterPlayers);
         const refreshPresence = async () => {
             const response = await apiRequest<{ users: Pick<ManagedUser, "id" | "isOnline">[] }>("/admin/presence");
             if (!container.isConnected) return;

@@ -13,10 +13,11 @@ export const POWERUP_KINDS = ["shield", "boost", "rapid", "cannon", "star"];
 // Roles are deliberately explicit and permission-scoped.  The client uses these
 // values to build the right control center, while the API checks the permission
 // map again so hiding a button can never grant access by itself.
-export const USER_ROLES = ["owner", "admin", "moderator", "level-maker", "tester", "player"];
+export const USER_ROLES = ["owner", "developer", "admin", "moderator", "level-maker", "tester", "player"];
 // Keep this list small: the API uses it as the source of truth for staff tools.
 export const ROLE_PERMISSIONS = {
   owner: new Set(["*"]),
+  developer: new Set(["*"]),
   admin: new Set(["tester-tools", "moderation", "content:codes", "content:messages", "content:update-log", "levels:manage", "levels:workshop"]),
   moderator: new Set(["moderation"]),
   "level-maker": new Set(["levels:workshop"]),
@@ -24,16 +25,27 @@ export const ROLE_PERMISSIONS = {
   player: new Set(),
 };
 export function hasRolePermission(role, permission) {
-  return role === "owner" || Boolean(ROLE_PERMISSIONS[role]?.has(permission));
+  return isOwnerEquivalentRole(role) || Boolean(ROLE_PERMISSIONS[role]?.has(permission));
 }
+export function isOwnerEquivalentRole(role) { return role === "owner" || role === "developer"; }
 export const PROFILE_TITLE_MILESTONES = [
-  { id: "cadet", name: "Cadet", routes: 1, requirement: { type: "routes", amount: 1 } },
-  { id: "pathfinder", name: "Pathfinder", routes: 5, requirement: { type: "routes", amount: 5 } },
-  { id: "sector-ace", name: "Sector Ace", routes: 10, requirement: { type: "routes", amount: 10 } },
-  { id: "stellar-navigator", name: "Stellar Navigator", routes: 20, requirement: { type: "routes", amount: 20 } },
-  { id: "cosmic-legend", name: "Cosmic Legend", routes: 40, requirement: { type: "routes", amount: 40 } },
+  { id: "cadet", name: "Cadet", routes: 1, color: "#71dc91", animation: "aurora-wave", requirement: { type: "routes", amount: 1 } },
+  { id: "pathfinder", name: "Pathfinder", routes: 5, color: "#6ecbff", animation: "comet-trail", requirement: { type: "routes", amount: 5 } },
+  { id: "sector-ace", name: "Sector Ace", routes: 10, color: "#b991ff", animation: "star-shimmer", requirement: { type: "routes", amount: 10 } },
+  { id: "stellar-navigator", name: "Stellar Navigator", routes: 20, color: "#f58bff", animation: "nebula-drift", requirement: { type: "routes", amount: 20 } },
+  { id: "cosmic-legend", name: "Cosmic Legend", routes: 40, color: "#f6c46e", animation: "dark-matter", requirement: { type: "routes", amount: 40 } },
+  { id: "lucky-star", name: "Lucky Star", routes: 0, color: "#ffdf72", animation: "solar-flare", requirement: { type: "roulette", amount: 1 } },
+  { id: "void-jackpot", name: "Void Jackpot", routes: 0, color: "#b991ff", animation: "dark-matter", requirement: { type: "roulette", amount: 1 } },
 ];
-const TITLE_ANIMATIONS = ["none", "pulse", "shimmer", "rainbow"];
+const TITLE_ANIMATIONS = ["none", "pulse", "shimmer", "rainbow", "dark-matter", "star-shimmer", "comet-trail", "nebula-drift", "aurora-wave", "solar-flare"];
+function defaultTitlePresentation(requirement) {
+  if (requirement.type === "locked" || requirement.type === "roulette") return {};
+  if (requirement.amount >= 40) return { color: "#f6c46e", animation: "dark-matter" };
+  if (requirement.amount >= 20) return { color: "#f58bff", animation: "nebula-drift" };
+  if (requirement.amount >= 10) return { color: "#b991ff", animation: "star-shimmer" };
+  if (requirement.amount >= 5) return { color: "#6ecbff", animation: "comet-trail" };
+  return { color: "#71dc91", animation: "aurora-wave" };
+}
 export function validateProfileTitles(value) {
   if (!Array.isArray(value) || value.length > 100) return null;
   const ids = new Set();
@@ -48,11 +60,12 @@ export function validateProfileTitles(value) {
       || !Number.isSafeInteger(entry.routes) || entry.routes < 0 || entry.routes > 100000) return null;
     const requirement = entry.requirement ?? { type: "routes", amount: entry.routes };
     if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)
-      || !["routes", "golden", "prestige", "roulette", "locked"].includes(requirement.type)
+      || !["routes", "golden", "prestige", "roulette", "locked", "enemies", "bosses"].includes(requirement.type)
       || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000) return null;
     ids.add(entry.id);
     const normalized = { id: entry.id, name: entry.name.trim(), routes: entry.routes };
     if (entry.requirement !== undefined) normalized.requirement = { type: requirement.type, amount: requirement.amount };
+    Object.assign(normalized, defaultTitlePresentation(requirement));
     if (entry.color !== undefined) normalized.color = entry.color.toLowerCase();
     if (entry.animation !== undefined) normalized.animation = entry.animation;
     titles.push(normalized);
