@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { MongoClient, ObjectId } from "mongodb";
+import { MongoClient, MongoNetworkError, MongoServerSelectionError, ObjectId } from "mongodb";
 import { attachDatabasePool } from "@vercel/functions";
 import { put } from "@vercel/blob";
 import argon2 from "argon2";
@@ -62,6 +62,7 @@ const mongoClient = databaseUrl && !databaseConfigurationError
   : null;
 if (isVercel && mongoClient) attachDatabasePool(mongoClient);
 let mongoClientPromise;
+let databaseReady = false;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const passwordHashOptions = {
   type: argon2.argon2id,
@@ -828,6 +829,13 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/api/auth/human-challenge", humanChallengeLimiter, (req, res) => {
   noStore(res);
   res.json(createHumanChallenge());
+});
+
+app.use("/api", (_req, res, next) => {
+  if (databaseReady) return next();
+  res.set("Retry-After", "10");
+  res.set("Cache-Control", "no-store");
+  return res.status(503).json({ error: "The online service is temporarily unavailable. Please try again shortly." });
 });
 
 app.post("/api/auth/register", requireSameOrigin, registrationLimiter, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
@@ -3265,6 +3273,11 @@ app.use((error, _req, res, _next) => {
   console.error("API request failed:", error);
   if (res.headersSent) return;
   if (error?.type === "entity.parse.failed") return res.status(400).json({ error: "Request body must be valid JSON." });
+  if (error instanceof MongoNetworkError || error instanceof MongoServerSelectionError) {
+    res.set("Retry-After", "10");
+    res.set("Cache-Control", "no-store");
+    return res.status(503).json({ error: "The online service is temporarily unavailable. Please try again shortly." });
+  }
   res.status(500).json({ error: "The server could not complete that request." });
 });
 
@@ -3388,7 +3401,10 @@ async function initializeDatabaseOnce() {
 let databaseInitializationPromise;
 export function initializeDatabase() {
   if (!databaseInitializationPromise) {
-    databaseInitializationPromise = initializeDatabaseOnce().catch((error) => {
+    databaseInitializationPromise = initializeDatabaseOnce().then(() => {
+      databaseReady = true;
+    }).catch((error) => {
+      databaseReady = false;
       databaseInitializationPromise = undefined;
       throw error;
     });
