@@ -3481,6 +3481,14 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         profileTitles.forEach((title, index) => {
             const row = document.createElement("div");
             row.className = "title-management-row";
+            const createTitleField = (labelText: string, control: HTMLElement) => {
+                const field = document.createElement("label");
+                field.className = "title-management-field";
+                const label = document.createElement("span");
+                label.textContent = labelText;
+                field.append(label, control);
+                return field;
+            };
             const id = document.createElement("input");
             id.value = title.id;
             id.maxLength = 40;
@@ -3537,7 +3545,24 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
                 drawTitleManagement();
             });
-            row.append(id, name, color, animation, routes, requirement, requirementAmount, remove);
+            remove.classList.add("title-management-remove");
+            const rowHeader = document.createElement("div");
+            rowHeader.className = "title-management-row-header";
+            const rowTitle = document.createElement("strong");
+            rowTitle.textContent = `Title ${index + 1}`;
+            rowHeader.append(rowTitle, remove);
+            const fields = document.createElement("div");
+            fields.className = "title-management-fields";
+            fields.append(
+                createTitleField("ID", id),
+                createTitleField("Display name", name),
+                createTitleField("Color (optional)", color),
+                createTitleField("Animation", animation),
+                createTitleField("Routes", routes),
+                createTitleField("Requirement", requirement),
+                createTitleField("Amount", requirementAmount),
+            );
+            row.append(rowHeader, fields);
             list.append(row);
         });
         const add = createTextButton("Add title", () => {
@@ -3589,7 +3614,15 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             if (!localStorage.getItem("orbit-title") && profileTitles[0]) localStorage.setItem("orbit-title", profileTitles[0].id);
             void syncAccountProgress("save", true).then(() => { status.textContent = "All titles are now available on your account."; }).catch((error: unknown) => { status.textContent = error instanceof Error ? error.message : "Could not sync title unlocks."; });
         });
-        list.append(add, save, grant, grantButton, grantAllButton, status);
+        const catalogActions = document.createElement("div");
+        catalogActions.className = "title-management-actions";
+        catalogActions.append(add, save, status);
+        const accountTools = document.createElement("div");
+        accountTools.className = "title-management-account-tools";
+        const accountToolsHeading = document.createElement("h3");
+        accountToolsHeading.textContent = "My test account";
+        accountTools.append(accountToolsHeading, grant, grantButton, grantAllButton);
+        list.append(catalogActions, accountTools);
         titleManagement.append(heading, description, list);
     };
     drawTitleManagement();

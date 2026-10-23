@@ -341,8 +341,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .avatar-shape-dart { clip-path: polygon(50% 0, 100% 100%, 50% 77%, 0 100%); }
 .avatar-shape-ring { border-radius: 50%; background: transparent; border-color: var(--avatar-choice-color); box-shadow: inset 0 0 0 5px #101b2b, 0 0 9px var(--avatar-choice-color); }
 .avatar-shape-blade { clip-path: polygon(50% 0, 100% 78%, 61% 65%, 50% 100%, 39% 65%, 0 78%); }
-.ship-color-choice { width: 44px; height: 44px; justify-self: center; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--ship-color-choice); cursor: pointer; }
-.ship-color-choice:hover, .ship-color-choice:focus-visible, .ship-color-choice.selected { outline: 3px solid #f6c46e; outline-offset: 3px; }
+.ship-color-choice { position: relative; width: 44px; height: 44px; justify-self: center; border: 3px solid #f3f5e9; border-radius: 50%; background: var(--ship-color-choice); cursor: pointer; }
+.ship-color-choice:hover:not(:disabled), .ship-color-choice:focus-visible, .ship-color-choice.selected { outline: 3px solid #f6c46e; outline-offset: 3px; }
+.ship-color-choice.is-locked { border-color: #71838a; filter: saturate(.16) brightness(.66); opacity: .58; cursor: not-allowed; }
+.ship-color-choice.is-locked::after { content: "\1f512"; position: absolute; inset: 0; display: grid; place-items: center; color: #f3f5e9; font-size: .85rem; filter: grayscale(1) brightness(2); text-shadow: 0 1px 3px #08121f; }
 .customization-screen .flat-cosmetic-choice > span { display: inline; }
 .customization-screen .flat-cosmetic-choice small { display: inline; margin: 0; }
 .customization-screen .cosmetic-card-choice > span:not(.cosmetic-icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -651,10 +653,20 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .progress-detail { color: #9fb8ae; font: .62rem/1.5 'DM Mono', monospace; }
 .cooldown-reset-card { width: min(680px, 90vw); margin: 0 auto 20px; grid-template-columns: 1fr auto; align-items: center; }
 .cooldown-reset-card small { grid-column: 1 / -1; }
-.title-management-list { display: grid; gap: 10px; }
-.title-management-row { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(150px, 1.5fr) minmax(100px, .8fr) 110px 80px minmax(130px, 1fr) 80px auto; gap: 8px; align-items: center; }
-.title-management-row input, .title-management-list select { min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #101b2b; font: .68rem 'DM Mono', monospace; }
-.title-management-list > .text-button { justify-self: start; }
+.title-management-list { display: grid; gap: 14px; }
+.title-management-row { display: grid; gap: 14px; padding: 15px; border: 1px solid #385267; background: #101b2b; }
+.title-management-row-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.title-management-row-header strong, .title-management-account-tools h3 { margin: 0; color: #f6c46e; font: .76rem 'DM Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+.title-management-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.title-management-field { display: grid; gap: 6px; min-width: 0; color: #9fb8ae; font: .59rem 'DM Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+.title-management-field:nth-child(2), .title-management-field:nth-child(6) { grid-column: span 2; }
+.title-management-field input, .title-management-field select, .title-management-account-tools select { box-sizing: border-box; width: 100%; min-width: 0; padding: 9px; border: 1px solid #385267; color: #f3f5e9; background: #0d1725; font: .68rem 'DM Mono', monospace; }
+.title-management-field input:focus, .title-management-field select:focus, .title-management-account-tools select:focus { outline: 1px solid #f6c46e; border-color: #f6c46e; }
+.title-management-remove { color: #f3c0a8; }
+.title-management-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 2px; }
+.title-management-actions small { color: #9fb8ae; }
+.title-management-account-tools { display: grid; grid-template-columns: minmax(230px, 1fr) auto auto; align-items: end; gap: 10px; padding: 14px; border: 1px solid #385267; background: #0d1725; }
+.title-management-account-tools h3 { grid-column: 1 / -1; }
 .update-log-editor-list { display: grid; gap: 10px; }
 .account-profile-form.update-log-editor { width: 100%; max-width: 760px; }
 .update-log-editor-entry { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid #385267; background: #101b2b; }
@@ -1153,8 +1165,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
   .tester-console-content { padding: 20px 16px; }
   .tester-console-content .tester-world-tabs .text-button { flex: 1; }
   .tester-save-footer .menu-button { width: 100%; }
-  .title-management-row { grid-template-columns: 1fr 1fr; }
-  .title-management-row button { grid-column: 1 / -1; justify-self: start; }
+  .title-management-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .title-management-field:nth-child(2), .title-management-field:nth-child(6) { grid-column: auto; }
+  .title-management-account-tools { grid-template-columns: 1fr 1fr; }
+  .title-management-account-tools select, .title-management-account-tools h3 { grid-column: 1 / -1; }
   .cooldown-reset-card { grid-template-columns: 1fr; }
 }
 

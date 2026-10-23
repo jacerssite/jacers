@@ -345,7 +345,7 @@ export function createChat(context: ChatContext) {
         panel = document.createElement("section"); panel.className = "chat-panel"; panel.hidden = true; panel.setAttribute("role", "dialog"); panel.setAttribute("aria-label", "Friends and chat");
         const header = document.createElement("header"); header.className = "chat-panel-header";
         const tabs = document.createElement("nav"); tabs.className = "chat-tabs";
-        const tabLabels: Record<"global" | "friends" | "battle" | "chats", string> = { global: "Global", friends: "Gang", battle: "Battle", chats: "DMs" };
+        const tabLabels: Record<"global" | "chats", string> = { global: "Global", chats: "DMs" };
         (Object.keys(tabLabels) as (keyof typeof tabLabels)[]).forEach((name) => { const tabButton = document.createElement("button"); tabButton.type = "button"; tabButton.className = "chat-tab"; tabButton.dataset.tab = name; tabButton.textContent = tabLabels[name]; tabButton.addEventListener("click", () => { saveCurrentDraft(); clearTimers(); activeUserId = null; if (name !== "global") activeView = null; tab = name; renderTab(); if (name !== "global") startSnapshotPolling(); }); tabs.append(tabButton); });
         const refreshButton = document.createElement("button"); refreshButton.type = "button"; refreshButton.textContent = "\u21bb"; refreshButton.className = "chat-refresh-button"; refreshButton.setAttribute("aria-label", "Refresh chat"); refreshButton.addEventListener("click", () => {
             void refreshSnapshot();

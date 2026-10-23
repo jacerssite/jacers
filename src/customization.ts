@@ -79,7 +79,7 @@ export function createCustomization(context: CustomizationContext) {
         const appearance = document.createElement("details");
         appearance.className = "appearance-loadout-section cosmetic-dropdown";
         appearance.open = true;
-        appearance.innerHTML = `<summary class="cosmetic-dropdown-summary">Appearance</summary><p>Choose your ship color. Colors are grouped by rarity.</p>`;
+        appearance.innerHTML = `<summary class="cosmetic-dropdown-summary">Appearance</summary><p>Choose your ship color. Colors are grouped by rarity; locked colors are dimmed and marked with a lock.</p>`;
         const appendColorGroups = () => {
             const grouped = new Map<Rarity, typeof colorOptions>();
             rarityOrder.forEach((rarity) => grouped.set(rarity, []));
@@ -96,7 +96,7 @@ export function createCustomization(context: CustomizationContext) {
             const button = document.createElement("button");
             const unlocked = isShipColorUnlocked(option, skins, isSkinUnlocked, (index) => isSpinCosmeticUnlocked("color", index));
             const selected = selectedShipColor.toLowerCase() === option.color.toLowerCase();
-            button.className = `ship-color-choice ${selected ? "selected" : ""}`;
+            button.className = `ship-color-choice ${selected ? "selected" : ""}${unlocked ? "" : " is-locked"}`;
             button.type = "button";
             button.disabled = !unlocked;
             button.dataset.color = option.color;
