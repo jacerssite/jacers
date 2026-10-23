@@ -43,7 +43,7 @@ export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "rest
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
 export type UserRole = "player" | "tester" | "moderator" | "admin" | "level-maker" | "owner";
-export type OnlineUser = { username: string; role: UserRole; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean; allowFriendRequests?: boolean; readReceipts?: boolean; typingIndicators?: boolean; humanVerified?: boolean };
+export type OnlineUser = { username: string; role: UserRole; mustChangePassword?: boolean; appearOffline?: boolean; leaderboardOptIn?: boolean; allowFriendRequests?: boolean; readReceipts?: boolean; typingIndicators?: boolean; humanVerified?: boolean; offlineOwnerEligible?: boolean };
 export type ManagedUser = {
     id: string;
     username: string;

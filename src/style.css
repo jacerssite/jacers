@@ -836,6 +836,15 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-rail-button { display: grid; place-items: center; width: 72px; min-height: 72px; padding: 8px; border: 1px solid #6ecbff99; border-radius: 50%; color: #f3f5e9; background: #143746ee; box-shadow: 0 8px 28px #08121f77; font: 600 .65rem 'DM Mono', monospace; overflow-wrap: anywhere; }
 .account-rail-button::before { display: block; width: 24px; height: 24px; margin-bottom: 3px; border: 2px solid #f6c46e; border-radius: 50%; color: #f6c46e; content: '✦'; font: 1rem/20px 'Space Grotesk', sans-serif; }
 .account-rail-button:hover, .account-rail-button:focus-visible { border-color: #f6c46e; color: #f6c46e; outline: none; transform: scale(1.04); }
+.offline-owner-button { position: fixed; z-index: 13; bottom: 16px; left: 18px; padding: 7px 9px; border: 1px solid #557183; border-radius: 3px; color: #a9c1b9; background: #101b2bd9; font-size: .58rem; }
+.offline-owner-button:hover, .offline-owner-button:focus-visible { border-color: #f6c46e; color: #f6c46e; outline: none; }
+.offline-owner-overlay { position: fixed; z-index: 1400; inset: 0; display: grid; place-items: center; padding: 20px; background: #08121fcc; }
+.offline-owner-panel { display: grid; gap: 14px; width: min(420px, 100%); padding: 22px; border: 1px solid #f6c46e; border-radius: 6px; background: #101b2b; box-shadow: 0 0 36px #f6c46e55; text-align: left; }
+.offline-owner-panel h2 { margin: 0; color: #f6c46e; }
+.offline-owner-panel p, .offline-owner-panel small { margin: 0; color: #c4d1bd; font: .68rem/1.55 'DM Mono', monospace; }
+.offline-owner-panel input { width: 100%; padding: 10px; border: 1px solid #385267; color: #f3f5e9; background: #08121f; font: .78rem 'DM Mono', monospace; }
+.offline-owner-panel input:focus { border-color: #f6c46e; outline: none; }
+.offline-owner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .owner-account-indicator { position: fixed; z-index: 1300; top: 10px; right: 12px; display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid; border-radius: 50%; color: #f3f5e9; background: #101b2bee; box-shadow: 0 0 16px #f6c46e99; font: 700 1rem 'Space Grotesk', sans-serif; cursor: pointer; }
 .owner-account-indicator.owner-role { border-color: #f6c46e; color: #f6c46e; box-shadow: 0 0 16px #f6c46e99; }
 .owner-account-indicator.owner-role { font-size: 0; }
@@ -929,8 +938,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 
 @media (max-width: 600px) {
 	.account-rail { top: auto; bottom: 12px; left: 12px; transform: none; }
+	.home-screen .account-rail { bottom: 68px; }
 	.account-rail-button { width: 58px; min-height: 58px; font-size: .55rem; }
 	.account-rail-button::before { width: 20px; height: 20px; line-height: 16px; }
+	.offline-owner-button { bottom: 12px; left: 12px; }
 	.tester-world-tabs { width: min(560px, 90vw); }
 	.tester-world-tabs .text-button { flex: 1; min-width: 0; }
 	.tester-panel-tabs, .tester-settings-tabs { justify-content: flex-start; overflow-x: auto; }

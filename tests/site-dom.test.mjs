@@ -198,6 +198,52 @@ test("a partial settings outage does not hide a working account session", async 
   }
 });
 
+test("the verified owner can open the local-only control center while the API is unavailable", async () => {
+  let apiAvailable = true;
+  const owner = { username: "vslxped", role: "owner", offlineOwnerEligible: true, appearOffline: false };
+  const { dom, document, window, errors } = await createPage({
+    "/api/auth/session": () => apiAvailable
+      ? { user: owner }
+      : { status: 503, json: { error: "The online service is temporarily unavailable." } },
+    "/api/account/progress": { progress: {} },
+  });
+  try {
+    await waitFor(() => window.localStorage.getItem("jacer-offline-owner-grant"), "Verified owner grant was not stored");
+    apiAvailable = false;
+    const offlineButton = document.querySelector('[aria-label="Open offline owner access"]');
+    assert.ok(offlineButton, "Offline owner button is missing from the home screen");
+    offlineButton.click();
+    const phrase = document.querySelector('input[name="offline-owner-phrase"]');
+    assert.ok(phrase, "Offline owner phrase field did not open");
+    phrase.value = "T3ster!";
+    phrase.form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector(".tester-screen"), "Offline owner panel did not open");
+    assert.match(document.querySelector(".tester-console-header").textContent, /local-only/i);
+    assert.match(document.querySelector(".tester-scope-badge").textContent, /offline/i);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("offline owner access requires a previously verified owner device", async () => {
+  const { dom, document, window, errors } = await createPage({
+    "/api/auth/session": { status: 503, json: { error: "The online service is temporarily unavailable." } },
+  });
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    document.querySelector('[aria-label="Open offline owner access"]').click();
+    const phrase = document.querySelector('input[name="offline-owner-phrase"]');
+    phrase.value = "T3ster!";
+    phrase.form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector(".offline-owner-panel small[role=status]")?.textContent.includes("has not been verified"), "Missing-device warning did not appear");
+    assert.equal(document.querySelector(".tester-screen"), null);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("first sync uses server progress if another device initialized the account first", async () => {
   const user = { username: "Pilot_7", role: "player", appearOffline: false };
   let initialization;

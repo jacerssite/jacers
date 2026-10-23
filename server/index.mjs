@@ -523,6 +523,8 @@ function hashEmail(value) {
   return normalized ? crypto.createHash("sha256").update(normalized).digest("hex") : null;
 }
 
+const offlineOwnerEmailHash = hashEmail("vslxped@gmail.com");
+
 function maskEmail(value) {
   const normalized = normalizeEmail(value);
   if (!normalized) return null;
@@ -568,7 +570,7 @@ async function getAuthenticatedUser(req) {
   );
   if (user?.emailHash && await isEmailBanned(db, user.emailHash)) return null;
   return user && !user.banned && USER_ROLES.includes(user.role)
-    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false, chatMuted: Boolean(user.chatMuted) }
+    ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false, chatMuted: Boolean(user.chatMuted), offlineOwnerEligible: user.role === "owner" && user.emailHash === offlineOwnerEmailHash }
     : null;
 }
 
@@ -817,6 +819,7 @@ async function accountHandler(req, res, next, mode) {
         readReceipts: user.readReceipts !== false,
         typingIndicators: user.typingIndicators !== false,
         humanVerified: user.humanVerified !== false,
+        ...(user.role === "owner" && user.emailHash === offlineOwnerEmailHash ? { offlineOwnerEligible: true } : {}),
       },
     });
   } catch (error) {
@@ -976,7 +979,7 @@ app.get("/api/auth/session", async (req, res, next) => {
     const user = await getAuthenticatedUser(req);
     res.json({
       user: user
-        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false }
+        ? { username: user.username, role: user.role, mustChangePassword: user.mustChangePassword, appearOffline: user.appearOffline, leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false, ...(user.offlineOwnerEligible ? { offlineOwnerEligible: true } : {}) }
         : null,
     });
   } catch (error) {

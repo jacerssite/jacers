@@ -8,7 +8,14 @@ export class ApiError extends Error {
     }
 }
 
+let localOnlyMode = false;
+
+export function setApiLocalOnlyMode(enabled: boolean) {
+    localOnlyMode = enabled;
+}
+
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+    if (localOnlyMode) throw new ApiError("Offline owner mode is local-only. Reconnect before saving online changes.", 503);
     const headers = new Headers(init.headers);
     if (init.body !== undefined && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     const response = await fetch(`/api${path}`, { ...init, headers, credentials: "same-origin" });

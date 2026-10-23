@@ -2,7 +2,7 @@ import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, P
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_RESET_COST, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
 import { levels, normalizeNonPrestigeLevels } from "./levels";
-import { ApiError, apiRequest } from "./api";
+import { ApiError, apiRequest, setApiLocalOnlyMode } from "./api";
 import { createMenuButton, createPasswordField, createTextButton } from "./ui";
 import { createShipArtMarkup, createCssShipArtMarkup } from "./ship-art";
 import { drawTrailParticles } from "./trail";
@@ -117,6 +117,9 @@ let portalReturnX: number | null = null;
 let unflippedRouteSnapshot: UnflippedRouteSnapshot | null = null;
 let portalReturnState: { x: number; y: number; verticalSpeed: number; jumpCount: number; shipFlipped: boolean; trailActive: boolean; trailPositions: { x: number; y: number }[]; trailDirection: number } | null = null;
 let currentOnlineUser: OnlineUser | null = null;
+const offlineOwnerGrantKey = "jacer-offline-owner-grant";
+const offlineOwnerPassphrase = "T3ster!";
+let offlineOwnerMode = false;
 let ownerBadgeObserver: MutationObserver | null = null;
 let roleQuickPanel: HTMLElement | null = null;
 let roleQuickPanelStartedAt = 0;
@@ -241,6 +244,17 @@ function accountIdentity(user: OnlineUser | null) {
     return user?.username.toLowerCase() ?? null;
 }
 
+function readOfflineOwnerGrant(): { username: string } | null {
+    try {
+        const grant: unknown = JSON.parse(localStorage.getItem(offlineOwnerGrantKey) ?? "null");
+        if (!grant || typeof grant !== "object" || Array.isArray(grant)) return null;
+        const username = (grant as { username?: unknown }).username;
+        return typeof username === "string" && /^[A-Za-z0-9_]{3,20}$/.test(username) ? { username } : null;
+    } catch {
+        return null;
+    }
+}
+
 function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
     const previousIdentity = accountIdentity(currentOnlineUser);
     const nextIdentity = accountIdentity(user);
@@ -253,6 +267,9 @@ function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
         }
     }
     currentOnlineUser = user;
+    if (user?.role === "owner" && user.offlineOwnerEligible) {
+        localStorage.setItem(offlineOwnerGrantKey, JSON.stringify({ username: user.username }));
+    }
     chatController?.setUser(user);
 }
 const gravity = 0.7;
@@ -463,7 +480,7 @@ function readSecretPortalLocation(secretId: string): { source: string; index: nu
 }
 
 async function sendPresenceHeartbeat() {
-    if (!currentOnlineUser || presenceHeartbeatInFlight) return;
+    if (offlineOwnerMode || !currentOnlineUser || presenceHeartbeatInFlight) return;
     presenceHeartbeatInFlight = true;
     try {
         const result = await apiRequest<{ pendingRequests?: number; unreadMessages?: number }>("/presence/heartbeat", { method: "POST", body: "{}" });
@@ -524,6 +541,9 @@ const LOCAL_DEVICE_PREFERENCE_KEYS = new Set([
 ]);
 
 function clearLocalAccountData() {
+    offlineOwnerMode = false;
+    setApiLocalOnlyMode(false);
+    localStorage.removeItem(offlineOwnerGrantKey);
     Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
         .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !LOCAL_DEVICE_PREFERENCE_KEYS.has(key)))
         .forEach((key) => localStorage.removeItem(key));
@@ -833,13 +853,13 @@ export function startApp() {
         if ((event.target as HTMLElement).closest("button, select, summary")) playSound("ui");
     });
     document.addEventListener("visibilitychange", () => {
-        if (!document.hidden && currentOnlineUser) void sendPresenceHeartbeat();
+        if (!document.hidden && currentOnlineUser && !offlineOwnerMode) void sendPresenceHeartbeat();
         if (!musicContext) return;
         if (document.hidden) void musicContext.suspend();
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
     });
     if (!accountProgressTimer) accountProgressTimer = globalThis.setInterval(() => {
-        if (currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
+        if (!offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
     }, 2500);
     if (!accountNoticeTimer) accountNoticeTimer = globalThis.setInterval(() => void refreshAccountNotices(), 7000);
     showMenu();
@@ -1328,6 +1348,83 @@ function openRoleQuickPanel() {
     close.focus();
 }
 
+function showOfflineOwnerUnlock() {
+    const overlay = document.createElement("div");
+    overlay.className = "offline-owner-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-labelledby", "offline-owner-heading");
+    const panel = document.createElement("form");
+    panel.className = "offline-owner-panel";
+    const heading = document.createElement("h2");
+    heading.id = "offline-owner-heading";
+    heading.textContent = "Offline owner access";
+    const copy = document.createElement("p");
+    copy.textContent = "Enter the emergency phrase to open the local-only control center while the online service is unavailable.";
+    const phrase = document.createElement("input");
+    phrase.type = "password";
+    phrase.name = "offline-owner-phrase";
+    phrase.autocomplete = "off";
+    phrase.placeholder = "Emergency phrase";
+    phrase.required = true;
+    phrase.setAttribute("aria-label", "Emergency phrase");
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const actions = document.createElement("div");
+    actions.className = "offline-owner-actions";
+    const open = document.createElement("button");
+    open.type = "submit";
+    open.className = "menu-button";
+    open.textContent = "Open local control center";
+    const cancel = createTextButton("Cancel", () => overlay.remove());
+    actions.append(open, cancel);
+    panel.append(heading, copy, phrase, status, actions);
+    panel.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (phrase.value !== offlineOwnerPassphrase) {
+            status.textContent = "Emergency phrase not recognized.";
+            phrase.select();
+            return;
+        }
+        const grant = readOfflineOwnerGrant();
+        if (!grant) {
+            status.textContent = "This device has not been verified for offline owner access. Sign in online with the authorized owner email first.";
+            return;
+        }
+        open.disabled = true;
+        status.textContent = "Checking whether the online service is available...";
+        try {
+            const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
+            if (session.user) {
+                setOnlineUser(session.user);
+                updateOwnerAccountIndicator();
+                overlay.remove();
+                await showTesterPanel();
+                return;
+            }
+            status.textContent = "The online service is available. Sign in to the owner account to continue.";
+        } catch (error) {
+            const unavailable = (error instanceof ApiError && error.status >= 500) || error instanceof TypeError;
+            if (!unavailable) {
+                status.textContent = error instanceof Error ? error.message : "Could not confirm online service status.";
+                return;
+            }
+            offlineOwnerMode = true;
+            setApiLocalOnlyMode(true);
+            setOnlineUser({ username: grant.username, role: "owner", offlineOwnerEligible: true }, true);
+            updateOwnerAccountIndicator();
+            overlay.remove();
+            await showTesterPanel();
+        } finally {
+            if (overlay.isConnected) open.disabled = false;
+        }
+    });
+    overlay.append(panel);
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) overlay.remove(); });
+    document.body.append(overlay);
+    phrase.focus();
+}
+
 function showMenu() {
     if (currentOnlineUser?.mustChangePassword) {
         showAccount("Change your temporary password before continuing.");
@@ -1359,7 +1456,10 @@ function showMenu() {
     accountButton.setAttribute("aria-label", currentOnlineUser ? `Account: ${currentOnlineUser.username}` : "Open account");
     accountRail.append(accountButton);
     const secondaryActions = document.createElement("div"); secondaryActions.className = "secondary-actions"; secondaryActions.append(createTextButton("Special asteroid odds", showDropRates), createTextButton("Credits", showCredits));
-    menu.append(accountRail, menuActions, secondaryActions);
+    const offlineOwnerButton = createTextButton("Offline owner", showOfflineOwnerUnlock);
+    offlineOwnerButton.classList.add("offline-owner-button");
+    offlineOwnerButton.setAttribute("aria-label", "Open offline owner access");
+    menu.append(accountRail, menuActions, secondaryActions, offlineOwnerButton);
     menu.append(createPageCounter()); document.body.replaceChildren(menu);
 }
 
@@ -3317,6 +3417,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const isAdmin = user.role === "admin";
     const isModerator = user.role === "moderator";
     const isLevelMaker = user.role === "level-maker";
+    const isOfflineOwner = offlineOwnerMode && isOwner;
     const canTest = isOwner || isAdmin || user.role === "tester";
     const canModerate = isOwner || isAdmin || isModerator;
     const canWorkshop = isOwner || isAdmin || isLevelMaker;
@@ -3324,7 +3425,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     menu.className = "menu-screen tester-screen";
     const pageHeader = document.createElement("div");
     pageHeader.className = "tester-console-header";
-    pageHeader.innerHTML = `<div><p class="eyebrow">FLIGHT SYSTEMS / ${roleLabel(user.role)}</p><h1>Control <em>center</em></h1><p class="menu-copy">${isOwner ? "Manage your game and pilots from one place." : isAdmin ? "Manage approved content, levels, messages, and local test tools." : isModerator ? "Review accounts and enforce bans without access to player rewards." : isLevelMaker ? "Build and playtest workshop levels." : "Test game settings and progression on this device."}</p></div><span class="tester-scope-badge">${isOwner ? "OWNER ACCESS" : user.role === "tester" ? "LOCAL TEST MODE" : `${roleLabel(user.role)} ACCESS`}</span>`;
+    pageHeader.innerHTML = `<div><p class="eyebrow">FLIGHT SYSTEMS / ${roleLabel(user.role)}</p><h1>Control <em>center</em></h1><p class="menu-copy">${isOfflineOwner ? "Offline owner mode is local-only. Changes stay on this device until you reconnect." : isOwner ? "Manage your game and pilots from one place." : isAdmin ? "Manage approved content, levels, messages, and local test tools." : isModerator ? "Review accounts and enforce bans without access to player rewards." : isLevelMaker ? "Build and playtest workshop levels." : "Test game settings and progression on this device."}</p></div><span class="tester-scope-badge">${isOfflineOwner ? "OFFLINE / LOCAL ONLY" : isOwner ? "OWNER ACCESS" : user.role === "tester" ? "LOCAL TEST MODE" : `${roleLabel(user.role)} ACCESS`}</span>`;
     const worldTabs = document.createElement("nav");
     worldTabs.className = "tester-world-tabs";
     worldTabs.setAttribute("aria-label", "World settings");
