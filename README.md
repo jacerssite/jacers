@@ -36,3 +36,7 @@ The URI's database name determines where accounts are stored; adding or changing
 The MongoDB collections start empty. If you previously had live player/account data in PostgreSQL, that data must be migrated separately; changing the database URI does not copy PostgreSQL records into MongoDB.
 
 For local development, `npm run server` still starts the persistent Express API, and `npm run dev` runs Vite with its `/api` proxy.
+
+### Chat attachments
+
+Direct-message images, GIFs, and videos work with the existing MongoDB database. The API stores them privately in MongoDB GridFS and only the two people in that conversation can load them. If `BLOB_READ_WRITE_TOKEN` plus `BLOB_PUBLIC_URL` are configured, uploads use Vercel Blob instead. No extra attachment variables are required for the MongoDB default.

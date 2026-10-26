@@ -12,18 +12,20 @@ import type { AvatarStyle, Rarity, SkinStyle, TrailStyle } from "./types";
 export const STARTER_SHIP_COLORS = ["#62d6b2", "#f6c46e", "#ed7657", "#b991ff", "#6ecbff", "#f26d9b", "#f3f5e9", "#8bd46e"];
 export const ROULETTE_SHIP_COLORS = ["#ff5ea8", "#c5f35a", "#ff914d", "#8d73ff", "#5bf0e8"];
 export const skins: SkinStyle[] = [
-    { name: "Solar", color: "#ed7657", shape: "classic", required: 0 },
-    { name: "Mint Dart", color: "#62d6b2", shape: "dart", required: 3, image: dartShipImage },
-    { name: "Gold UFO", color: "#f6c46e", shape: "ring", required: 7, image: ufoShipImage },
-    { name: "Plasma Sword", color: "#b991ff", shape: "blade", required: 12, image: swordShipImage },
-    { name: "Aurora", color: "#6ecbff", shape: "classic", required: 18 },
+    // Each skin owns a unique swatch, so a color cannot unlock through an
+    // unrelated skin in a different rarity tier.
+    { name: "Solar", color: "#ff765a", shape: "classic", required: 0 },
+    { name: "Mint Dart", color: "#47d8a5", shape: "dart", required: 3, image: dartShipImage },
+    { name: "Gold UFO", color: "#ffc95e", shape: "ring", required: 7, image: ufoShipImage },
+    { name: "Plasma Sword", color: "#ad7cff", shape: "blade", required: 12, image: swordShipImage },
+    { name: "Aurora", color: "#5ebdff", shape: "classic", required: 18 },
     { name: "Titan Core", color: "#ffdf72", shape: "ring", required: 24, boss: true },
     { name: "Eclipse", color: "#f58bff", shape: "blade", required: 0, secret: true },
     { name: "Ion Glass", color: "#8de7ff", shape: "dart", required: 30 },
     { name: "Rose Prism", color: "#ff8fbd", shape: "ring", required: 38 },
     { name: "Void Flame", color: "#8b7dff", shape: "blade", required: 46, boss: true },
     { name: "Comet Copper", color: "#f29d68", shape: "dart", required: 86 },
-    { name: "Prism Ice", color: "#8de7ff", shape: "ring", required: 98 },
+    { name: "Prism Ice", color: "#c8f5ff", shape: "ring", required: 98 },
     { name: "Starforge", color: "#f4f3cf", shape: "classic", required: 54 },
     { name: "Solar Flare", color: "#ff9b55", shape: "blade", required: 62 },
     { name: "Moon Silver", color: "#d9f5ff", shape: "ring", required: 70 },

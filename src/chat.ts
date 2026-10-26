@@ -235,9 +235,39 @@ export function createChat(context: ChatContext) {
         messages.forEach((message) => {
             const mine = message.sender === context.getUser()?.username;
             const bubble = document.createElement("article"); bubble.className = `chat-message ${mine ? "mine" : ""}${message.deletedAt ? " deleted" : ""}`;
-            const meta = document.createElement("small"); meta.textContent = `${message.sender} · ${ageLabel(message.createdAt)}${message.editedAt ? " · edited" : ""}`;
+            const meta = document.createElement("div"); meta.className = "chat-message-meta";
+            const author = document.createElement("button"); author.type = "button"; author.className = "chat-message-author"; author.textContent = message.sender; author.setAttribute("aria-label", `Actions for ${message.sender}`); author.setAttribute("aria-expanded", "false");
+            const timestamp = document.createElement("small"); timestamp.textContent = `${ageLabel(message.createdAt)}${message.editedAt ? " · edited" : ""}`;
+            meta.append(author, timestamp);
             const text = document.createElement("p"); text.textContent = message.text;
             bubble.append(meta, text);
+            if (!message.deletedAt) {
+                const userActions = document.createElement("div"); userActions.className = "chat-message-actions chat-user-actions"; userActions.hidden = true;
+                const reply = document.createElement("button"); reply.type = "button"; reply.textContent = "Reply"; reply.addEventListener("click", () => {
+                    const input = content()?.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
+                    if (!input) return;
+                    const prefix = `@${message.sender} `;
+                    if (!input.value.startsWith(prefix)) input.value = `${prefix}${input.value}`;
+                    input.focus(); input.dispatchEvent(new Event("input", { bubbles: true })); userActions.hidden = true;
+                });
+                const profile = document.createElement("button"); profile.type = "button"; profile.textContent = "View profile"; profile.addEventListener("click", () => context.onProfile?.(message.senderId));
+                userActions.append(reply, profile);
+                if (!mine) {
+                    const report = document.createElement("button"); report.type = "button"; report.textContent = "Report"; report.addEventListener("click", async () => {
+                        const reason = globalThis.prompt("Why are you reporting this message?", "") ?? "";
+                        try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/report`, { method: "POST", body: JSON.stringify({ reason }) }); userActions.hidden = true; globalThis.alert("Report sent to the moderation team."); }
+                        catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not report this message."); }
+                    });
+                    const block = document.createElement("button"); block.type = "button"; block.textContent = "Block"; block.className = "danger"; block.addEventListener("click", async () => {
+                        if (!globalThis.confirm(`Block ${message.sender}?`)) return;
+                        try { await blockUser(message.senderId); userActions.hidden = true; await refreshSnapshot(); }
+                        catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not block this player."); }
+                    });
+                    userActions.append(report, block);
+                }
+                author.addEventListener("click", (event) => { event.stopPropagation(); userActions.hidden = !userActions.hidden; author.setAttribute("aria-expanded", String(!userActions.hidden)); });
+                bubble.append(userActions);
+            }
             const canModerateGlobal = mode === "global" && ["moderator", "admin", "owner", "developer"].includes(context.getUser()?.role ?? "");
             if ((mine || canModerateGlobal) && !message.deletedAt) {
                 const more = document.createElement("button"); more.type = "button"; more.className = "chat-message-more"; more.textContent = "⋯"; more.setAttribute("aria-label", "Message actions"); more.setAttribute("aria-expanded", "false");

@@ -23,11 +23,12 @@ test("skin, starter, and roulette colors appear once, ignoring capitalization", 
     ]);
 });
 
-test("a shared color unlocks when any matching skin is earned", () => {
+test("a skin color unlocks only with its own skin", () => {
     const options = getShipColorOptions(["#112233"], ["#445566"], skins);
     const skinColor = options.find((option) => option.source === "skin");
     const hasSecondSkin = (_skin, index) => index === 1;
-    assert.equal(isShipColorUnlocked(skinColor, skins, hasSecondSkin, () => false), true);
+    assert.equal(isShipColorUnlocked(skinColor, skins, hasSecondSkin, () => false), false);
+    assert.equal(isShipColorUnlocked(skinColor, skins, (_skin, index) => index === skinColor.index, () => false), true);
     assert.equal(isShipColorUnlocked(skinColor, skins, () => false, () => false), false);
 });
 
@@ -36,5 +37,5 @@ test("roulette and starter colors unlock through their own source or a matching 
     assert.equal(isShipColorUnlocked(starter, skins, () => false, () => false), true);
     assert.equal(isShipColorUnlocked(roulette, skins, () => false, () => false), false);
     assert.equal(isShipColorUnlocked(roulette, skins, () => false, (index) => index === 1), true);
-    assert.equal(isShipColorUnlocked(roulette, skins, (_skin, index) => index === 2, () => false), true);
+    assert.equal(isShipColorUnlocked(roulette, skins, (_skin, index) => index === 2, () => false), false);
 });

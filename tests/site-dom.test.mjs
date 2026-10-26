@@ -523,6 +523,7 @@ test("registration shows the one-time recovery code and does not save before pro
   const user = { username: "Pilot_7", role: "player", appearOffline: false };
   let progressWrites = 0;
   const { dom, document, window } = await createPage({
+    "GET /api/auth/human-challenge": { token: "test-challenge", question: "What is 2 + 2?" },
     "POST /api/auth/register": { user, recoveryCode: "ABCD-2345-EFGH-6789" },
     "GET /api/account/progress": { status: 503, json: { error: "Progress temporarily unavailable" } },
     "PUT /api/account/progress": () => { progressWrites++; return { progress: {} }; },
@@ -531,7 +532,9 @@ test("registration shows the one-time recovery code and does not save before pro
     await delay(30);
     clickButton(document, "Account");
     clickButton(document, "Create a new account");
+    await waitFor(() => !document.querySelector('input[name="human-answer"]').disabled, "Human check did not load");
     document.querySelector('input[name="username"]').value = "Pilot_7";
+    document.querySelector('input[name="human-answer"]').value = "4";
     document.querySelector('input[name="password"]').value = "a-valid-password";
     document.querySelector(".account-form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     await waitFor(() => document.querySelector(".recovery-code-display"), "One-time recovery code was not shown");
@@ -646,7 +649,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     claims.value = "17";
     clickButton(document, "Levels & prestige");
     const sanctuaryInputs = [...document.querySelectorAll('.tester-levels label')]
-      .filter((label) => label.textContent.includes("Stellar Sanctum"))
+      .filter((label) => label.querySelector("span")?.textContent === "Stellar Sanctum")
       .map((label) => label.querySelector("input"));
     assert.equal(sanctuaryInputs.length, 2);
     sanctuaryInputs[0].click();

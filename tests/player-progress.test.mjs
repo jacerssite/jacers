@@ -12,7 +12,7 @@ test("simultaneous currency changes are detected without blocking unrelated chan
   assert.equal(hasCurrencyConflict(null, baseline, baseline), false);
 });
 
-test("player progress anti-cheat blocks forged unlocks and balance decreases", () => {
+test("player progress anti-cheat blocks forged unlocks, balance decreases, and unearned asteroids", () => {
   assert.match(
     getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "99" }),
     /cannot decrease/i,
@@ -21,7 +21,21 @@ test("player progress anti-cheat blocks forged unlocks and balance decreases", (
     getSuspiciousPlayerMutation({}, { "orbit-unlock-skins": "1" }),
     /privileged progress key/i,
   );
-  assert.equal(getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "101" }), null);
+  assert.match(
+    getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "101" }),
+    /does not match collected asteroids/i,
+  );
+  assert.equal(getSuspiciousPlayerMutation(
+    { "orbit-claims": "100", "orbit-asteroids-0": "[0]" },
+    { "orbit-claims": "101", "orbit-asteroids-0": "[0,1]" },
+  ), null);
+  assert.match(
+    getSuspiciousPlayerMutation(
+      { "orbit-special-claims": "0", "orbit-asteroids-0": "[0]" },
+      { "orbit-special-claims": "20", "orbit-asteroids-0": "[0,1]" },
+    ),
+    /does not match collected asteroids/i,
+  );
 });
 
 test("moderator progress stays behind the normal anti-cheat boundary", () => {

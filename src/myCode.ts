@@ -12,7 +12,7 @@ import { loadManagedUsers } from "./managed-users";
 import { createCustomization } from "./customization";
 import { createLeaderboard } from "./leaderboard";
 import { createAccountRecovery } from "./account-recovery";
-import { renderAdminChatFilterTools, renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
+import { renderAdminChatFilterTools, renderAdminChatReports, renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
 import { createControlNavigation, type ControlSection } from "./owner-panel";
 import { createRouletteFields } from "./roulette-editor";
 import { createChat } from "./chat";
@@ -33,6 +33,14 @@ let updateLogEntries: UpdateLogEntry[] = [];
 let profileTitles: ProfileTitle[] = structuredClone(PROFILE_TITLES);
 let builtinLevelOverrides: Record<string, Level> = {};
 let portalAssignments: Record<string, string> = {};
+const secretPortalTargetLabels: Record<string, string> = {
+    eclipse: "Eclipse Vault",
+    nebula: "Nebula Hollow",
+    archive: "Black Hole Archive",
+    "stellar-sanctum": "Stellar Sanctum",
+    "quantum-depths": "Quantum Depths",
+    "infinity-spiral": "Infinity Spiral",
+};
 let selectedRouletteSpinAmount = Math.max(1, Number(localStorage.getItem("orbit-roulette-spin-amount") ?? "5") || 5);
 const storedRouletteColorPreference = localStorage.getItem("orbit-roulette-color-preference");
 let selectedRouletteColorPreference: "green" | "blue" | "yellow" = storedRouletteColorPreference === "blue" || storedRouletteColorPreference === "yellow" ? storedRouletteColorPreference : "green";
@@ -886,6 +894,17 @@ function configurePortalDistribution() {
             }];
         });
     });
+}
+
+function getPortalPlacementLabel(level: Level) {
+    const assignedTargets = Object.entries(portalAssignments)
+        .filter(([, sourceName]) => sourceName === level.name)
+        .map(([targetId]) => secretPortalTargetLabels[targetId] ?? targetId);
+    const generatedTargets = (level.secretPortals ?? [])
+        .map((portal) => secretPortalTargetLabels[portal.secretId] ?? portal.secretId);
+    const targets = [...new Set([...assignedTargets, ...generatedTargets])];
+    if (targets.length) return `SECRET PORTAL → ${targets.join(", ")}`;
+    return level.portals?.length ? "PORTAL" : "NO PORTAL";
 }
 
 export function startApp() {
@@ -2791,10 +2810,11 @@ function showAccount(initialMessage = "") {
                             humanAnswer.required = true;
                             humanAnswer.placeholder = "Answer";
                         }
+                        submit.disabled = false;
                         if (humanChallengeStatus) humanChallengeStatus.textContent = challenge.question;
                     })
                     .catch(() => {
-                        if (humanChallengeStatus) humanChallengeStatus.textContent = "Human check is unavailable right now. You can create the account, then verify it in Player settings before playing online.";
+                        if (humanChallengeStatus) humanChallengeStatus.textContent = "Human check is unavailable right now. Retry in a moment to create an account.";
                     });
             }
             const passwordLabel = document.createElement("label");
@@ -2815,6 +2835,7 @@ function showAccount(initialMessage = "") {
             submit.className = "menu-button";
             submit.type = "submit";
             submit.textContent = registrationMode ? "Create account" : "Sign in";
+            submit.disabled = registrationMode;
             const switchMode = createTextButton(registrationMode ? "I already have an account" : "Create a new account", () => { registrationMode = !registrationMode; render(); });
             form.append(usernameLabel, ...(emailLabel ? [emailLabel] : []), ...(humanLabel ? [humanLabel] : []), ...(humanChallengeStatus ? [humanChallengeStatus] : []), ...(trapLabel ? [trapLabel] : []), passwordLabel, submit, message);
             form.addEventListener("submit", async (event) => {
@@ -3572,6 +3593,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const chatFilterManagement = document.createElement("section");
     chatFilterManagement.className = "tester-player-management";
     chatFilterManagement.hidden = true;
+    const reportManagement = document.createElement("section");
+    reportManagement.className = "tester-player-management";
+    reportManagement.hidden = true;
     const updateLogManagement = document.createElement("section");
     updateLogManagement.className = "tester-player-management";
     updateLogManagement.hidden = true;
@@ -4155,9 +4179,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const name = document.createElement("span");
             name.textContent = level.name;
             const metadata = document.createElement("small");
-            const hasPortal = Boolean(level.portals?.length || level.secretPortals?.length);
             metadata.className = "tester-level-meta";
-            metadata.textContent = `${hasPortal ? "PORTAL" : "NO PORTAL"} / RAINBOW STAR ${getConfiguredRainbowStarChance(Boolean(level.prestige))}%`;
+            metadata.textContent = `${getPortalPlacementLabel(level)} / RAINBOW STAR ${getConfiguredRainbowStarChance(Boolean(level.prestige))}%`;
             label.append(input, name, metadata); groupPanel.append(label);
         });
         levelChoices.append(groupPanel);
@@ -4183,14 +4206,6 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             normal: ["eclipse", "nebula", "archive"],
             prestige: ["stellar-sanctum", "quantum-depths", "infinity-spiral"],
         };
-        const portalTargetLabels: Record<string, string> = {
-            eclipse: "Eclipse Vault",
-            nebula: "Nebula Hollow",
-            archive: "Black Hole Archive",
-            "stellar-sanctum": "Stellar Sanctum",
-            "quantum-depths": "Quantum Depths",
-            "infinity-spiral": "Infinity Spiral",
-        };
         (Object.entries(portalTargets) as ["normal" | "prestige", string[]][]).forEach(([world, targetIds]) => {
             const group = document.createElement("div");
             group.className = "portal-assignment-group";
@@ -4200,10 +4215,10 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const sourceLevels = levels.filter((level) => !level.secret && !level.customId && !level.localOnly && Boolean(level.prestige) === (world === "prestige"));
             targetIds.forEach((targetId) => {
                 const label = document.createElement("label");
-                label.textContent = `${portalTargetLabels[targetId] ?? targetId} portal appears in`;
+                label.textContent = `${secretPortalTargetLabels[targetId] ?? targetId} portal appears in`;
                 const select = document.createElement("select");
                 select.dataset.portalAssignment = targetId;
-                select.setAttribute("aria-label", `${portalTargetLabels[targetId] ?? targetId} portal source level`);
+                select.setAttribute("aria-label", `${secretPortalTargetLabels[targetId] ?? targetId} portal source level`);
                 const automatic = document.createElement("option");
                 automatic.value = "";
                 automatic.textContent = "Automatic placement";
@@ -4245,7 +4260,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => {
                     const level = levels[Number(input.dataset.level)];
                     const metadata = input.parentElement?.querySelector<HTMLElement>(".tester-level-meta");
-                    if (level && metadata) metadata.textContent = `${level.portals?.length || level.secretPortals?.length ? "PORTAL" : "NO PORTAL"} / RAINBOW STAR ${getConfiguredRainbowStarChance(Boolean(level.prestige))}%`;
+                    if (level && metadata) metadata.textContent = `${getPortalPlacementLabel(level)} / RAINBOW STAR ${getConfiguredRainbowStarChance(Boolean(level.prestige))}%`;
                 });
                 portalStatus.textContent = "Portal placement saved for every player.";
             } catch (error) {
@@ -4509,6 +4524,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     };
     if (canModerate) sections.push(
         { id: "players", title: "Player accounts", group: isOwner ? "Owner management" : "Moderation", description: isOwner ? "Review accounts, progress, roles, and access." : "Review accounts and enforce bans without editing rewards or saved progress.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement, { canEditProfiles: isOwner, canManageRoles: isOwner, canManageSensitive: isOwner })) },
+        { id: "reports", title: "Chat reports", group: "Moderation", description: "Review reports submitted from global chat and direct messages.", panel: reportManagement, onOpen: () => loadOnce("reports", reportManagement, () => renderAdminChatReports(reportManagement)) },
     );
     if (isAdmin || isOwner) sections.push(
         { id: "codes", title: "Reward codes", group: "Content management", description: "Create and manage redeemable asteroid, power-up, cosmetic, and title rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement, profileTitles)) },
@@ -4529,7 +4545,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const sectionDescription = document.createElement("p");
     sectionHeader.append(sectionGroup, sectionTitle, sectionDescription);
     form.replaceChildren(...sections.filter((section) => settingsIds.has(section.id)).map((section) => section.panel), saveFooter);
-    content.append(sectionHeader, worldTabs, form, accountManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
+    content.append(sectionHeader, worldTabs, form, accountManagement, reportManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
     const navigation = createControlNavigation(sections, (section) => selectSection(section.id));
     function selectSection(id: string) {
         const selected = sections.find((section) => section.id === id);
@@ -4677,9 +4693,9 @@ function isUsableProfileTitles(value: unknown): value is ProfileTitle[] {
         if (typeof candidate.id !== "string" || !/^[a-z0-9-]{1,40}$/.test(candidate.id) || ids.has(candidate.id)
             || typeof candidate.name !== "string" || !candidate.name.trim() || candidate.name.trim().length > 50 || /[<>]/.test(candidate.name)
             || candidate.color !== undefined && (typeof candidate.color !== "string" || !/^#[0-9a-f]{6}$/i.test(candidate.color))
-            || candidate.animation !== undefined && !["none", "pulse", "shimmer", "rainbow"].includes(candidate.animation)
+            || candidate.animation !== undefined && !["none", "pulse", "shimmer", "rainbow", "dark-matter", "star-shimmer", "comet-trail", "nebula-drift", "aurora-wave", "solar-flare"].includes(candidate.animation)
             || typeof candidate.routes !== "number" || !Number.isSafeInteger(candidate.routes) || candidate.routes < 0 || candidate.routes > 100000
-            || requirement !== undefined && (typeof requirement !== "object" || !["routes", "golden", "prestige", "roulette", "locked"].includes(requirement.type) || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000)) return false;
+            || requirement !== undefined && (typeof requirement !== "object" || !["routes", "golden", "prestige", "roulette", "locked", "enemies", "bosses"].includes(requirement.type) || !Number.isSafeInteger(requirement.amount) || requirement.amount < 0 || requirement.amount > 100000)) return false;
         ids.add(candidate.id);
         return true;
     });

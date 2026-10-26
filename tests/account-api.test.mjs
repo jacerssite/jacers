@@ -94,7 +94,18 @@ test("account registration, progress, privacy, logout, and login work together",
 
     const forbidden = await request("auth/register", { method: "POST", headers: { ...jsonHeaders, origin: "https://other.example" }, body: JSON.stringify(credentials) });
     assert.equal(forbidden.status, 403);
-    const registered = await request("auth/register", { method: "POST", headers: jsonHeaders, body: JSON.stringify(credentials) });
+    const missingChallenge = await request("auth/register", { method: "POST", headers: jsonHeaders, body: JSON.stringify(credentials) });
+    assert.equal(missingChallenge.status, 400);
+    const humanChallenge = await request("auth/human-challenge", { headers: { origin } });
+    assert.equal(humanChallenge.status, 200);
+    const challenge = await humanChallenge.json();
+    const values = [...challenge.question.matchAll(/\d+/g)].map(([value]) => Number(value));
+    await new Promise((resolve) => setTimeout(resolve, 1250));
+    const registered = await request("auth/register", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ ...credentials, humanChallenge: { token: challenge.token, answer: String(values[0] + values[1]) } }),
+    });
     assert.equal(registered.status, 201);
     const registration = await registered.json();
     assert.equal(registration.user.username, "Pilot_7");

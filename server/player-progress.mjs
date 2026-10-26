@@ -34,14 +34,39 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
     const value = progress[key];
     return typeof value === "string" && /^\d{1,10}$/.test(value) ? Number(value) : 0;
   };
+  // Asteroid balances must be backed by the per-route collection records. This
+  // stops a modified browser from minting currency in a sequence of small
+  // updates that each stay below a simple maximum-jump limit.
+  const claimedAsteroids = (source) => {
+    let total = 0;
+    for (const [key, value] of Object.entries(source)) {
+      if (!/^orbit-asteroids-\d+$/.test(key)) continue;
+      try {
+        const claims = JSON.parse(value);
+        if (!Array.isArray(claims) || claims.length > 20) return null;
+        const uniqueClaims = new Set(claims);
+        if (uniqueClaims.size !== claims.length || claims.some((claim) => !Number.isSafeInteger(claim) || claim < 0 || claim >= 20)) return null;
+        total += claims.length;
+      } catch {
+        return null;
+      }
+    }
+    return total;
+  };
   for (const key of ["orbit-claims", "orbit-special-claims", "orbit-enemies-killed", "orbit-bosses-killed", "orbit-prestige"]) {
     if (Object.hasOwn(progress, key) && (typeof progress[key] !== "string" || !/^\d{1,10}$/.test(progress[key]))) return `${key} is invalid`;
   }
   for (const key of ["orbit-claims", "orbit-special-claims"]) {
     if (nextCount(key) < readCount(key)) return `${key} cannot decrease in a player sync`;
   }
-  if (nextCount("orbit-claims") - readCount("orbit-claims") > 5000) return "normal asteroid balance jumped too far";
-  if (nextCount("orbit-special-claims") - readCount("orbit-special-claims") > 100) return "special asteroid balance jumped too far";
+  const currentAsteroidClaims = claimedAsteroids(existing);
+  const nextAsteroidClaims = claimedAsteroids(progress);
+  if (currentAsteroidClaims === null || nextAsteroidClaims === null) return "asteroid claim data is invalid";
+  const earnedAsteroids = (nextCount("orbit-claims") - readCount("orbit-claims"))
+    + (nextCount("orbit-special-claims") - readCount("orbit-special-claims"));
+  const newAsteroidClaims = nextAsteroidClaims - currentAsteroidClaims;
+  if (newAsteroidClaims < 0) return "asteroid claims cannot be removed in a player sync";
+  if (earnedAsteroids > newAsteroidClaims) return "asteroid balance does not match collected asteroids";
   for (const [key, maximumJump] of [["orbit-enemies-killed", 5000], ["orbit-bosses-killed", 100]]) {
     const current = readCount(key);
     const next = nextCount(key);

@@ -423,6 +423,40 @@ export async function renderAdminMessageTools(container: HTMLElement) {
     }
 }
 
+export async function renderAdminChatReports(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Chat reports";
+    const description = document.createElement("p");
+    description.textContent = "Review open player reports from global chat and direct messages. Use Player accounts to apply moderation actions.";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const list = document.createElement("section");
+    list.className = "tester-player-management chat-report-list";
+    const loadReports = async () => {
+        const response = await apiRequest<{ reports: { id: string; senderId: string; sender: string; reporter: string; text: string; reason: string; global: boolean; createdAt: string | null }[] }>("/admin/chat/reports");
+        list.replaceChildren();
+        if (!response.reports.length) { list.textContent = "No open chat reports."; return; }
+        response.reports.forEach((report) => {
+            const row = document.createElement("article");
+            row.className = "tester-custom-level-row chat-report-row";
+            const details = document.createElement("div");
+            const summary = document.createElement("strong");
+            summary.textContent = `${report.global ? "Global chat" : "Direct message"} / ${report.sender} reported by ${report.reporter}`;
+            const message = document.createElement("p");
+            message.textContent = `Message: ${report.text}`;
+            const reason = document.createElement("small");
+            reason.textContent = `Reason: ${report.reason}${report.createdAt ? ` / ${new Date(report.createdAt).toLocaleString()}` : ""}`;
+            details.append(summary, message, reason);
+            row.append(details);
+            list.append(row);
+        });
+    };
+    const refresh = createTextButton("Refresh reports", () => void loadReports().catch((error) => { status.textContent = error instanceof Error ? error.message : "Could not load chat reports."; }));
+    container.append(heading, description, refresh, status, list);
+    await loadReports();
+}
+
 export async function renderAdminChatFilterTools(container: HTMLElement) {
     container.replaceChildren();
     const heading = document.createElement("h2");

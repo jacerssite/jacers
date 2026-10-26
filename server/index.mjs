@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { MongoClient, MongoNetworkError, MongoServerSelectionError, ObjectId } from "mongodb";
+import { GridFSBucket, MongoClient, MongoNetworkError, MongoServerSelectionError, ObjectId } from "mongodb";
 import { attachDatabasePool } from "@vercel/functions";
 import { put } from "@vercel/blob";
 import argon2 from "argon2";
@@ -49,6 +49,9 @@ const recoveryLockMs = 24 * 60 * 60 * 1000;
 const humanChallengeTtlMs = 10 * 60 * 1000;
 const humanChallengeMinAgeMs = 1200;
 const humanChallengeSecret = process.env.HUMAN_CHALLENGE_SECRET || ownerAccounts.map(({ password }) => password ?? "").join("|");
+// A signed challenge must also be single-use, otherwise one solved prompt can
+// be replayed to create a batch of accounts.
+const usedHumanChallenges = new Map();
 const defaultRouletteTiers = [
   { buyIn: 5, chances: { claims: 42, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 3 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
   { buyIn: 10, chances: { claims: 24, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 6 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
@@ -117,7 +120,7 @@ const authLimiter = rateLimit({
 });
 const registrationLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000,
-  limit: 3,
+  limit: 2,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: { error: "Too many new accounts from this network today. Try again tomorrow." },
@@ -333,6 +336,16 @@ function verifyHumanChallenge(value) {
   if (!/^\d{1,3}$/.test(answer)) return false;
   const answerHash = crypto.createHash("sha256").update(answer).digest("hex");
   return answerHash === payload.answerHash;
+}
+
+function consumeHumanChallenge(value) {
+  if (!verifyHumanChallenge(value)) return false;
+  const tokenHash = crypto.createHash("sha256").update(value.token).digest("hex");
+  const now = Date.now();
+  for (const [key, expiresAt] of usedHumanChallenges) if (expiresAt <= now) usedHumanChallenges.delete(key);
+  if (usedHumanChallenges.has(tokenHash)) return false;
+  usedHumanChallenges.set(tokenHash, now + humanChallengeTtlMs);
+  return true;
 }
 
 function publicProfileFromProgress(username, role, progress = {}, profileTitles = PROFILE_TITLE_MILESTONES) {
@@ -725,7 +738,8 @@ function chatAttachmentIsValid(attachment) {
   const maxBytes = kind === "video" ? 25 * 1024 * 1024 : 8 * 1024 * 1024;
   if (bytes > maxBytes) return false;
   const blobOrigin = process.env.VERCEL_BLOB_PUBLIC_URL || process.env.BLOB_PUBLIC_URL;
-  return Boolean(blobOrigin && url.startsWith(blobOrigin.replace(/\/$/, "") + "/"));
+  const managedUpload = /^\/api\/chat\/uploads\/[a-f\d]{24}$/i.test(url);
+  return managedUpload || Boolean(blobOrigin && url.startsWith(blobOrigin.replace(/\/$/, "") + "/"));
 }
 
 function sanitizeChatText(value) {
@@ -771,11 +785,10 @@ async function accountHandler(req, res, next, mode) {
           lastSeenIpHash: ipHash,
           createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         });
-        if (recentRegistrations >= 3) return res.status(429).json({ error: "Too many new accounts from this network today. Try again tomorrow." });
+        if (recentRegistrations >= 2) return res.status(429).json({ error: "Too many new accounts from this network today. Try again tomorrow." });
       }
-      const humanChallengeProvided = credentials?.humanChallenge !== undefined && credentials?.humanChallenge !== null;
-      const humanVerified = humanChallengeProvided ? verifyHumanChallenge(credentials.humanChallenge) : false;
-      if (humanChallengeProvided && !humanVerified) return res.status(400).json({ error: "Complete the human check before creating an account." });
+      const humanVerified = consumeHumanChallenge(credentials?.humanChallenge);
+      if (!humanVerified) return res.status(400).json({ error: "Complete the current human check before creating an account." });
       const emailHash = hashEmail(email);
       if (emailHash && await isEmailBanned(db, emailHash)) {
         return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
@@ -1234,7 +1247,7 @@ app.put("/api/account/chat-preferences", requireSameOrigin, requireUser, async (
 
 app.post("/api/account/human-verify", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
-    if (!verifyHumanChallenge(req.body?.humanChallenge)) {
+    if (!consumeHumanChallenge(req.body?.humanChallenge)) {
       return res.status(400).json({ error: "Complete the human check before playing online levels." });
     }
     const db = await getDatabase();
@@ -1760,11 +1773,24 @@ app.post("/api/chat/messages/:id/report", requireSameOrigin, requireUser, async 
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid message." });
     const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 200) : "Reported by player";
     const db = await getDatabase();
-    const message = await db.collection("chat_messages").findOne({ _id: new ObjectId(req.params.id) });
-    if (!message) return res.status(404).json({ error: "Message not found." });
-    const access = await chatTargetAccess(db, req.user.id, message.senderId);
-    if (access.error && userIdString(message.senderId) !== userIdString(req.user.id)) return res.status(access.status).json({ error: access.error });
-    await db.collection("chat_reports").insertOne({ messageId: message._id, reporterId: req.user.id, reason: reason || "Reported by player", createdAt: new Date(), status: "open" });
+    const located = await findChatMessage(db, req.params.id);
+    if (!located || located.message.deletedAt) return res.status(404).json({ error: "Message not found." });
+    if (!await canAccessChatMessage(db, located, req.user)) return res.status(403).json({ error: "You cannot report this message." });
+    if (userIdString(located.message.senderId) === userIdString(req.user.id)) return res.status(400).json({ error: "You cannot report your own message." });
+    const reporterId = req.user.id;
+    await db.collection("chat_reports").insertOne({
+      messageId: located.message._id,
+      messageCollection: located.collection,
+      global: located.global,
+      reporterId,
+      reporter: req.user.username,
+      targetUserId: located.message.senderId,
+      sender: located.message.sender ?? "Unknown pilot",
+      messageText: located.message.text ?? "",
+      reason: reason || "Reported by player",
+      createdAt: new Date(),
+      status: "open",
+    });
     res.status(201).json({ reported: true });
   } catch (error) {
     next(error);
@@ -1775,7 +1801,17 @@ app.get("/api/admin/chat/reports", requirePermission("moderation"), async (req, 
   try {
     const db = await getDatabase();
     const reports = typeof db.collection("chat_reports").find === "function" ? await db.collection("chat_reports").find({ status: "open" }).sort({ createdAt: -1 }).limit(100).toArray() : [];
-    res.json({ reports });
+    res.json({ reports: reports.map((report) => ({
+      id: userIdString(report._id),
+      messageId: userIdString(report.messageId),
+      senderId: userIdString(report.targetUserId),
+      sender: typeof report.sender === "string" ? report.sender : "Unknown pilot",
+      reporter: typeof report.reporter === "string" ? report.reporter : "Unknown pilot",
+      text: typeof report.messageText === "string" ? report.messageText : "Message details are unavailable for this older report.",
+      reason: typeof report.reason === "string" ? report.reason : "Reported by player",
+      global: Boolean(report.global),
+      createdAt: report.createdAt?.toISOString?.() ?? report.createdAt ?? null,
+    })) });
   } catch (error) {
     next(error);
   }
@@ -1843,9 +1879,6 @@ app.post("/api/chat/uploads", requireSameOrigin, chatUploadLimiter, requireUser,
   try {
     if (req.user.chatMuted) return res.status(403).json({ error: "Chat is unavailable for this account." });
     const db = await getDatabase();
-    if (!process.env.BLOB_READ_WRITE_TOKEN || !(process.env.VERCEL_BLOB_PUBLIC_URL || process.env.BLOB_PUBLIC_URL)) {
-      return res.status(503).json({ error: "Attachment uploads are not configured yet." });
-    }
     const targetId = validObjectId(String(req.headers["x-chat-user-id"] ?? ""));
     if (!targetId) return res.status(400).json({ error: "Choose a chat recipient before uploading." });
     const access = await chatTargetAccess(db, req.user.id, targetId);
@@ -1859,14 +1892,55 @@ app.post("/api/chat/uploads", requireSameOrigin, chatUploadLimiter, requireUser,
     if (!body || !kind || body.byteLength < 1 || body.byteLength > maxBytes) return res.status(400).json({ error: "That file type or size is not allowed." });
     const rawName = typeof req.headers["x-file-name"] === "string" ? req.headers["x-file-name"] : "attachment";
     const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80) || "attachment";
-    const blob = await put(`jacer-chat/${userIdString(req.user.id)}/${Date.now()}-${safeName}`, body, {
-      access: "public",
-      addRandomSuffix: true,
-      contentType,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
-    });
+    const blobOrigin = process.env.VERCEL_BLOB_PUBLIC_URL || process.env.BLOB_PUBLIC_URL;
+    let url;
+    if (process.env.BLOB_READ_WRITE_TOKEN && blobOrigin) {
+      const blob = await put(`jacer-chat/${userIdString(req.user.id)}/${Date.now()}-${safeName}`, body, {
+        access: "public",
+        addRandomSuffix: true,
+        contentType,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      });
+      url = blob.url;
+    } else {
+      // MongoDB is already required for chat. GridFS keeps attachments private
+      // and makes direct-message uploads work on local servers and Vercel even
+      // when a separate Blob store has not been connected.
+      const bucket = new GridFSBucket(db, { bucketName: "chat_uploads" });
+      const upload = bucket.openUploadStream(safeName, {
+        contentType,
+        metadata: { uploaderId: req.user.id, recipientId: targetId, kind, bytes: body.byteLength },
+      });
+      await new Promise((resolve, reject) => {
+        upload.once("error", reject);
+        upload.once("finish", resolve);
+        upload.end(body);
+      });
+      url = `/api/chat/uploads/${upload.id.toHexString()}`;
+    }
     noStore(res);
-    res.status(201).json({ attachment: { kind, contentType, bytes: body.byteLength, url: blob.url } });
+    res.status(201).json({ attachment: { kind, contentType, bytes: body.byteLength, url } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/chat/uploads/:id", requireUser, async (req, res, next) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(404).end();
+    const db = await getDatabase();
+    const bucket = new GridFSBucket(db, { bucketName: "chat_uploads" });
+    const fileId = new ObjectId(req.params.id);
+    const file = await bucket.find({ _id: fileId }).next();
+    if (!file) return res.status(404).end();
+    const uploaderId = userIdString(file.metadata?.uploaderId);
+    const recipientId = userIdString(file.metadata?.recipientId);
+    const viewerId = userIdString(req.user.id);
+    if (!uploaderId || !recipientId || (viewerId !== uploaderId && viewerId !== recipientId)) return res.status(403).end();
+    res.setHeader("Content-Type", typeof file.contentType === "string" ? file.contentType : "application/octet-stream");
+    res.setHeader("Content-Length", String(file.length));
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    bucket.openDownloadStream(fileId).on("error", next).pipe(res);
   } catch (error) {
     next(error);
   }

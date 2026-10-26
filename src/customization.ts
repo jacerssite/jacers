@@ -115,7 +115,8 @@ export function createCustomization(context: CustomizationContext) {
         // Keep trails and avatars grouped into compact cards. Skins only define
         // unlockable colors now and are not presented as a separate list.
         appendRarityGroups(panel, "Trails", trailsWithIndex, "cosmetic-card-grid", (trail, _index, rarity) => {
-            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}`; button.disabled = !isTrailUnlocked(trails[trail.originalIndex]); button.dataset.trailIndex = String(trail.originalIndex);
+            const unlocked = isTrailUnlocked(trails[trail.originalIndex]);
+            const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}${unlocked ? "" : " is-locked"}`; button.disabled = !unlocked; button.dataset.trailIndex = String(trail.originalIndex);
             const icon = document.createElement("span");
             icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
@@ -124,6 +125,9 @@ export function createCustomization(context: CustomizationContext) {
             const label = document.createElement("span"); label.textContent = trail.name;
             button.append(icon, label);
             button.insertAdjacentHTML("beforeend", createRarityBadge(rarity));
+            const status = document.createElement("small");
+            status.textContent = unlocked ? "READY" : trail.prestige ? `PRESTIGE ${trail.prestige}` : trail.golden ? "20 ROUTES" : trail.jackpot ? "JACKPOT" : trail.secret ? "SECRET" : trail.boss ? "BOSS" : `${trail.required} ASTEROIDS`;
+            button.append(status);
             button.addEventListener("click", () => { setLoadout({ trail: trail.originalIndex }); refreshCustomization(); }); return button;
         });
         appendRarityGroups(panel, "Avatars", avatarsWithIndex, "cosmetic-card-grid", (avatar, _index, rarity) => {
