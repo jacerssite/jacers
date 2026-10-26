@@ -1080,6 +1080,9 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .chat-user-actions { top: 28px; left: 7px; right: auto; min-width: 118px; }
 .chat-user-actions button { color: #dce8e6; }
 .chat-user-actions button.danger { color: #ef9b90; }
+.chat-user-quick-reactions { display: flex; gap: 2px; padding: 4px; border-bottom: 1px solid #465468; background: #161f2c; }
+.chat-user-actions .chat-user-quick-reaction { min-width: 28px; padding: 4px; color: #f3f5e9; font-size: .88rem; text-align: center; }
+.chat-user-actions .chat-user-quick-reaction:hover, .chat-user-actions .chat-user-quick-reaction:focus-visible { background: #2e4056; color: #fff3bd; }
 .chat-reactions { display: flex; position: relative; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .chat-reaction, .chat-reaction-add { min-height: 23px; border: 1px solid #465468; border-radius: 12px; padding: 2px 6px; color: #dce8e6; background: #161f2c; cursor: pointer; font: .61rem "DM Mono", monospace; }
 .chat-reaction.selected { border-color: #f6c46e; background: #594a27; color: #fff0bd; }

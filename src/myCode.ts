@@ -884,7 +884,11 @@ function configurePortalDistribution() {
             const placedPortalIndex = source ? getPlacedPortalIndex(source) : null;
             const sameSource = Boolean(source && location?.source === source.name);
             const assignedLocation = assignedSourceName && source
-                ? { source: source.name, index: placedPortalIndex ?? (sameSource ? location!.index : getHiddenPortalIndex(source)), y: sameSource ? location!.y : getHiddenPortalY() }
+                // Owner-selected placements must always be reachable. Older saves
+                // used the random hidden height here, which could place a normal
+                // planet portal above the playable route even though the source
+                // level and assignment were correct.
+                ? { source: source.name, index: placedPortalIndex ?? (sameSource ? location!.index : getHiddenPortalIndex(source)), y: PORTAL_Y }
                 : location;
             if (!assignedLocation) return;
             if (assignedSourceName) localStorage.setItem(`orbit-portal-location-${secretId}`, JSON.stringify(assignedLocation));
@@ -3717,11 +3721,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         });
         const save = createTextButton("Save titles for everyone", async () => {
             const nextTitles: ProfileTitle[] = readDraftTitles();
-            if (!isUsableProfileTitles(nextTitles)) {
-                status.textContent = "Use unique lowercase IDs, non-empty names, and whole-number requirement values.";
-                return;
-            }
             save.disabled = true;
+            status.textContent = "Saving titles for every player...";
             try {
                 const response = await apiRequest<{ profileTitles: ProfileTitle[] }>("/settings/profile-titles", {
                     method: "PUT",
@@ -4200,7 +4201,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         portalHeading.textContent = "Secret portal placement";
         const portalDescription = document.createElement("p");
         portalDescription.className = "menu-copy";
-        portalDescription.textContent = "Choose the normal or prestige level where each secret portal can appear. If that level has a Portal tile, the secret portal uses the first placed tile; otherwise it uses a stable hidden slot. Empty assignments use automatic placement.";
+        portalDescription.textContent = "Choose the normal or prestige level where each secret portal can appear. If that level has a Portal tile, the secret portal uses the first placed tile; otherwise it uses a stable portal slot at a playable height. Empty assignments use automatic placement.";
         portalAssignmentPanel.append(portalHeading, portalDescription);
         const portalTargets: Record<"normal" | "prestige", string[]> = {
             normal: ["eclipse", "nebula", "archive"],

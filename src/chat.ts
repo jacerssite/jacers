@@ -243,6 +243,15 @@ export function createChat(context: ChatContext) {
             bubble.append(meta, text);
             if (!message.deletedAt) {
                 const userActions = document.createElement("div"); userActions.className = "chat-message-actions chat-user-actions"; userActions.hidden = true;
+                const reactToMessage = async (emoji: string) => {
+                    try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) }); await refreshActiveMessages(mode); }
+                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not add reaction."); }
+                };
+                const quickReactions = document.createElement("div"); quickReactions.className = "chat-user-quick-reactions";
+                ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}"].forEach((emoji) => {
+                    const reaction = document.createElement("button"); reaction.type = "button"; reaction.className = "chat-user-quick-reaction"; reaction.textContent = emoji; reaction.setAttribute("aria-label", `React ${emoji}`);
+                    reaction.addEventListener("click", () => { void reactToMessage(emoji); }); quickReactions.append(reaction);
+                });
                 const reply = document.createElement("button"); reply.type = "button"; reply.textContent = "Reply"; reply.addEventListener("click", () => {
                     const input = content()?.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
                     if (!input) return;
@@ -251,7 +260,7 @@ export function createChat(context: ChatContext) {
                     input.focus(); input.dispatchEvent(new Event("input", { bubbles: true })); userActions.hidden = true;
                 });
                 const profile = document.createElement("button"); profile.type = "button"; profile.textContent = "View profile"; profile.addEventListener("click", () => context.onProfile?.(message.senderId));
-                userActions.append(reply, profile);
+                userActions.append(quickReactions, reply, profile);
                 if (!mine) {
                     const report = document.createElement("button"); report.type = "button"; report.textContent = "Report"; report.addEventListener("click", async () => {
                         const reason = globalThis.prompt("Why are you reporting this message?", "") ?? "";
@@ -265,7 +274,16 @@ export function createChat(context: ChatContext) {
                     });
                     userActions.append(report, block);
                 }
-                author.addEventListener("click", (event) => { event.stopPropagation(); userActions.hidden = !userActions.hidden; author.setAttribute("aria-expanded", String(!userActions.hidden)); });
+                author.addEventListener("click", (event) => {
+                    event.stopPropagation();
+                    const opening = userActions.hidden;
+                    target.querySelectorAll<HTMLElement>(".chat-user-actions:not([hidden])").forEach((menu) => {
+                        menu.hidden = true;
+                        menu.parentElement?.querySelector<HTMLElement>(".chat-message-author")?.setAttribute("aria-expanded", "false");
+                    });
+                    userActions.hidden = !opening;
+                    author.setAttribute("aria-expanded", String(opening));
+                });
                 bubble.append(userActions);
             }
             const canModerateGlobal = mode === "global" && ["moderator", "admin", "owner", "developer"].includes(context.getUser()?.role ?? "");
