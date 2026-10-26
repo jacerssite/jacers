@@ -1080,8 +1080,9 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .chat-composer .chat-action-button[type="submit"] { border-radius: 8px; background: #292a31; color: #777985; border-color: #292a31; }
 .chat-composer .chat-action-button[type="submit"]:not(:disabled) { background: #f6c46e; color: #17181d; border-color: #f6c46e; }
 .chat-composer small { align-self: center; color: #9eb7ba; }
-.chat-attachment-button, .chat-emoji-button { min-width: 31px; padding: 4px 7px; font-size: 1rem; line-height: 1; }
-.chat-emoji-picker { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; border: 1px solid #385267; background: #101b2b; }
+.chat-attachment-button, .chat-emoji-button { display: grid; place-items: center; width: 28px; min-width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; color: #a7a9b4; font-size: 1.15rem; line-height: 1; }
+.chat-attachment-button:hover, .chat-emoji-button:hover, .chat-attachment-button:focus-visible, .chat-emoji-button:focus-visible { border-color: #385267; background: #24262e; color: #f6c46e; outline: none; }
+.chat-emoji-picker { grid-column: 1 / -1; display: flex; max-height: 126px; flex-wrap: wrap; gap: 4px; overflow-y: auto; padding: 6px; border: 1px solid #385267; background: #101b2b; }
 .chat-emoji-picker[hidden] { display: none; }
 .chat-emoji-picker button { width: 29px; height: 28px; border: 1px solid transparent; background: #172634; cursor: pointer; font-size: .92rem; }
 .chat-emoji-picker button:hover, .chat-emoji-picker button:focus-visible { border-color: #f6c46e; background: #24465a; outline: none; }

@@ -513,6 +513,22 @@ function serializeAccountProgress(progress: Record<string, string>) {
     return JSON.stringify(Object.fromEntries(Object.entries(progress).sort(([first], [second]) => first < second ? -1 : first > second ? 1 : 0)));
 }
 
+function progressSnapshotKey(identity: string | null) { return identity ? `jacer-progress-snapshot-${identity}` : ""; }
+function readProgressSnapshot(identity: string | null): Record<string, string> | null {
+    const key = progressSnapshotKey(identity);
+    if (!key) return null;
+    try {
+        const value: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
+        if (!value || typeof value !== "object" || Array.isArray(value) || Object.values(value).some((item) => typeof item !== "string")) return null;
+        return value as Record<string, string>;
+    } catch { return null; }
+}
+function rememberProgressSnapshot(identity: string | null, progress: Record<string, string>) {
+    const key = progressSnapshotKey(identity);
+    if (key) localStorage.setItem(key, serializeAccountProgress(progress));
+}
+function hasAccountProgress(progress: Record<string, string>) { return Object.keys(progress).some((key) => key.startsWith("orbit-")); }
+
 function refreshProgressStateFromStorage() {
     const readCount = (key: string, fallback: number, minimum: number, maximum: number) => {
         const value = Number(localStorage.getItem(key) ?? fallback);
@@ -657,8 +673,41 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 ensureSameAccount();
                 applySyncedProgress(localProgress, result.progress);
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
                 localStorage.setItem("jacer-local-owner", identity ?? "");
+                return;
+            }
+            const localProgress = getLocalAccountProgress();
+            const storedSnapshot = readProgressSnapshot(identity);
+            const canRecoverLocalChanges = localStorage.getItem("jacer-local-owner") === identity && hasAccountProgress(localProgress);
+            // A page can close before the next background save. If this is the
+            // same signed-in account and its local data differs from the last
+            // confirmed snapshot, save it before replacing anything locally.
+            if (canRecoverLocalChanges && storedSnapshot && serializeAccountProgress(localProgress) !== serializeAccountProgress(storedSnapshot)) {
+                const result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
+                    method: "PUT",
+                    body: JSON.stringify({ progress: localProgress, baseProgress: storedSnapshot }),
+                });
+                ensureSameAccount();
+                applySyncedProgress(localProgress, result.progress);
+                lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                rememberProgressSnapshot(identity, result.progress);
+                loadedAccountProgressFor = identity;
+                return;
+            }
+            // Older accounts may not have a device snapshot yet. A completely
+            // empty cloud record must never erase progress from that same device.
+            if (canRecoverLocalChanges && !hasAccountProgress(progress)) {
+                const result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
+                    method: "PUT",
+                    body: JSON.stringify({ progress: localProgress, baseProgress: progress }),
+                });
+                ensureSameAccount();
+                applySyncedProgress(localProgress, result.progress);
+                lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                rememberProgressSnapshot(identity, result.progress);
+                loadedAccountProgressFor = identity;
                 return;
             }
             Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -668,6 +717,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             refreshProgressStateFromStorage();
             reloadLocalCustomLevels();
             lastSyncedAccountProgress = serializeAccountProgress(getLocalAccountProgress());
+            rememberProgressSnapshot(identity, getLocalAccountProgress());
             loadedAccountProgressFor = identity;
             localStorage.setItem("jacer-local-owner", identity ?? "");
             return;
@@ -683,6 +733,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
         ensureSameAccount();
         applySyncedProgress(localProgress, result.progress);
         lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+        rememberProgressSnapshot(identity, result.progress);
     } catch (error) {
         if (direction === "save" && error instanceof ApiError && error.status === 409 && accountIdentity(currentOnlineUser) === identity) {
             loadedAccountProgressFor = null;
@@ -864,13 +915,16 @@ export function startApp() {
     });
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden && currentOnlineUser && !offlineOwnerMode) void sendPresenceHeartbeat();
+        if (document.hidden && !offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) {
+            void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save account progress while leaving the page:", error));
+        }
         if (!musicContext) return;
         if (document.hidden) void musicContext.suspend();
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
     });
     if (!accountProgressTimer) accountProgressTimer = globalThis.setInterval(() => {
         if (!offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
-    }, 2500);
+    }, 1000);
     if (!accountNoticeTimer) accountNoticeTimer = globalThis.setInterval(() => void refreshAccountNotices(), 7000);
     showMenu();
 }
@@ -1690,6 +1744,7 @@ function showSettings() {
                 if (!progress || accountIdentity(currentOnlineUser) !== redemptionIdentity) throw new Error("The updated account progress could not be loaded.");
                 applySyncedProgress(sentProgress, progress);
                 lastSyncedAccountProgress = serializeAccountProgress(progress);
+                rememberProgressSnapshot(redemptionIdentity, progress);
                 loadedAccountProgressFor = redemptionIdentity;
                 codeStatus.textContent = `Success: ${describeCodeReward(result.reward)} added to your account.`;
             } catch (error) {

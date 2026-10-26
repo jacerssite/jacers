@@ -49,7 +49,7 @@ export function createChat(context: ChatContext) {
     let ownTyping = false;
     let typingStopTimer = 0;
     let hasUnreadSnapshot = false;
-    const chatEmojis = ["👍", "❤️", "😂", "😮", "🎉", "🚀"];
+    const chatEmojis = ["😀", "😄", "😂", "🥹", "😎", "😭", "😡", "❤️", "👍", "👎", "👏", "🙌", "🎉", "🔥", "✨", "💯", "🚀", "⭐", "👀", "🤝", "💀", "😮", "🤔", "🫡", "😴", "🤖", "👽", "🪐"];
 
     const setUnread = (nextPending: number, nextUnread: number) => {
         const previousUnread = unread;

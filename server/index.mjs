@@ -1482,7 +1482,7 @@ async function chatTargetAccess(db, userId, targetId) {
   return { target, friendship };
 }
 
-const CHAT_REACTION_EMOJIS = new Set(["👍", "❤️", "😂", "😮", "🎉", "🚀"]);
+const CHAT_REACTION_EMOJIS = new Set(["😀", "😄", "😂", "🥹", "😎", "😭", "😡", "❤️", "👍", "👎", "👏", "🙌", "🎉", "🔥", "✨", "💯", "🚀", "⭐", "👀", "🤝", "💀", "😮", "🤔", "🫡", "😴", "🤖", "👽", "🪐"]);
 function publicChatReactions(reactions, viewerId) {
   if (!reactions || typeof reactions !== "object" || Array.isArray(reactions)) return [];
   const viewer = userIdString(viewerId);
