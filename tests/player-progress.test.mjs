@@ -38,6 +38,23 @@ test("player progress anti-cheat blocks forged unlocks, balance decreases, and u
   );
 });
 
+test("an expired secret route may respawn its special asteroids without allowing normal claim deletion", () => {
+  const completedAt = Date.now() - (31 * 60 * 1000);
+  const existing = {
+    "orbit-special-claims": "6",
+    "orbit-asteroids-12": "[0,1,2,3,4,5]",
+    "orbit-secret-cooldown-eclipse": String(completedAt),
+  };
+  assert.equal(getSuspiciousPlayerMutation(existing, { "orbit-special-claims": "6" }), null);
+  assert.match(
+    getSuspiciousPlayerMutation(
+      { ...existing, "orbit-asteroids-0": "[0]" },
+      { "orbit-special-claims": "6" },
+    ),
+    /cannot be removed/i,
+  );
+});
+
 test("moderator progress stays behind the normal anti-cheat boundary", () => {
   assert.match(
     getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "100", "orbit-unlock-skins": "1" }, "moderator"),

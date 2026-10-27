@@ -1,7 +1,7 @@
 import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, LevelMakerDraft, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward } from "./types";
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_RESET_COST, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
-import { levels, normalizeNonPrestigeLevels, normalizePrestigeLevels } from "./levels";
+import { levels, normalizeNonPrestigeLevels, normalizePrestigeLevels, refreshBuiltInLevelBriefings } from "./levels";
 import { ApiError, apiRequest, setApiLocalOnlyMode } from "./api";
 import { createMenuButton, createPasswordField, createTextButton, showActionDialog } from "./ui";
 import { createShipArtMarkup, createCssShipArtMarkup } from "./ship-art";
@@ -77,9 +77,6 @@ let trailPositions: { x: number; y: number }[] = [];
 let trailDirection = 1;
 let trailActive = false;
 let projectileTimer = 0;
-let enemyAttackTimer = 0;
-let miniBossAttackTimer = 0;
-let bossAttackTimer = 0;
 let trailTimer = 0;
 let trailMovementFrames = 0;
 let shieldCharges = 0;
@@ -136,6 +133,7 @@ let accountNoticeTimer = 0;
 let presenceHeartbeatTimer = 0;
 let presenceHeartbeatInFlight = false;
 let gameChatNotice: HTMLElement | null = null;
+let gameChatNoticeTimer = 0;
 let accountNoticeOpen = false;
 let goldenTimeLimitMs = 60000;
 type MusicScene = "menu" | "normal" | "prestige" | "secret" | "boss";
@@ -204,6 +202,7 @@ let loadedAccountProgressFor: string | null = null;
 let onlineSessionVersion = 0;
 let pendingFriendRequests = 0;
 let chatController: ReturnType<typeof createChat> | null = null;
+let chatMountObserver: MutationObserver | null = null;
 
 // The game is a single-page app, so the browser's history does not know about
 // the screens rendered by the menus. Keep a small in-app stack so the Backspace
@@ -287,7 +286,7 @@ function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
     }
     chatController?.setUser(user);
 }
-const gravity = 0.7;
+const defaultGravityForce = 0.7;
 const jumpPower = -16;
 const playerWidth = 48;
 const playerHeight = 58;
@@ -421,7 +420,7 @@ function loadCustomLevels() {
     const legacyLevels = readStoredLevels("orbit-custom-levels");
     const normalCount = levels.filter((level) => !level.secret && !level.prestige).length;
     for (let index = normalCount; index < 20; index++) {
-        levels.splice(Math.min(index, levels.length), 0, { name: `Frontier ${index + 1}`, briefing: "A longer route on the blue planet. Reach the beacon and claim the whole lane.", length: 28 + index, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21, 25], enemies: [8, 16, 24], spikes: [6, 14, 22], gravity: [10, 20], portals: [12, 26], boss: index === 19 });
+        levels.splice(Math.min(index, levels.length), 0, { name: `Frontier ${index + 1}`, briefing: "Collect the asteroids, navigate the hazards, and reach the beacon through the active route.", length: 28 + index, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21, 25], enemies: [8, 16, 24], spikes: [6, 14, 22], gravity: [10, 20], boss: index === 19 });
     }
     for (let index = 0; index < 20; index++) {
         levels.push({ name: prestigeRouteNames[index], briefing: "A longer route around the ringed planet. Planetary flip fields reveal the upper lane.", length: 38 + index, asteroids: [3, 8, 13, 18, 23, 28, 33], walls: [5, 10, 15, 20, 25, 30], enemies: [7, 17, 27, 35], spikes: [6, 14, 24, 32], gravity: [11, 21, 31], flip: [11, 31], boss: index === 19, prestige: true, prestigeRequirement: index < 5 ? 1 : index < 13 ? 2 : 3 });
@@ -440,6 +439,7 @@ function loadCustomLevels() {
     }));
     normalizeNonPrestigeLevels(levels);
     normalizePrestigeLevels(levels);
+    refreshBuiltInLevelBriefings(levels);
 }
 
 function getHiddenPortalIndex(level: Level) {
@@ -513,20 +513,66 @@ async function sendPresenceHeartbeat() {
 }
 
 function showGameChatNotice(notification?: import("./types").ChatNotification) {
-    if (!notification || !gameActive) return;
+    if (!notification || !currentOnlineUser) return;
+    if (gameChatNoticeTimer) globalThis.clearTimeout(gameChatNoticeTimer);
     gameChatNotice?.remove();
     const notice = document.createElement("aside");
     notice.className = "game-chat-notice";
     notice.innerHTML = "<strong></strong><p></p>";
     notice.querySelector("strong")!.textContent = notification.kind === "mention" ? `@ mention from ${notification.sender}` : `Message from ${notification.sender}`;
     notice.querySelector("p")!.textContent = notification.text || "Sent an attachment";
-    const reply = createTextButton("Reply", () => { notice.remove(); chatController?.openNotification(notification); });
-    const open = createTextButton("Open chat", () => { notice.remove(); chatController?.openNotification(notification); });
+    const dismiss = () => {
+        if (gameChatNoticeTimer) globalThis.clearTimeout(gameChatNoticeTimer);
+        gameChatNoticeTimer = 0;
+        notice.remove();
+        if (gameChatNotice === notice) gameChatNotice = null;
+    };
+    const reply = createTextButton("Reply", () => {
+        if (notice.querySelector(".game-chat-quick-reply")) return;
+        if (gameChatNoticeTimer) globalThis.clearTimeout(gameChatNoticeTimer);
+        const form = document.createElement("form");
+        form.className = "game-chat-quick-reply";
+        const input = document.createElement("textarea");
+        input.rows = 2;
+        input.maxLength = 300;
+        input.placeholder = `Reply to ${notification.sender}…`;
+        input.setAttribute("aria-label", `Reply to ${notification.sender}`);
+        const send = document.createElement("button");
+        send.type = "submit";
+        send.textContent = "Send";
+        const status = document.createElement("small");
+        status.setAttribute("role", "status");
+        form.append(input, send, status);
+        form.addEventListener("click", (event) => event.stopPropagation());
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const text = input.value.trim();
+            if (!text) return;
+            send.disabled = true;
+            status.textContent = "Sending…";
+            try {
+                const isDirect = notification.kind === "direct" && notification.conversationUserId;
+                const endpoint = isDirect
+                    ? `/chat/conversations/${encodeURIComponent(notification.conversationUserId!)}/messages`
+                    : "/chat/global";
+                await apiRequest(endpoint, { method: "POST", body: JSON.stringify({ text: isDirect ? text : `@${notification.sender} ${text}` }) });
+                dismiss();
+            } catch (error) {
+                status.textContent = error instanceof Error ? error.message : "Could not send reply.";
+                send.disabled = false;
+            }
+        });
+        notice.append(form);
+        input.focus();
+    });
+    reply.addEventListener("click", (event) => event.stopPropagation());
+    const open = createTextButton("Open chat", () => { dismiss(); chatController?.openNotification(notification); });
+    open.addEventListener("click", (event) => event.stopPropagation());
     notice.append(reply, open);
-    notice.addEventListener("click", () => { notice.remove(); chatController?.openNotification(notification); });
+    notice.addEventListener("click", () => { dismiss(); chatController?.openNotification(notification); });
     document.body.append(notice);
     gameChatNotice = notice;
-    globalThis.setTimeout(() => { if (gameChatNotice === notice) { notice.remove(); gameChatNotice = null; } }, 9000);
+    gameChatNoticeTimer = globalThis.setTimeout(() => { if (gameChatNotice === notice) dismiss(); }, 9000);
 }
 
 function getLocalAccountProgress() {
@@ -777,6 +823,19 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 }).then(() => showMenu());
             }
         }
+        if (error instanceof ApiError && error.status === 403 && error.message.startsWith("Your account has been automatically banned:")) {
+            clearLocalAccountData();
+            setOnlineUser(null);
+            if (!accountDeletionNoticeShown) {
+                accountDeletionNoticeShown = true;
+                void showActionDialog({
+                    title: "Account banned",
+                    description: error.message.replace("Your account has been automatically banned: ", ""),
+                    confirmLabel: "Return to menu",
+                    danger: true,
+                }).then(() => showMenu());
+            }
+        }
         if (direction === "save" && error instanceof ApiError && error.status === 409 && accountIdentity(currentOnlineUser) === identity) {
             loadedAccountProgressFor = null;
             showAccountSyncConflict(error.message);
@@ -787,23 +846,29 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
     }
 }
 
-async function refreshOnlineState() {
+async function restoreOnlineSession() {
     const originalSessionVersion = onlineSessionVersion;
+    const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
+    // A login or logout while startup is pending must not be overwritten.
+    if (onlineSessionVersion !== originalSessionVersion) return;
+    setOnlineUser(session.user);
+    if (!session.user && localStorage.getItem("jacer-local-owner")) clearLocalAccountData();
+    void sendPresenceHeartbeat();
+    updateOwnerAccountIndicator();
+    if (session.user) {
+        void syncAccountProgress("load").catch((error: unknown) => {
+            console.error("Could not restore account progress:", error);
+        }).finally(() => {
+            // Refresh a visible home screen with synced stats, but never
+            // replace a form or another page a player opened meanwhile.
+            if (document.querySelector(".home-screen")) showMenu();
+        });
+    }
+}
+
+async function refreshOnlineState(includeSession = true) {
     const tasks = [
-        (async () => {
-            const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
-            // A login or logout while startup is pending must not be overwritten.
-            if (onlineSessionVersion !== originalSessionVersion) return;
-            setOnlineUser(session.user);
-            if (!session.user && localStorage.getItem("jacer-local-owner")) clearLocalAccountData();
-            void sendPresenceHeartbeat();
-            updateOwnerAccountIndicator();
-            try {
-                if (session.user) await syncAccountProgress("load");
-            } finally {
-                if (document.querySelector(".home-screen")) showMenu();
-            }
-        })(),
+        ...(includeSession ? [restoreOnlineSession()] : []),
         (async () => {
             const settings = await apiRequest<OnlineSettings>("/settings");
             goldenTimeLimitMs = settings.goldenTimeLimitMs;
@@ -951,16 +1016,27 @@ export function startApp() {
     normalizeNonPrestigeLevels(levels);
     normalizePrestigeLevels(levels);
     configurePortalDistribution();
-    document.body.innerHTML = "";
+    const startupScreen = document.createElement("main");
+    startupScreen.className = "menu-screen startup-screen";
+    startupScreen.innerHTML = `<p class="eyebrow">JACER / FLIGHT SYSTEMS</p><h1>Connecting <em>pilot</em></h1><p class="menu-copy">Restoring your saved flight data…</p>`;
+    document.body.replaceChildren(startupScreen);
     chatController?.remove();
     chatController = createChat({ getUser: () => currentOnlineUser, onUnread: (pending) => { pendingFriendRequests = pending; updateOwnerAccountIndicator(); }, onMessage: (notification) => { playSound("message"); showGameChatNotice(notification); }, onProfile: (id) => showLeaderboardPlayerProfile(id, showLeaderboard) });
-    const chatMountObserver = new MutationObserver(() => chatController?.mount());
+    chatMountObserver?.disconnect();
+    chatMountObserver = new MutationObserver(() => chatController?.mount());
     chatMountObserver.observe(document.body, { childList: true });
     ownerBadgeObserver ??= new MutationObserver(updateOwnerAccountIndicator);
     ownerBadgeObserver.observe(document.body, { childList: true });
-    void refreshOnlineState().then(() => {
-        if (document.querySelector(".home-screen")) showMenu();
-    }).catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
+    void restoreOnlineSession()
+        .catch((error: unknown) => { console.error("Could not restore the saved account session:", error); })
+        .finally(() => {
+            // Do not flash an unsigned home screen before a remembered session
+            // has been read. A valid session now lands directly in its signed-in
+            // home screen on returning devices.
+            if (startupScreen.isConnected) showMenu();
+        });
+    void refreshOnlineState(false)
+        .catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
     if (!presenceHeartbeatTimer) presenceHeartbeatTimer = globalThis.setInterval(() => void sendPresenceHeartbeat(), 10_000);
     globalThis.addEventListener("keydown", handleKeyDown);
     globalThis.addEventListener("keyup", handleKeyUp);
@@ -983,7 +1059,6 @@ export function startApp() {
         if (!offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
     }, 1000);
     if (!accountNoticeTimer) accountNoticeTimer = globalThis.setInterval(() => void refreshAccountNotices(), 7000);
-    showMenu();
 }
 
 async function refreshAccountNotices() {
@@ -1560,6 +1635,9 @@ function showMenu() {
     appPageHistory.length = 0;
     currentAppPage = showMenu;
     gameActive = false;
+    // The launcher can be remounted after a full page redraw. Keep its own
+    // game-state flag in sync so it never remains hidden on the home menu.
+    chatController?.setGameActive(false);
     roleQuickPanel = null;
     roleQuickPanelStartedAt = 0;
     setMusicScene("menu");
@@ -1583,7 +1661,7 @@ function showMenu() {
     accountRail.append(accountButton);
     const updateRail = document.createElement("aside");
     updateRail.className = "update-log-rail";
-    const updateButton = createTextButton("Updates", () => showCredits("updates"));
+    const updateButton = createTextButton("Updates", showUpdateLog);
     updateButton.classList.add("update-log-rail-button");
     updateButton.setAttribute("aria-label", "Open update log");
     updateRail.append(updateButton);
@@ -2075,15 +2153,18 @@ function createProgressArea() {
     return section;
 }
 
-function showCredits(view: "credits" | "updates" = "credits") {
+function showCredits() {
     enterAppPage(showCredits);
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
-    if (view === "credits") {
-        menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
-        menu.append(createTextButton("Back", showMenu));
-        document.body.replaceChildren(menu);
-        return;
-    }
+    // Keep the original crew visible on a dedicated Credits page.
+    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
+    menu.append(createTextButton("Back", showMenu));
+    document.body.replaceChildren(menu);
+}
+
+function showUpdateLog() {
+    enterAppPage(showUpdateLog);
+    const menu = document.createElement("main"); menu.className = "menu-screen update-log-screen";
     menu.innerHTML = `<p class="eyebrow">ORBIT RUN / FLIGHT UPDATES</p><h1>Update <em>log</em></h1><p class="menu-copy">See the latest additions, fixes, and changes to Jacer.</p>`;
     const updates = document.createElement("section");
     updates.className = "credits-updates";
@@ -3922,6 +4003,24 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     bindTesterSetting(portalChanceInput, "portalSpawnChance", () => selectedWorld);
     portalChanceLabel.append(portalChanceInput);
     rewardSettings.append(portalChanceLabel);
+    const gravityHeading = document.createElement("p");
+    gravityHeading.className = "setting-title";
+    gravityHeading.textContent = "Advanced world physics";
+    const gravityHelp = document.createElement("p");
+    gravityHelp.className = "menu-copy";
+    gravityHelp.textContent = "Sets downward acceleration and the strength of gravity wells for this world. Prestige can use a separate force.";
+    const gravityForceLabel = document.createElement("label");
+    gravityForceLabel.innerHTML = `<span>Gravity force</span>`;
+    const gravityForceInput = document.createElement("input");
+    gravityForceInput.type = "number";
+    gravityForceInput.min = "0.1";
+    gravityForceInput.max = "2.5";
+    gravityForceInput.step = "0.01";
+    gravityForceInput.value = String(selectedConfig.gravityForce ?? defaultGravityForce);
+    gravityForceInput.dataset.gravityForce = "true";
+    bindTesterSetting(gravityForceInput, "gravityForce", () => selectedWorld);
+    gravityForceLabel.append(gravityForceInput);
+    rewardSettings.append(gravityHeading, gravityHelp, gravityForceLabel);
     // Keep the rarity values in the shared config without exposing the old
     // rarity editor in this world-settings section. Roulette owns that UI.
     const rarityCompatibility = document.createElement("div");
@@ -3979,6 +4078,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         rewardSettings.querySelector(".setting-title")!.textContent = `${world === "prestige" ? "Prestige" : "Normal"} world percentages`;
         starChanceInput.value = String(readTesterSetting("rainbowStarChance", config.rainbowStarChance, world));
         portalChanceInput.value = String(readTesterSetting("portalSpawnChance", config.portalSpawnChance, world));
+        gravityForceInput.value = String(readTesterSetting("gravityForce", config.gravityForce ?? defaultGravityForce, world));
         RARITY_ORDER.forEach((rarity) => {
             rewardSettings.querySelector<HTMLInputElement>(`input[data-roll-odds="${rarity}"]`)!.value = String(readTesterSetting(`rarityOdds.${rarity}`, config.rarityOdds[rarity], world));
             rewardSettings.querySelector<HTMLInputElement>(`input[data-reward-min="${rarity}"]`)!.value = String(readTesterSetting(`rewardMin.${rarity}`, config.rewardRanges[rarity][0], world));
@@ -4461,6 +4561,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const worldConfig = nextConfig[world];
             worldConfig.rainbowStarChance = readTesterSetting("rainbowStarChance", worldConfig.rainbowStarChance, world);
             worldConfig.portalSpawnChance = readTesterSetting("portalSpawnChance", worldConfig.portalSpawnChance, world);
+            worldConfig.gravityForce = readTesterSetting("gravityForce", worldConfig.gravityForce ?? defaultGravityForce, world);
             worldConfig.powerupSpawnChances.star = worldConfig.rainbowStarChance;
             RARITY_ORDER.forEach((rarity) => {
                 worldConfig.rarityOdds[rarity] = readTesterSetting(`rarityOdds.${rarity}`, worldConfig.rarityOdds[rarity], world);
@@ -4475,7 +4576,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             });
             const oddsTotal = RARITY_ORDER.reduce((total, rarity) => total + worldConfig.rarityOdds[rarity], 0);
             const isPercentage = (value: number) => Number.isInteger(value) && value >= 0 && value <= 100;
-            if (oddsTotal !== 100 || !isPercentage(worldConfig.rainbowStarChance) || !isPercentage(worldConfig.portalSpawnChance)
+            if (oddsTotal !== 100 || !Number.isFinite(worldConfig.gravityForce) || worldConfig.gravityForce < 0.1 || worldConfig.gravityForce > 2.5 || !isPercentage(worldConfig.rainbowStarChance) || !isPercentage(worldConfig.portalSpawnChance)
                 || !Object.values(worldConfig.rarityOdds).every(isPercentage)
                 || !Object.values(worldConfig.skinChances).every(isPercentage)
                 || !Object.values(worldConfig.powerupSpawnChances).every(isPercentage)) invalidWorld = world;
@@ -4729,6 +4830,12 @@ function getWorldConfig(prestige = activePlanet === "prestige") {
     return gameConfig[prestige ? "prestige" : "normal"];
 }
 
+function getGravityForce() {
+    const level = levels[currentLevel];
+    const force = gameConfig[level?.prestige ? "prestige" : "normal"]?.gravityForce;
+    return typeof force === "number" && Number.isFinite(force) && force >= 0.1 && force <= 2.5 ? force : defaultGravityForce;
+}
+
 function isUsableGameConfig(value: unknown): value is GameConfig {
     if (!value || typeof value !== "object") return false;
     const config = value as Partial<GameConfig>;
@@ -4738,6 +4845,7 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
         const settings = config[world] as WorldGameConfig | undefined;
         if (!isRecord(settings) || !isRecord(settings.rarityOdds) || !isRecord(settings.rewardRanges)
             || !isRecord(settings.skinChances) || !isRecord(settings.powerupSpawnChances)) return false;
+        if (settings.gravityForce !== undefined && (typeof settings.gravityForce !== "number" || !Number.isFinite(settings.gravityForce) || settings.gravityForce < 0.1 || settings.gravityForce > 2.5)) return false;
         if (![settings.rainbowStarChance, ...RARITY_ORDER.map((rarity) => settings.rarityOdds[rarity]),
             ...RARITY_ORDER.flatMap((rarity) => settings.rewardRanges[rarity] ?? []),
             ...RARITY_ORDER.map((rarity) => settings.skinChances[rarity]),
@@ -5013,7 +5121,7 @@ function updateSecretBossRoom() {
     if (rightHeld) playerX += 5 * currentFrameScale * getMovementMultiplier();
     playerX = Math.max(24, Math.min(roomWidth - playerWidth - 24, playerX));
     previousPlayerY = playerY;
-    verticalSpeed += gravity * currentFrameScale;
+    verticalSpeed += getGravityForce() * currentFrameScale;
     playerY += verticalSpeed * currentFrameScale;
     if (playerY >= secretRoomFloorY) { playerY = secretRoomFloorY; verticalSpeed = 0; jumpCount = 0; }
     if (playerY < 12) { playerY = 12; verticalSpeed = 0; }
@@ -5069,14 +5177,16 @@ function updateSecretBossRoom() {
                 }
             }
             if (shootingHeld || controlKeysFor("shoot").some((key) => pressedKeys.has(key))) shootSecretBoss();
-            projectileTimer += currentFrameScale;
-            const secondPhase = secretBoss.health <= secretBoss.maxHealth / 2;
-            const profile = getEnemyProfile("voidWarden");
-            const attackInterval = Math.max(15, Math.round((secondPhase ? 48 : rapidTimer > 0 ? 56 : reducedEffects ? 96 : 72) * profile.attackIntervalMultiplier));
-            if (projectileTimer >= attackInterval) {
-                projectileTimer = 0;
-                if (secondPhase) [-0.3, 0, 0.3].forEach((spread) => fireSecretBossProjectile(spread));
-                else fireSecretBossProjectile();
+            if (gameStarted) {
+                projectileTimer += currentFrameScale;
+                const secondPhase = secretBoss.health <= secretBoss.maxHealth / 2;
+                const profile = getEnemyProfile("voidWarden");
+                const attackInterval = Math.max(15, Math.round((secondPhase ? 48 : rapidTimer > 0 ? 56 : reducedEffects ? 96 : 72) * profile.attackIntervalMultiplier));
+                if (projectileTimer >= attackInterval) {
+                    projectileTimer = 0;
+                    if (secondPhase) [-0.3, 0, 0.3].forEach((spread) => fireSecretBossProjectile(spread));
+                    else fireSecretBossProjectile();
+                }
             }
         }
     }
@@ -5322,7 +5432,7 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; enemyAttackTimer = 0; miniBossAttackTimer = 0; bossAttackTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     activeRunProof = null;
     const proofSequence = ++runProofSequence;
     if (!isLevelMakerPreview && currentOnlineUser) void requestRunProof(level.name, proofSequence);
@@ -5669,9 +5779,6 @@ function startPortalTransit(target: number, secretId?: string) {
     projectiles.forEach((projectile) => projectile.element.remove());
     projectiles = [];
     projectileTimer = 0;
-    enemyAttackTimer = 0;
-    miniBossAttackTimer = 0;
-    bossAttackTimer = 0;
     const skin = skins[selectedSkin] ?? skins[0];
     const avatar = avatars[selectedAvatar] ?? avatars[0];
     const room = document.createElement("section");
@@ -5846,8 +5953,9 @@ function applyGravityPull(frameScale: number) {
     const offsetY = wellCenterY - shipCenterY;
     const distance = Math.max(1, Math.hypot(offsetX, offsetY));
     const proximity = Math.max(0, Math.min(1, 1 - distance / 220));
-    const horizontalStrength = 0.003 + proximity * 0.005;
-    const verticalStrength = 0.0015 + proximity * 0.0025;
+    const gravityMultiplier = getGravityForce() / defaultGravityForce;
+    const horizontalStrength = (0.003 + proximity * 0.005) * gravityMultiplier;
+    const verticalStrength = (0.0015 + proximity * 0.0025) * gravityMultiplier;
     // The pull is deliberately gentle and only exists while inside the zone,
     // so holding left/right or jumping can still carry the ship back out.
     playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH - playerWidth, playerX + Math.max(-1.4, Math.min(1.4, offsetX * horizontalStrength)) * frameScale));
@@ -5913,6 +6021,28 @@ function getEnemyProfile(type: EnemyTypeKey) {
         : fallback;
 }
 
+function enemyCanSeePlayer(actorX: number, actorWidth: number) {
+    if (!gameStarted) return false;
+    const cameraOffset = Math.max(0, playerX - 180);
+    const viewportWidth = world.parentElement?.clientWidth || globalThis.innerWidth;
+    // Keep a small edge buffer so a sentry does not flicker between awake and
+    // asleep while it is entering the camera frame.
+    return actorX + actorWidth >= cameraOffset - 48 && actorX <= cameraOffset + viewportWidth + 48;
+}
+
+function advanceEnemyAttack(actor: { x: number; defeated: boolean; attackTimer?: number }, actorWidth: number, interval: number, fire: () => void) {
+    if (actor.defeated) return;
+    if (!enemyCanSeePlayer(actor.x, actorWidth)) {
+        actor.attackTimer = 0;
+        return;
+    }
+    actor.attackTimer = (actor.attackTimer ?? 0) + currentFrameScale;
+    if (actor.attackTimer >= interval) {
+        actor.attackTimer = 0;
+        fire();
+    }
+}
+
 function startGameLoop(timestamp = performance.now()) {
     if (!gameActive) return;
     animationFrame = requestAnimationFrame(startGameLoop);
@@ -5935,7 +6065,8 @@ function startGameLoop(timestamp = performance.now()) {
     if (shipFlipped && !inGravity && !inFlippedRoute) shipFlipped = false;
     playerLabel.classList.toggle("flipped", shipFlipped);
     if (gameStarted) { elapsedMilliseconds = performance.now() - levelStartedAt; timerLabel.textContent = formatTime(elapsedMilliseconds); }
-    verticalSpeed += (shipFlipped ? -1 : 1) * (inGravity ? gravity * 1.55 : gravity) * currentFrameScale; playerY += verticalSpeed * currentFrameScale;
+    const gravityForce = getGravityForce();
+    verticalSpeed += (shipFlipped ? -1 : 1) * (inGravity ? gravityForce * 1.55 : gravityForce) * currentFrameScale; playerY += verticalSpeed * currentFrameScale;
     if (!shipFlipped && playerY >= FLOOR_Y) { playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; }
     if (shipFlipped && playerY <= CEILING_Y) { playerY = CEILING_Y; verticalSpeed = 0; jumpCount = 0; }
     trailTimer += currentFrameScale; playerShotTimer = Math.max(0, playerShotTimer - currentFrameScale); boostTimer = Math.max(0, boostTimer - currentFrameScale); cannonTimer = cannonTimer === Number.POSITIVE_INFINITY ? cannonTimer : Math.max(0, cannonTimer - currentFrameScale); rapidTimer = Math.max(0, rapidUntil - performance.now()); rapidCannonUntil = rapidCannonUntil > performance.now() ? rapidCannonUntil : 0;
@@ -5960,12 +6091,9 @@ function startGameLoop(timestamp = performance.now()) {
     const sentryInterval = Math.max(15, Math.round(projectileInterval * getEnemyProfile("sentry").attackIntervalMultiplier));
     const darkKnightInterval = Math.max(15, Math.round(projectileInterval * getEnemyProfile("darkKnight").attackIntervalMultiplier));
     const titanCoreInterval = Math.max(15, Math.round(projectileInterval * getEnemyProfile("titanCore").attackIntervalMultiplier));
-    enemyAttackTimer += currentFrameScale;
-    miniBossAttackTimer += currentFrameScale;
-    bossAttackTimer += currentFrameScale;
-    if (enemyAttackTimer >= sentryInterval) { enemyAttackTimer -= sentryInterval; levelEnemies.forEach(fireProjectile); }
-    if (miniBossAttackTimer >= darkKnightInterval) { miniBossAttackTimer -= darkKnightInterval; levelMiniBosses.forEach(fireMiniBossProjectile); }
-    if (boss && !boss.defeated && bossAttackTimer >= titanCoreInterval) { bossAttackTimer -= titanCoreInterval; fireBossProjectile(); }
+    levelEnemies.forEach((enemy) => advanceEnemyAttack(enemy, 48, sentryInterval, () => fireProjectile(enemy)));
+    levelMiniBosses.forEach((miniBoss) => advanceEnemyAttack(miniBoss, 70, darkKnightInterval, () => fireMiniBossProjectile(miniBoss)));
+    if (boss) advanceEnemyAttack(boss, 128, titanCoreInterval, fireBossProjectile);
     trailMovementFrames = Math.max(0, trailMovementFrames - currentFrameScale);
     if (lastJumpDirection !== 0) { trailDirection = lastJumpDirection; trailActive = true; trailPositions = []; lastJumpDirection = 0; }
     const airborne = Math.abs(verticalSpeed) > .2;

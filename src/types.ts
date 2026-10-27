@@ -118,6 +118,8 @@ export type UpdateLogEntry = { date: string; title: string; body: string };
 export type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
 export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level>; portalAssignments?: Record<string, string> };
 export type WorldGameConfig = {
+    /** Downward acceleration and gravity-well pull for this world. */
+    gravityForce: number;
     rainbowStarChance: number;
     portalSpawnChance: number;
     rarityOdds: Record<Rarity, number>;

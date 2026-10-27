@@ -59,7 +59,7 @@ export function createChat(context: ChatContext) {
         unread = Math.max(0, nextUnread);
         if (notification?.id && notification.id !== lastNotificationId) {
             lastNotificationId = notification.id;
-            if (hasUnreadSnapshot) context.onMessage?.(notification);
+            context.onMessage?.(notification);
         } else if (hasUnreadSnapshot && unread > previousUnread && panel?.hidden !== false) context.onMessage?.();
         hasUnreadSnapshot = true;
         if (button) {
@@ -346,6 +346,48 @@ export function createChat(context: ChatContext) {
         const form = document.createElement("form"); form.className = "chat-composer";
         const input = document.createElement("textarea"); input.maxLength = 300; input.rows = 2; input.placeholder = "Write a message…"; input.setAttribute("aria-label", "Chat message");
         input.value = draftKey ? messageDrafts.get(draftKey) ?? "" : "";
+        const mentionPicker = document.createElement("div");
+        mentionPicker.className = "chat-mention-picker";
+        mentionPicker.hidden = true;
+        let mentionTimer = 0;
+        let mentionRequest = 0;
+        const closeMentionPicker = () => { mentionPicker.hidden = true; mentionPicker.replaceChildren(); };
+        const updateMentionPicker = () => {
+            if (mode !== "global") { closeMentionPicker(); return; }
+            const cursor = input.selectionStart ?? input.value.length;
+            const match = input.value.slice(0, cursor).match(/(?:^|\s)@([a-z0-9_]*)$/i);
+            if (!match) { closeMentionPicker(); return; }
+            if (mentionTimer) globalThis.clearTimeout(mentionTimer);
+            const request = ++mentionRequest;
+            mentionTimer = globalThis.setTimeout(async () => {
+                try {
+                    const response = await apiRequest<{ users: { id: string; username: string; role: OnlineUser["role"] }[] }>(`/chat/mentions?q=${encodeURIComponent(match[1])}`);
+                    if (request !== mentionRequest || !input.isConnected) return;
+                    mentionPicker.replaceChildren();
+                    response.users.forEach((user) => {
+                        const option = document.createElement("button");
+                        option.type = "button";
+                        option.className = "chat-mention-option";
+                        const name = document.createElement("strong"); name.textContent = user.username;
+                        const role = document.createElement("small"); role.textContent = roleLabel(user.role) || "PLAYER";
+                        option.append(name, role);
+                        option.addEventListener("click", () => {
+                            const nextCursor = input.selectionStart ?? input.value.length;
+                            const tokenStart = nextCursor - match[1].length - 1;
+                            input.value = `${input.value.slice(0, tokenStart)}@${user.username} ${input.value.slice(nextCursor)}`;
+                            const position = tokenStart + user.username.length + 2;
+                            input.focus(); input.setSelectionRange(position, position);
+                            if (draftKey) messageDrafts.set(draftKey, input.value);
+                            closeMentionPicker(); updateSendState();
+                        });
+                        mentionPicker.append(option);
+                    });
+                    mentionPicker.hidden = response.users.length === 0;
+                } catch {
+                    if (request === mentionRequest) closeMentionPicker();
+                }
+            }, 120);
+        };
         const count = document.createElement("small"); count.textContent = `${input.value.length}/300`;
         const attachmentInput = document.createElement("input"); attachmentInput.type = "file"; attachmentInput.accept = "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"; attachmentInput.hidden = true; attachmentInput.setAttribute("aria-label", "Choose an image, GIF, or video");
         const attachmentButton = document.createElement("button"); attachmentButton.type = "button"; attachmentButton.className = "chat-action-button chat-attachment-button"; attachmentButton.textContent = "+"; attachmentButton.setAttribute("aria-label", "Attach an image, GIF, or video"); attachmentButton.hidden = mode === "global"; attachmentButton.addEventListener("click", () => attachmentInput.click());
@@ -374,9 +416,10 @@ export function createChat(context: ChatContext) {
             } catch (error) { attachmentStatus.textContent = error instanceof Error ? error.message : "Could not upload that attachment."; }
             finally { attachmentButton.disabled = false; attachmentInput.value = ""; updateSendState(); }
         });
-        input.addEventListener("input", () => { if (draftKey) messageDrafts.set(draftKey, input.value); if (mode === "direct" && input.value.trim()) scheduleTypingStop(); else if (mode === "direct" && ownTyping) { ownTyping = false; sendTypingState(false); } updateSendState(); });
-        input.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
-        form.append(input, attachmentInput, attachmentButton, emojiButton, emojiPicker, attachmentStatus, count, send); updateSendState();
+        input.addEventListener("input", () => { if (draftKey) messageDrafts.set(draftKey, input.value); if (mode === "direct" && input.value.trim()) scheduleTypingStop(); else if (mode === "direct" && ownTyping) { ownTyping = false; sendTypingState(false); } updateMentionPicker(); updateSendState(); });
+        input.addEventListener("click", updateMentionPicker);
+        input.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMentionPicker(); if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
+        form.append(input, mentionPicker, attachmentInput, attachmentButton, emojiButton, emojiPicker, attachmentStatus, count, send); updateSendState();
         form.addEventListener("submit", async (event) => {
             event.preventDefault();
             if ((mode === "direct" && !activeUserId) || (!input.value.trim() && (mode === "global" || !pendingAttachment))) return;

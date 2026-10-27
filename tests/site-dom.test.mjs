@@ -155,7 +155,7 @@ test("malformed local saves do not stop the game from opening", async () => {
     "orbit-skin": "not a number",
   });
   try {
-    assert.ok(document.querySelector(".home-screen"));
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not open after startup");
     assert.match(document.querySelector(".home-stats").textContent, /0 normal/);
     clickButton(document, "Customization");
     assert.ok(document.querySelector(".ship-preview"));
@@ -172,6 +172,7 @@ test("slow startup does not replace an account form a player is filling in", asy
     "/api/settings": async () => { await gate; return { goldenTimeLimitMs: 60000, rouletteTiers: [], updateLog: [] }; },
   });
   try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not open after session restore");
     clickButton(document, "Account");
     document.querySelector('input[name="username"]').value = "Pilot_7";
     release();
@@ -802,7 +803,7 @@ test("update log preserves pasted formatting, supports indentation, and publishe
     body = document.querySelector('[data-update-body="0"]');
     assert.equal(body.value, pasted);
     clickButton(document, "Back to game");
-    clickButton(document, "Credits");
+    clickButton(document, "Updates");
     const rendered = document.querySelector(".credits-updates article p");
     assert.equal(rendered.textContent, pasted);
     assert.equal(rendered.querySelector("img"), null);

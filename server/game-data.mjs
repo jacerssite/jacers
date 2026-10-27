@@ -79,6 +79,7 @@ const defaultSpawnChances = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 3 
 
 export const DEFAULT_GAME_CONFIG = {
   normal: {
+    gravityForce: 0.7,
     rainbowStarChance: 3,
     portalSpawnChance: 100,
     rarityOdds: defaultRarityOdds,
@@ -87,6 +88,7 @@ export const DEFAULT_GAME_CONFIG = {
     powerupSpawnChances: defaultSpawnChances,
   },
   prestige: {
+    gravityForce: 0.84,
     rainbowStarChance: 3,
     portalSpawnChance: 100,
     rarityOdds: defaultRarityOdds,
@@ -140,7 +142,8 @@ function isWorldConfig(value) {
   const rewardRanges = value.rewardRanges;
   const skinChances = value.skinChances;
   const spawnChances = value.powerupSpawnChances;
-  return isPercent(value.rainbowStarChance)
+  return (value.gravityForce === undefined || (Number.isFinite(value.gravityForce) && value.gravityForce >= 0.1 && value.gravityForce <= 2.5))
+    && isPercent(value.rainbowStarChance)
     && isPercent(value.portalSpawnChance)
     && rarityOdds && RARITIES.every((rarity) => isPercent(rarityOdds[rarity]))
     && RARITIES.reduce((total, rarity) => total + rarityOdds[rarity], 0) === 100

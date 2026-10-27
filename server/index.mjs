@@ -1195,6 +1195,55 @@ async function deleteAbusiveNewAccount(db, user, progress) {
   return reason;
 }
 
+async function hasRedeemedCode(db, userId) {
+  const redemptions = db.collection("code_redemptions");
+  return typeof redemptions.countDocuments === "function"
+    && await redemptions.countDocuments({ userId }, { limit: 1 }) > 0;
+}
+
+function completedRouteCount(progress) {
+  return Object.entries(progress ?? {}).filter(([key, value]) => /^orbit-level-complete-\d+$/.test(key) && value === "1").length;
+}
+
+function powerupInventoryTotal(progress) {
+  try {
+    const inventory = JSON.parse(progress?.["orbit-powerups"] ?? "{}");
+    return ["shield", "boost", "rapid", "cannon", "star"].reduce((total, kind) => {
+      const amount = inventory?.[kind];
+      return total + (Number.isSafeInteger(amount) && amount > 0 ? amount : 0);
+    }, 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function banLowProgressAbuse(db, user, progress) {
+  if (user.role !== "player" || await hasRedeemedCode(db, user.id)) return null;
+  const routes = completedRouteCount(progress);
+  const asteroids = Number(progress?.["orbit-claims"] ?? 0);
+  const powerups = powerupInventoryTotal(progress);
+  if (routes >= 4 || (asteroids < 5000 && powerups < 100)) return null;
+  const account = await db.collection("users").findOne({ _id: user.id }, { projection: { username: 1 } });
+  if (!account) return null;
+  const reason = asteroids >= 5000
+    ? `${asteroids.toLocaleString()} asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
+    : `${powerups.toLocaleString()} power-ups with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`;
+  await Promise.all([
+    db.collection("users").updateOne({ _id: user.id, role: "player" }, { $set: { banned: true } }),
+    db.collection("user_sessions").deleteMany({ userId: user.id }),
+  ]);
+  await recordSecurityEvent(db, { type: "automatic-low-progress-ban", userId: user.id, reason, asteroids, powerups, routes });
+  await recordModerationLog(db, {
+    action: "Automatic account ban",
+    reason,
+    actorId: null,
+    actorUsername: "Anti-cheat",
+    targetUserId: user.id,
+    targetUsername: account.username,
+  });
+  return reason;
+}
+
 app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requireUser, async (req, res, next) => {
   try {
     const progress = validatePlayerProgress(req.body?.progress);
@@ -1215,6 +1264,8 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
           accountDeleted: true,
         });
       }
+      const banReason = await banLowProgressAbuse(db, req.user, progress);
+      if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
       const safeInitialProgress = sanitizeInitialPlayerProgress(progress, req.user.role);
       if (req.user.role === "player" && JSON.stringify(safeInitialProgress) !== JSON.stringify(progress)) {
         await recordSecurityEvent(db, { type: "sanitized-initial-progress", userId: req.user.id, role: req.user.role });
@@ -1233,6 +1284,8 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
           accountDeleted: true,
         });
       }
+      const banReason = await banLowProgressAbuse(db, req.user, progress);
+      if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
       return res.status(403).json({ error: "This progress update was blocked by server-side anti-cheat protection." });
     }
     if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
@@ -1245,6 +1298,8 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
         accountDeleted: true,
       });
     }
+    const banReason = await banLowProgressAbuse(db, req.user, result.progress);
+    if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
     res.json({ progress: result.progress });
   } catch (error) {
     next(error);
@@ -1657,6 +1712,27 @@ async function canAccessChatMessage(db, located, user) {
   const conversation = await db.collection("conversations").findOne({ pairKey: located.message.conversationId, userIds: user.id });
   return Boolean(conversation);
 }
+
+app.get("/api/chat/mentions", requireUser, async (req, res, next) => {
+  try {
+    const query = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+    if (!/^[a-z0-9_]{0,20}$/.test(query)) return res.status(400).json({ error: "Mention search is invalid." });
+    const db = await getDatabase();
+    const blockedIds = await blockedUserIds(db, req.user.id);
+    const excludedIds = [req.user.id, ...[...blockedIds].filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id))];
+    const users = typeof db.collection("users").find === "function"
+      ? await db.collection("users").find({
+        _id: { $nin: excludedIds },
+        usernameNormalized: { $regex: `^${query}` },
+        banned: { $ne: true },
+      }, { projection: { username: 1, role: 1, usernameNormalized: 1 } }).sort({ usernameNormalized: 1 }).limit(8).toArray()
+      : [];
+    noStore(res);
+    res.json({ users: users.map((user) => ({ id: userIdString(user._id), username: user.username, role: user.role })) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/chat/global", requireUser, async (req, res, next) => {
   try {

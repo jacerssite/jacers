@@ -16,6 +16,7 @@ export const SPECIAL_ASTEROID_REWARD_RANGES: Record<Rarity, readonly [number, nu
 export const RARITY_ORDER: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
 export const DEFAULT_SKIN_CHANCES: Record<Rarity, number> = { Common: 0, Uncommon: 0, Rare: 0, Epic: 15, Legendary: 35 };
 export const DEFAULT_WORLD_CONFIG: WorldGameConfig = {
+    gravityForce: 0.7,
     rainbowStarChance: 3,
     portalSpawnChance: 100,
     rarityOdds: { ...SPECIAL_ASTEROID_ODDS },
@@ -25,7 +26,7 @@ export const DEFAULT_WORLD_CONFIG: WorldGameConfig = {
 };
 export const DEFAULT_GAME_CONFIG: GameConfig = {
     normal: structuredClone(DEFAULT_WORLD_CONFIG),
-    prestige: structuredClone(DEFAULT_WORLD_CONFIG),
+    prestige: { ...structuredClone(DEFAULT_WORLD_CONFIG), gravityForce: 0.84 },
     powerupEffects: {
         shield: { charges: 1 },
         boost: { durationSeconds: 7, movementMultiplier: 1.7 },

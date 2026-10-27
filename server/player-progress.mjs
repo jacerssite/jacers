@@ -1,5 +1,42 @@
 import { validatePlayerProgress } from "./game-data.mjs";
 
+// Secret routes are replayable after their server-observable cooldown. Their
+// per-route collection records must be cleared at that point so their special
+// asteroids can spawn again. Keep this list intentionally narrow: it is the
+// fixed built-in secret route layout, not a general way to delete progress.
+const SECRET_ROUTE_BY_LEVEL_INDEX = new Map([
+  [12, "eclipse"],
+  [16, "nebula"],
+  [17, "archive"],
+  [18, "prestige-gate"],
+  [19, "stellar-sanctum"],
+  [20, "quantum-depths"],
+  [21, "infinity-spiral"],
+]);
+const SECRET_ROUTE_COOLDOWN_MS = 30 * 60 * 1000;
+
+function getExpiredSecretRespawnClaimCount(existing, progress) {
+  let allowedClaims = 0;
+  for (const [levelIndex, secretId] of SECRET_ROUTE_BY_LEVEL_INDEX) {
+    const claimsKey = `orbit-asteroids-${levelIndex}`;
+    const cooldownKey = `orbit-secret-cooldown-${secretId}`;
+    if (!Object.hasOwn(existing, claimsKey) || Object.hasOwn(progress, claimsKey)) continue;
+    const completedAt = Number(existing[cooldownKey]);
+    if (!Number.isSafeInteger(completedAt) || completedAt <= 0 || completedAt + SECRET_ROUTE_COOLDOWN_MS > Date.now()) return -1;
+    // The client removes the completed cooldown alongside its collection
+    // record. Requiring that pair prevents this exception from being reused.
+    if (Object.hasOwn(progress, cooldownKey)) return -1;
+    try {
+      const claims = JSON.parse(existing[claimsKey]);
+      if (!Array.isArray(claims) || claims.some((claim) => !Number.isSafeInteger(claim) || claim < 0 || claim >= 20)) return -1;
+      allowedClaims += claims.length;
+    } catch {
+      return -1;
+    }
+  }
+  return allowedClaims;
+}
+
 // Do not silently replace a balance another device changed since this device's
 // last sync. The caller can keep its local data and ask the player to reload.
 export function hasCurrencyConflict(existing, progress, baseline) {
@@ -65,8 +102,11 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   const earnedAsteroids = (nextCount("orbit-claims") - readCount("orbit-claims"))
     + (nextCount("orbit-special-claims") - readCount("orbit-special-claims"));
   const newAsteroidClaims = nextAsteroidClaims - currentAsteroidClaims;
-  if (newAsteroidClaims < 0) return "asteroid claims cannot be removed in a player sync";
-  if (earnedAsteroids > newAsteroidClaims) return "asteroid balance does not match collected asteroids";
+  if (newAsteroidClaims < 0) {
+    const allowedRespawnClaims = getExpiredSecretRespawnClaimCount(existing, progress);
+    if (allowedRespawnClaims !== -newAsteroidClaims) return "asteroid claims cannot be removed in a player sync";
+  }
+  if (newAsteroidClaims >= 0 && earnedAsteroids > newAsteroidClaims) return "asteroid balance does not match collected asteroids";
   for (const [key, maximumJump] of [["orbit-enemies-killed", 5000], ["orbit-bosses-killed", 100]]) {
     const current = readCount(key);
     const next = nextCount(key);
