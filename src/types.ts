@@ -49,6 +49,7 @@ export type ManagedUser = {
     username: string;
     role: UserRole;
     banned: boolean;
+    loginLocked?: boolean;
     chatMuted?: boolean;
     lastSeenIpAvailable?: boolean;
     ipBanned?: boolean;
@@ -104,6 +105,7 @@ export type FriendEntry = { userId: string; username: string; role: OnlineUser["
 export type FriendRequest = { id: string; userId: string; username: string; role: OnlineUser["role"]; title: string; createdAt: string; direction: "incoming" | "outgoing" };
 export type ChatAttachment = { kind: "image" | "gif" | "video"; url: string; contentType: string; bytes: number };
 export type ChatReaction = { emoji: string; count: number; reacted: boolean };
+export type ChatNotification = { id: string; kind: "direct" | "mention"; sender: string; senderId: string; text: string; conversationUserId?: string };
 export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; reactions?: ChatReaction[]; createdAt: string; readAt?: string | null; editedAt?: string | null; deletedAt?: string | null };
 export type ChatConversation = { id: string; userId: string; username: string; role: OnlineUser["role"]; isOnline: boolean; lastMessagePreview: string; lastMessageAt: string | null; unread: number };
 export type RouletteTier = {

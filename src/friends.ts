@@ -27,3 +27,11 @@ export function blockUser(userId: string) {
     return apiRequest<{ blocked: true }>("/blocks", { method: "POST", body: JSON.stringify({ userId }) });
 }
 
+export type BlockedPlayer = { id: string; username: string; role: string; createdAt: string | null };
+export function loadBlockedUsers() {
+    return apiRequest<{ blocked: BlockedPlayer[] }>("/blocks");
+}
+export function unblockUser(userId: string) {
+    return apiRequest<void>(`/blocks/${encodeURIComponent(userId)}`, { method: "DELETE" });
+}
+

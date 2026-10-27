@@ -1,12 +1,13 @@
 import type { OnlineLeaderboardEntry, OnlinePlayerPresence, OnlineSettings, OnlineUser, PublicPlayerProfile } from "./types";
 import { apiRequest } from "./api";
 import { levels } from "./levels";
-import { createTextButton } from "./ui";
+import { createTextButton, showActionDialog } from "./ui";
 import { loadFriends, sendFriendRequest } from "./friends";
 import { attachPlayerCard } from "./player-card";
 import { createTitleBadge } from "./title-style";
 
 type LeaderboardContext = {
+    getCurrentUser: () => OnlineUser | null;
     showAccount: () => void;
     showLevelMenu: () => void;
     showMenu: () => void;
@@ -18,9 +19,9 @@ type LeaderboardContext = {
 };
 
 export function createLeaderboard(context: LeaderboardContext) {
-    const { showAccount, showLevelMenu, showMenu, sendPresenceHeartbeat, setCurrentOnlineUser, setGoldenTimeLimit, createShipPreview, formatTime } = context;
+    const { getCurrentUser, showAccount, showLevelMenu, showMenu, sendPresenceHeartbeat, setCurrentOnlineUser, setGoldenTimeLimit, createShipPreview, formatTime } = context;
     let loadedUser: OnlineUser | null = null;
-    const currentUserName = () => loadedUser?.username ?? null;
+    const currentUserName = () => getCurrentUser()?.username ?? loadedUser?.username ?? null;
 
     function showLeaderboard() {
         const menu = document.createElement("main");
@@ -327,7 +328,8 @@ export function createLeaderboard(context: LeaderboardContext) {
         remove.type = "button";
         remove.textContent = "Delete";
         remove.addEventListener("click", async () => {
-            if (!globalThis.confirm(`Delete ${entry.username}'s ${entry.level} record?`)) return;
+            const dialog = await showActionDialog({ title: "Delete leaderboard record?", description: `Delete ${entry.username}'s ${entry.level} record permanently?`, confirmLabel: "Delete record", danger: true });
+            if (!dialog.confirmed) return;
             try {
                 await apiRequest(`/leaderboard/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
                 refresh();

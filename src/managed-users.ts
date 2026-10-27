@@ -2,7 +2,7 @@ import type { Level, ManagedUser, PowerupKind } from "./types";
 import { apiRequest } from "./api";
 import { levels } from "./levels";
 import { PROFILE_TITLES, powerupLabels, powerupPrices } from "./game-config";
-import { createTextButton } from "./ui";
+import { createTextButton, showActionDialog } from "./ui";
 
 let managedPresenceTimer = 0;
 type ManagedUsersOptions = {
@@ -139,11 +139,6 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             roleLabel.append(role);
             role.disabled = !canManageRoles;
             let emailBanButton: HTMLButtonElement | null = null;
-            const banLabel = document.createElement("label");
-            const banned = document.createElement("input");
-            banned.type = "checkbox";
-            banned.checked = user.banned;
-            banLabel.append(banned, document.createTextNode(" Ban account"));
             const chatMute = createTextButton(user.chatMuted ? "Unmute chat" : "Mute chat", async () => {
                 chatMute.disabled = true;
                 try {
@@ -323,24 +318,15 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 levelSection.hidden = true;
                 progressHeading.hidden = true;
                 progress.hidden = true;
-                save.textContent = "Save ban status";
+                save.hidden = true;
             }
-            form.append(username, emailLabel, roleLabel, banLabel, chatMute, progression, levelSection, progressHeading, progress, save, result);
+            form.append(username, emailLabel, roleLabel, chatMute, progression, levelSection, progressHeading, progress, save, result);
             form.addEventListener("submit", async (event) => {
                 event.preventDefault();
                 save.disabled = true;
                 result.textContent = "Saving player profile...";
                 try {
-                    if (!canEditProfiles) {
-                        await apiRequest(`/admin/users/${encodeURIComponent(user.id)}`, {
-                            method: "PATCH",
-                            body: JSON.stringify({ banned: banned.checked }),
-                        });
-                        user.banned = banned.checked;
-                        result.textContent = `Account ${banned.checked ? "banned" : "restored"}.`;
-                        summary.textContent = `${user.username} / ${banned.checked ? "BANNED" : "ACTIVE"} / ${user.role.toUpperCase()}`;
-                        return;
-                    }
+                    if (!canEditProfiles) return;
                     const parsedProgress: unknown = JSON.parse(progress.value);
                     if (!parsedProgress || typeof parsedProgress !== "object" || Array.isArray(parsedProgress)) {
                         throw new Error("Saved profile data must be a JSON object.");
@@ -396,7 +382,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                         else delete updatedProgress[key];
                     });
                     const submittedEmail = email.value.trim();
-                    const profileUpdate: Record<string, unknown> = { username: username.value, role: role.value, banned: banned.checked, progress: updatedProgress };
+                    const profileUpdate: Record<string, unknown> = { username: username.value, role: role.value, progress: updatedProgress };
                     if (submittedEmail) profileUpdate.email = submittedEmail;
                     const updatedProfile = await apiRequest<{ emailMasked?: string | null; emailSet?: boolean }>(`/admin/users/${encodeURIComponent(user.id)}`, {
                         method: "PATCH",
@@ -414,7 +400,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     email.value = "";
                     email.placeholder = user.emailMasked ? `Current: ${user.emailMasked}` : "Enter an email address";
                     result.textContent = "Profile saved. Changes are available on the player's signed-in devices.";
-                    summary.textContent = `${username.value} / ${banned.checked ? "BANNED" : "ACTIVE"} / ${role.value.toUpperCase()}`;
+                    summary.textContent = `${username.value} / ${user.banned ? "BANNED" : user.loginLocked ? "LOCKED" : "ACTIVE"} / ${role.value.toUpperCase()}`;
                 } catch (error) {
                     result.textContent = error instanceof Error ? error.message : "Could not save this profile.";
                 } finally {
@@ -428,7 +414,8 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             actionStatus.setAttribute("role", "status");
             const resetPassword = createTextButton("Reset password", () => {});
             resetPassword.addEventListener("click", async () => {
-                if (!globalThis.confirm(`Reset ${user.username}'s password? They will be signed out everywhere and required to change it.`)) return;
+                const dialog = await showActionDialog({ title: `Reset ${user.username}'s password?`, description: "They will be signed out everywhere and required to change their temporary password.", confirmLabel: "Reset password", danger: true });
+                if (!dialog.confirmed) return;
                 resetPassword.disabled = true;
                 actionStatus.textContent = "Resetting password...";
                 try {
@@ -442,7 +429,8 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             });
             const makeRecoveryCode = createTextButton("Make new recovery code", () => {});
             makeRecoveryCode.addEventListener("click", async () => {
-                if (!globalThis.confirm(`Replace ${user.username}'s current recovery code? The old code will stop working.`)) return;
+                const dialog = await showActionDialog({ title: "Replace recovery code?", description: `The old recovery code for ${user.username} will stop working.`, confirmLabel: "Replace code", danger: true });
+                if (!dialog.confirmed) return;
                 makeRecoveryCode.disabled = true;
                 try {
                     const response = await apiRequest<{ recoveryCode: string }>(`/admin/users/${encodeURIComponent(user.id)}/recovery-code`, { method: "POST", body: "{}" });
@@ -467,6 +455,54 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     clearRecoveryLock.disabled = false;
                 }
             });
+            const accountBan = createTextButton(user.banned ? "Unban account" : "Ban account", () => {});
+            accountBan.classList.toggle("danger", !user.banned);
+            accountBan.addEventListener("click", async () => {
+                const banning = !user.banned;
+                const dialog = await showActionDialog({
+                    title: banning ? `Ban ${user.username}?` : `Unban ${user.username}?`,
+                    description: banning ? "They will be signed out immediately and cannot log back in until the ban is removed." : "This restores access to the account.",
+                    confirmLabel: banning ? "Ban account" : "Unban account",
+                    danger: banning,
+                    input: { label: "Reason for this moderation action", placeholder: banning ? "Explain the ban reason" : "Explain why the ban is being removed" },
+                });
+                if (!dialog.confirmed) return;
+                accountBan.disabled = true;
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/ban`, { method: "POST", body: JSON.stringify({ banned: banning, reason: dialog.value }) });
+                    user.banned = banning;
+                    accountBan.textContent = banning ? "Unban account" : "Ban account";
+                    accountBan.classList.toggle("danger", !banning);
+                    summary.textContent = `${user.username} / ${banning ? "BANNED" : user.loginLocked ? "LOCKED" : "ACTIVE"} / ${user.role.toUpperCase()}`;
+                    actionStatus.textContent = banning ? "Account banned and signed out. The reason was sent to moderation log." : "Account ban removed. The change was sent to moderation log.";
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not update the account ban.";
+                } finally { accountBan.disabled = false; }
+            });
+            const loginLock = createTextButton(user.loginLocked ? "Unlock account login" : "Lock account login", () => {});
+            loginLock.classList.toggle("danger", !user.loginLocked);
+            loginLock.addEventListener("click", async () => {
+                const locking = !user.loginLocked;
+                const dialog = await showActionDialog({
+                    title: locking ? `Lock ${user.username}'s login?` : `Unlock ${user.username}'s login?`,
+                    description: locking ? "This signs the player out and temporarily prevents any login. It does not delete their account." : "This lets the player sign in again.",
+                    confirmLabel: locking ? "Lock login" : "Unlock login",
+                    danger: locking,
+                    input: { label: "Reason for this moderation action", placeholder: locking ? "Explain the login lock" : "Explain why the lock is being removed" },
+                });
+                if (!dialog.confirmed) return;
+                loginLock.disabled = true;
+                try {
+                    await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/login-lock`, { method: "POST", body: JSON.stringify({ locked: locking, reason: dialog.value }) });
+                    user.loginLocked = locking;
+                    loginLock.textContent = locking ? "Unlock account login" : "Lock account login";
+                    loginLock.classList.toggle("danger", !locking);
+                    summary.textContent = `${user.username} / ${user.banned ? "BANNED" : locking ? "LOCKED" : "ACTIVE"} / ${user.role.toUpperCase()}`;
+                    actionStatus.textContent = locking ? "Account login locked and signed out. The reason was sent to moderation log." : "Account login unlocked. The change was sent to moderation log.";
+                } catch (error) {
+                    actionStatus.textContent = error instanceof Error ? error.message : "Could not update the account login lock.";
+                } finally { loginLock.disabled = false; }
+            });
             const ipBanButton = createTextButton(user.ipBanned ? "Unban latest login network" : "Ban latest login network", () => {});
             ipBanButton.addEventListener("click", async () => {
                 if (!user.lastSeenIpAvailable) {
@@ -477,7 +513,8 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 const warning = banning
                     ? "This bans the latest network address for every account using it (shared Wi-Fi/VPNs can affect multiple players). Continue?"
                     : "Allow logins again from this account's latest network address?";
-                if (!globalThis.confirm(warning)) return;
+                const dialog = await showActionDialog({ title: banning ? "Ban login network?" : "Remove network ban?", description: warning, confirmLabel: banning ? "Ban network" : "Remove ban", danger: banning });
+                if (!dialog.confirmed) return;
                 ipBanButton.disabled = true;
                 actionStatus.textContent = banning ? "Banning latest login network..." : "Removing network ban...";
                 try {
@@ -504,7 +541,8 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                 const warning = banning
                     ? `Permanently block ${user.emailMasked ?? "this email address"} from registering, signing in, or recovering accounts?`
                     : `Allow ${user.emailMasked ?? "this email address"} to be used again?`;
-                if (!globalThis.confirm(warning)) return;
+                const dialog = await showActionDialog({ title: banning ? "Permanently ban email?" : "Remove email ban?", description: warning, confirmLabel: banning ? "Ban email" : "Remove ban", danger: banning });
+                if (!dialog.confirmed) return;
                 emailBanButton.disabled = true;
                 actionStatus.textContent = banning ? "Permanently banning email..." : "Removing permanent email ban...";
                 try {
@@ -548,8 +586,14 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     actionStatus.textContent = "Select at least one category to wipe.";
                     return;
                 }
-                if (!globalThis.confirm(`This will permanently remove the selected data for ${user.username} and sign them out everywhere. A seven-day backup will be created.`)
-                    || globalThis.prompt(`Type ${user.username} to confirm this wipe:`) !== user.username) return;
+                const dialog = await showActionDialog({
+                    title: `Wipe ${user.username}'s data?`,
+                    description: "This permanently removes the selected data and signs the player out everywhere. A seven-day backup will be created first.",
+                    confirmLabel: "Wipe selected data",
+                    danger: true,
+                    input: { label: `Type ${user.username} to confirm`, requiredValue: user.username },
+                });
+                if (!dialog.confirmed) return;
                 wipeButton.disabled = true;
                 try {
                     const response = await apiRequest<{ backupId: string }>(`/admin/users/${encodeURIComponent(user.id)}/wipe`, {
@@ -588,7 +632,9 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             };
             const restoreButton = createTextButton("Restore selected backup", () => {});
             restoreButton.addEventListener("click", async () => {
-                if (!backupSelect.value || !globalThis.confirm(`Restore this backup for ${user.username}? Current values may be replaced.`)) return;
+                if (!backupSelect.value) return;
+                const dialog = await showActionDialog({ title: `Restore ${user.username}'s backup?`, description: "The selected backup will replace current values in its saved categories.", confirmLabel: "Restore backup" });
+                if (!dialog.confirmed) return;
                 restoreButton.disabled = true;
                 try {
                     await apiRequest(`/admin/users/${encodeURIComponent(user.id)}/restore`, {
@@ -606,8 +652,14 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
             const deleteAccount = createTextButton("Delete account permanently", () => {});
             deleteAccount.classList.add("danger");
             deleteAccount.addEventListener("click", async () => {
-                if (!globalThis.confirm(`Permanently delete ${user.username}? This removes the account, progress, leaderboard entries, messages, and backups.`)
-                    || globalThis.prompt(`Type ${user.username} to confirm account deletion:`) !== user.username) return;
+                const dialog = await showActionDialog({
+                    title: `Delete ${user.username}'s account?`,
+                    description: "This permanently deletes the account, progress, leaderboard entries, messages, and backups. This cannot be undone.",
+                    confirmLabel: "Delete account",
+                    danger: true,
+                    input: { label: `Type ${user.username} to confirm`, requiredValue: user.username },
+                });
+                if (!dialog.confirmed) return;
                 deleteAccount.disabled = true;
                 actionStatus.textContent = "Deleting account...";
                 try {
@@ -619,7 +671,7 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     deleteAccount.disabled = false;
                 }
             });
-            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, ipBanButton, emailBanButton, deleteAccount, actionStatus);
+            accountActions.append(wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, accountBan, loginLock, ipBanButton, emailBanButton, deleteAccount, actionStatus);
             if (!canManageSensitive) {
                 [wipeTitle, wipeOptions, wipeButton, backupSelect, restoreButton, resetPassword, makeRecoveryCode, clearRecoveryLock, deleteAccount].forEach((element) => { element.hidden = true; });
             }

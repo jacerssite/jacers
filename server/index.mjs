@@ -285,6 +285,20 @@ async function recordSecurityEvent(db, event) {
   }
 }
 
+async function recordModerationLog(db, entry) {
+  try {
+    const collection = db.collection("moderation_log");
+    if (typeof collection.insertOne !== "function") return;
+    await collection.insertOne({ ...entry, createdAt: new Date() });
+  } catch (error) {
+    console.error("Could not record moderation log:", error);
+  }
+}
+
+function moderationReason(value, fallback) {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 300) : fallback;
+}
+
 function hashRedemptionCode(code) {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
@@ -597,10 +611,10 @@ async function getAuthenticatedUser(req) {
   if (!session) return null;
   const user = await db.collection("users").findOne(
     { _id: session.userId },
-    { projection: { username: 1, usernameNormalized: 1, role: 1, banned: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, readReceipts: 1, typingIndicators: 1, chatMuted: 1, emailHash: 1, humanVerified: 1 } },
+    { projection: { username: 1, usernameNormalized: 1, role: 1, banned: 1, loginLocked: 1, mustChangePassword: 1, appearOffline: 1, leaderboardOptIn: 1, allowFriendRequests: 1, readReceipts: 1, typingIndicators: 1, chatMuted: 1, emailHash: 1, humanVerified: 1 } },
   );
   if (user?.emailHash && await isEmailBanned(db, user.emailHash)) return null;
-  return user && !user.banned && USER_ROLES.includes(user.role) && (user.role !== "developer" || user.usernameNormalized === developerUsername)
+  return user && !user.banned && !user.loginLocked && USER_ROLES.includes(user.role) && (user.role !== "developer" || user.usernameNormalized === developerUsername)
     ? { id: user._id, username: user.username, role: user.role, mustChangePassword: Boolean(user.mustChangePassword), appearOffline: Boolean(user.appearOffline), leaderboardOptIn: user.leaderboardOptIn !== false, allowFriendRequests: user.allowFriendRequests !== false, readReceipts: user.readReceipts !== false, typingIndicators: user.typingIndicators !== false, humanVerified: user.humanVerified !== false, chatMuted: Boolean(user.chatMuted), offlineOwnerEligible: user.role === "owner" && user.emailHash === offlineOwnerEmailHash }
     : null;
 }
@@ -717,6 +731,13 @@ async function isBlocked(db, first, second) {
   return Boolean(a || b);
 }
 
+async function blockedUserIds(db, userId) {
+  const blocks = db.collection("user_blocks");
+  if (typeof blocks.find !== "function") return new Set();
+  const rows = await blocks.find({ $or: [{ blockerId: userId }, { blockedId: userId }] }).toArray();
+  return new Set(rows.map((row) => userIdString(userIdString(row.blockerId) === userIdString(userId) ? row.blockedId : row.blockerId)));
+}
+
 async function getFriendship(db, first, second) {
   return db.collection("friendships").findOne({ pairKey: friendPairKey(first, second) });
 }
@@ -750,9 +771,37 @@ function sanitizeChatText(value) {
 
 async function unreadChatCount(db, userId) {
   const conversations = db.collection("conversations");
-  if (typeof conversations.find !== "function") return 0;
-  const rows = await conversations.find({ userIds: userId }).toArray();
-  return rows.reduce((sum, row) => sum + (Number(row.unread?.[userIdString(userId)]) || 0), 0);
+  const rows = typeof conversations.find === "function" ? await conversations.find({ userIds: userId }).toArray() : [];
+  const directUnread = rows.reduce((sum, row) => sum + (Number(row.unread?.[userIdString(userId)]) || 0), 0);
+  const mentions = db.collection("chat_notifications");
+  const mentionUnread = typeof mentions.countDocuments === "function"
+    ? await mentions.countDocuments({ recipientId: userId, kind: "mention", readAt: { $exists: false } })
+    : 0;
+  return directUnread + mentionUnread;
+}
+
+async function latestChatNotification(db, userId) {
+  const notifications = db.collection("chat_notifications");
+  if (typeof notifications.findOne !== "function") return null;
+  const row = await notifications.findOne({ recipientId: userId, readAt: { $exists: false } }, { sort: { createdAt: -1 } });
+  if (!row) return null;
+  const collection = row.kind === "mention" ? "global_chat_messages" : "chat_messages";
+  const message = row.messageId && typeof db.collection(collection).findOne === "function"
+    ? await db.collection(collection).findOne({ _id: row.messageId })
+    : null;
+  if (!message) return null;
+  return {
+    id: userIdString(row._id), kind: row.kind === "mention" ? "mention" : "direct",
+    sender: message.sender ?? "Pilot", senderId: userIdString(message.senderId),
+    text: message.deletedAt ? "Message deleted" : message.text || "Sent an attachment",
+    ...(row.kind === "direct" && row.conversationUserId ? { conversationUserId: userIdString(row.conversationUserId) } : {}),
+  };
+}
+
+function mentionedUsernames(text) {
+  const names = new Set();
+  for (const match of text.matchAll(/@([a-z0-9_]{3,24})/gi)) names.add(match[1].toLowerCase());
+  return [...names];
 }
 
 async function accountHandler(req, res, next, mode) {
@@ -824,6 +873,14 @@ async function accountHandler(req, res, next, mode) {
       // Seed a new account with an empty cloud profile so a refresh or a
       // failed first sync can never import guest localStorage progression.
       await initializePlayerProgress(db.collection("player_progress"), user._id, {});
+      await recordModerationLog(db, {
+        action: "Account created",
+        reason: "New account registration completed.",
+        actorId: user._id,
+        actorUsername: user.username,
+        targetUserId: user._id,
+        targetUsername: user.username,
+      });
       await createSession(user._id, res, ipHash);
       noStore(res);
       return res.status(201).json({
@@ -836,6 +893,7 @@ async function accountHandler(req, res, next, mode) {
     const valid = await argon2.verify(user?.passwordHash ?? dummyPasswordHash, credentials.password);
     if (!valid || !user) return res.status(401).json({ error: "Username or password is incorrect." });
     if (user.banned) return res.status(403).json({ error: "This account has been banned. Contact the owner for help." });
+    if (user.loginLocked) return res.status(403).json({ error: "This account has been locked. Contact the owner for help." });
     if (user.emailHash && await isEmailBanned(db, user.emailHash)) return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
     await db.collection("users").updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date(), ...(ipHash ? { lastSeenIpHash: ipHash } : {}) } });
     await createSession(user._id, res, ipHash);
@@ -1033,8 +1091,9 @@ app.post("/api/presence/heartbeat", requireSameOrigin, requireUser, async (req, 
     const friendships = db.collection("friendships");
     const pendingRequests = await countDocumentsSafe(friendships, { userIds: req.user.id, status: "pending", requestedBy: { $ne: req.user.id } });
     const unreadMessages = await unreadChatCount(db, req.user.id);
+    const chatNotification = await latestChatNotification(db, req.user.id);
     noStore(res);
-    res.json({ pendingRequests, unreadMessages });
+    res.json({ pendingRequests, unreadMessages, chatNotification });
   } catch (error) {
     next(error);
   }
@@ -1044,7 +1103,9 @@ app.get("/api/presence", async (_req, res, next) => {
   try {
     noStore(res);
     const db = await getDatabase();
-    const activeUserIds = await getActiveUserIds(db);
+    const viewer = await getAuthenticatedUser(_req);
+    const hiddenIds = viewer ? await blockedUserIds(db, viewer.id) : new Set();
+    const activeUserIds = new Set([...await getActiveUserIds(db)].filter((id) => !hiddenIds.has(id)));
     if (!activeUserIds.size) return res.json({ users: [], truncated: false });
     const users = await db.collection("users")
       .find({
@@ -1096,6 +1157,44 @@ app.get("/api/account/progress", requireUser, async (req, res, next) => {
   }
 });
 
+async function deleteAbusiveNewAccount(db, user, progress) {
+  if (user.role !== "player") return null;
+  const account = await db.collection("users").findOne(
+    { _id: user.id },
+    { projection: { username: 1, createdAt: 1 } },
+  );
+  if (!account?.createdAt || Date.now() - new Date(account.createdAt).getTime() > 3 * 60 * 1000) return null;
+  const asteroids = Number(progress?.["orbit-claims"] ?? 0);
+  const specialAsteroids = Number(progress?.["orbit-special-claims"] ?? 0);
+  if (asteroids <= 1000 && specialAsteroids <= 100) return null;
+  const redemptions = db.collection("code_redemptions");
+  const usedCode = typeof redemptions.countDocuments === "function"
+    && await redemptions.countDocuments({ userId: user.id }, { limit: 1 }) > 0;
+  if (usedCode) return null;
+
+  const reason = asteroids > 1000
+    ? "More than 1,000 asteroids were received during the first three minutes without a reward code."
+    : "More than 100 special asteroids were received during the first three minutes without a reward code.";
+  await Promise.all([
+    db.collection("user_sessions").deleteMany({ userId: user.id }),
+    db.collection("player_progress").deleteOne({ _id: user.id }),
+    db.collection("leaderboard_entries").deleteMany({ userId: user.id }),
+    db.collection("code_redemptions").deleteMany({ userId: user.id }),
+    db.collection("code_redemption_logs").deleteMany({ userId: user.id }),
+    db.collection("users").deleteOne({ _id: user.id, role: "player" }),
+  ]);
+  await recordSecurityEvent(db, { type: "automatic-new-account-deletion", userId: user.id, reason, asteroids, specialAsteroids });
+  await recordModerationLog(db, {
+    action: "Automatic account deletion",
+    reason,
+    actorId: null,
+    actorUsername: "Anti-cheat",
+    targetUserId: user.id,
+    targetUsername: account.username,
+  });
+  return reason;
+}
+
 app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requireUser, async (req, res, next) => {
   try {
     const progress = validatePlayerProgress(req.body?.progress);
@@ -1109,6 +1208,13 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
     const collection = db.collection("player_progress");
     if (req.body?.initializeOnly === true) {
       if (req.body.baseProgress !== null) return res.status(400).json({ error: "Initial progress must have a null base." });
+      const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
+      if (deletionReason) {
+        return res.status(403).json({
+          error: `Your account is being deleted: ${deletionReason}`,
+          accountDeleted: true,
+        });
+      }
       const safeInitialProgress = sanitizeInitialPlayerProgress(progress, req.user.role);
       if (req.user.role === "player" && JSON.stringify(safeInitialProgress) !== JSON.stringify(progress)) {
         await recordSecurityEvent(db, { type: "sanitized-initial-progress", userId: req.user.id, role: req.user.role });
@@ -1120,11 +1226,25 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
     const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress, false, undefined, req.user.role);
     if (result.suspiciousMutation) {
       await recordSecurityEvent(db, { type: "suspicious-progress-mutation", userId: req.user.id, role: req.user.role, reason: result.suspiciousMutation });
+      const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
+      if (deletionReason) {
+        return res.status(403).json({
+          error: `Your account is being deleted: ${deletionReason}`,
+          accountDeleted: true,
+        });
+      }
       return res.status(403).json({ error: "This progress update was blocked by server-side anti-cheat protection." });
     }
     if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
       error: result.conflict ? "Progress changed on another device. Cloud saving is paused; signing in again will replace unsaved local changes with cloud progress." : "Player progress exceeds the allowed size.",
     });
+    const deletionReason = await deleteAbusiveNewAccount(db, req.user, result.progress);
+    if (deletionReason) {
+      return res.status(403).json({
+        error: `Your account is being deleted: ${deletionReason}`,
+        accountDeleted: true,
+      });
+    }
     res.json({ progress: result.progress });
   } catch (error) {
     next(error);
@@ -1302,11 +1422,13 @@ app.get("/api/players/:id", async (req, res, next) => {
     noStore(res);
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid player id." });
     const db = await getDatabase();
+    const viewer = await getAuthenticatedUser(req);
     const user = await db.collection("users").findOne(
       { _id: new ObjectId(req.params.id), role: { $in: USER_ROLES }, banned: { $ne: true } },
       { projection: { username: 1, role: 1, appearOffline: 1 } },
     );
     if (!user) return res.status(404).json({ error: "Player not found." });
+    const blocked = viewer ? await isBlocked(db, viewer.id, user._id) : false;
     const [activeUserIds, profileTitles] = await Promise.all([
       user.appearOffline ? Promise.resolve(new Set()) : getActiveUserIds(db, [user._id]),
       getProfileTitles(db),
@@ -1319,7 +1441,7 @@ app.get("/api/players/:id", async (req, res, next) => {
       player: {
         id: user._id.toHexString(),
         ...publicProfileFromProgress(user.username, user.role, saved?.data ?? {}, profileTitles),
-        isOnline: activeUserIds.has(user._id.toHexString()),
+        isOnline: !blocked && activeUserIds.has(user._id.toHexString()),
       },
     });
   } catch (error) {
@@ -1331,7 +1453,8 @@ async function friendRowsForUser(db, userId) {
   const rows = typeof db.collection("friendships").find === "function"
     ? await db.collection("friendships").find({ userIds: userId }).sort({ createdAt: -1 }).toArray()
     : [];
-  const otherIds = rows.map((row) => row.userIds?.find((id) => userIdString(id) !== userIdString(userId))).filter(Boolean);
+  const hiddenIds = await blockedUserIds(db, userId);
+  const otherIds = rows.map((row) => row.userIds?.find((id) => userIdString(id) !== userIdString(userId))).filter((id) => id && !hiddenIds.has(userIdString(id)));
   const users = otherIds.length && typeof db.collection("users").find === "function"
     ? await db.collection("users").find({ _id: { $in: otherIds } }, { projection: { username: 1, role: 1, banned: 1, appearOffline: 1 } }).toArray()
     : [];
@@ -1341,10 +1464,11 @@ async function friendRowsForUser(db, userId) {
   const progressCollection = db.collection("player_progress");
   const result = { friends: [], incoming: [], outgoing: [] };
   for (const row of rows) {
-    const otherId = otherIds[rows.indexOf(row)];
+    const otherId = row.userIds?.find((id) => userIdString(id) !== userIdString(userId));
+    if (!otherId) continue;
     const id = userIdString(otherId);
     const other = usersById.get(id);
-    if (!other || other.banned) continue;
+    if (!other || other.banned || hiddenIds.has(id)) continue;
     const progress = await progressCollection.findOne({ _id: otherId }, { projection: { data: 1 } });
     const profile = publicProfileFromProgress(other.username, other.role, progress?.data ?? {}, profileTitles);
     const base = { userId: id, username: other.username, role: other.role, title: profile.title, isOnline: !other.appearOffline && active.has(id), unread: 0, createdAt: row.createdAt?.toISOString?.() ?? row.createdAt ?? null };
@@ -1474,6 +1598,24 @@ app.post("/api/blocks", requireSameOrigin, requireUser, async (req, res, next) =
   }
 });
 
+app.get("/api/blocks", requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const rows = typeof db.collection("user_blocks").find === "function"
+      ? await db.collection("user_blocks").find({ blockerId: req.user.id }).sort({ createdAt: -1 }).toArray()
+      : [];
+    const ids = rows.map((row) => row.blockedId);
+    const users = ids.length && typeof db.collection("users").find === "function"
+      ? await db.collection("users").find({ _id: { $in: ids } }, { projection: { username: 1, role: 1, banned: 1 } }).toArray()
+      : [];
+    const usersById = new Map(users.map((user) => [userIdString(user._id), user]));
+    noStore(res);
+    res.json({ blocked: rows.map((row) => ({ id: userIdString(row.blockedId), username: usersById.get(userIdString(row.blockedId))?.username ?? "Deleted player", role: usersById.get(userIdString(row.blockedId))?.role ?? "player", createdAt: row.createdAt?.toISOString?.() ?? row.createdAt ?? null })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/blocks/:userId", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
     const targetId = validObjectId(req.params.userId);
@@ -1522,6 +1664,8 @@ app.get("/api/chat/global", requireUser, async (req, res, next) => {
     const db = await getDatabase();
     const limit = Math.max(1, Math.min(60, Number(req.query.limit) || 40));
     const filter = {};
+    const hiddenIds = await blockedUserIds(db, req.user.id);
+    if (hiddenIds.size) filter.senderId = { $nin: [...hiddenIds].map((id) => new ObjectId(id)) };
     if (req.query.after && ObjectId.isValid(req.query.after)) filter._id = { $gt: new ObjectId(req.query.after) };
     const messages = typeof db.collection("global_chat_messages").find === "function"
       ? await db.collection("global_chat_messages").find(filter).sort({ _id: -1 }).limit(limit).toArray()
@@ -1553,7 +1697,24 @@ app.post("/api/chat/global", requireSameOrigin, chatMessageLimiter, requireUser,
     if (recent.length >= 3 && recent.every((message) => message.text === moderatedText)) return res.status(429).json({ error: "Please do not repeat the same message." });
     const now = new Date();
     const inserted = await messages.insertOne({ senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, createdAt: now });
+    const mentions = mentionedUsernames(moderatedText).filter((name) => name !== req.user.usernameNormalized);
+    if (mentions.length && typeof db.collection("users").find === "function") {
+      const targets = await db.collection("users").find({ usernameNormalized: { $in: mentions }, _id: { $ne: req.user.id }, banned: { $ne: true } }, { projection: { _id: 1 } }).toArray();
+      if (targets.length) await db.collection("chat_notifications").insertMany(targets.map((target) => ({ recipientId: target._id, senderId: req.user.id, messageId: inserted.insertedId, kind: "mention", createdAt: now })));
+    }
     res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: "global", senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, createdAt: now.toISOString() } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/chat/mentions/read", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    await (await getDatabase()).collection("chat_notifications").updateMany(
+      { recipientId: req.user.id, kind: "mention", readAt: { $exists: false } },
+      { $set: { readAt: new Date() } },
+    );
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -1665,6 +1826,7 @@ app.post("/api/chat/conversations/:userId/messages", requireSameOrigin, chatMess
       { $set: { pairKey, userIds: [req.user.id, targetId], lastMessageAt: now, lastMessagePreview: moderatedText || "Attachment" }, $inc: { [`unread.${userIdString(targetId)}`]: 1 }, $setOnInsert: { createdAt: now } },
       { upsert: true },
     );
+    await db.collection("chat_notifications").insertOne({ recipientId: targetId, senderId: req.user.id, messageId: inserted.insertedId, conversationUserId: req.user.id, kind: "direct", createdAt: now });
     res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: pairKey, senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, ...(attachment ? { attachment } : {}), createdAt: now.toISOString() } });
   } catch (error) {
     next(error);
@@ -1683,6 +1845,7 @@ app.post("/api/chat/conversations/:userId/read", requireSameOrigin, requireUser,
     if (req.user.readReceipts === false) update.$unset = { [`readAt.${userId}`]: "" };
     else update.$set[`readAt.${userId}`] = new Date();
     await db.collection("conversations").updateOne({ pairKey: friendPairKey(req.user.id, targetId) }, update);
+    await db.collection("chat_notifications").updateMany({ recipientId: req.user.id, kind: "direct", conversationUserId: targetId, readAt: { $exists: false } }, { $set: { readAt: new Date() } });
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -2033,6 +2196,7 @@ app.get("/api/admin/users", requirePermission("moderation"), async (_req, res, n
         usernameNormalized: 1,
         role: 1,
         banned: 1,
+        loginLocked: 1,
         chatMuted: 1,
         appearOffline: 1,
         createdAt: 1,
@@ -2083,9 +2247,10 @@ app.get("/api/admin/users", requirePermission("moderation"), async (_req, res, n
         username: user.username,
         role: user.role,
         banned: Boolean(user.banned),
+        loginLocked: Boolean(user.loginLocked),
         chatMuted: Boolean(user.chatMuted),
-        status: user.banned ? "banned" : "active",
-        isOnline: !user.banned && !user.appearOffline && onlineUserIds.has(user._id.toHexString()),
+        status: user.banned ? "banned" : user.loginLocked ? "locked" : "active",
+        isOnline: !user.banned && !user.loginLocked && !user.appearOffline && onlineUserIds.has(user._id.toHexString()),
         createdAt: user.createdAt,
         usernameChangedAt: user.usernameChangedAt ?? null,
         lastLoginAt: user.lastLoginAt ?? null,
@@ -2114,7 +2279,7 @@ async function getTargetManagedUser(db, rawId, actorRole = "owner") {
   if (!userId) return { error: { status: 400, message: "Invalid account." } };
   const user = await db.collection("users").findOne(
     { _id: userId },
-    { projection: { role: 1, username: 1, usernameNormalized: 1, lastSeenIpHash: 1, emailHash: 1, emailMasked: 1 } },
+    { projection: { role: 1, username: 1, usernameNormalized: 1, lastSeenIpHash: 1, emailHash: 1, emailMasked: 1, banned: 1, loginLocked: 1 } },
   );
   if (!user) return { error: { status: 404, message: "Account not found." } };
   if (isOwnerEquivalentRole(user.role)) return { error: { status: 403, message: "Owner accounts are protected from player management." } };
@@ -2123,6 +2288,73 @@ async function getTargetManagedUser(db, rawId, actorRole = "owner") {
   }
   return { user, userId };
 }
+
+app.get("/api/admin/moderation-log", requirePermission("moderation"), async (_req, res, next) => {
+  try {
+    noStore(res);
+    const db = await getDatabase();
+    const collection = db.collection("moderation_log");
+    const entries = typeof collection.find === "function"
+      ? await collection.find({}).sort({ createdAt: -1 }).limit(250).toArray()
+      : [];
+    res.json({ entries: entries.map((entry) => ({
+      id: userIdString(entry._id),
+      action: entry.action,
+      reason: entry.reason,
+      actor: entry.actorUsername ?? "System",
+      target: entry.targetUsername ?? "Unknown player",
+      createdAt: entry.createdAt ?? null,
+    })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/ban", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    const banned = req.body?.banned !== false;
+    const reason = moderationReason(req.body?.reason, banned ? "No reason supplied." : "Ban removed.");
+    await db.collection("users").updateOne({ _id: target.userId }, { $set: { banned } });
+    if (banned) await db.collection("user_sessions").deleteMany({ userId: target.userId });
+    await recordModerationLog(db, {
+      action: banned ? "Account banned" : "Account unbanned",
+      reason,
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      targetUserId: target.userId,
+      targetUsername: target.user.username,
+    });
+    res.json({ ok: true, banned });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/users/:id/login-lock", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    const locked = req.body?.locked !== false;
+    const reason = moderationReason(req.body?.reason, locked ? "No reason supplied." : "Login lock removed.");
+    await db.collection("users").updateOne({ _id: target.userId }, { $set: { loginLocked: locked } });
+    if (locked) await db.collection("user_sessions").deleteMany({ userId: target.userId });
+    await recordModerationLog(db, {
+      action: locked ? "Account login locked" : "Account login unlocked",
+      reason,
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      targetUserId: target.userId,
+      targetUsername: target.user.username,
+    });
+    res.json({ ok: true, loginLocked: locked });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/admin/users/:id/ip-ban", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
@@ -2143,6 +2375,7 @@ app.post("/api/admin/users/:id/ip-ban", requireSameOrigin, requirePermission("mo
     const affectedIds = affectedUsers.map((user) => user._id);
     await db.collection("user_sessions").deleteMany({ $or: [{ ipHash: target.user.lastSeenIpHash }, ...(affectedIds.length ? [{ userId: { $in: affectedIds } }] : [])] });
     await recordSecurityEvent(db, { type: "ip_ban", actorId: req.user.id, targetUserId: target.userId, ipHash: target.user.lastSeenIpHash, reason: reason || "Owner network ban" });
+    await recordModerationLog(db, { action: "Login network banned", reason: reason || "Owner network ban", actorId: req.user.id, actorUsername: req.user.username, targetUserId: target.userId, targetUsername: target.user.username });
     res.json({ ok: true, ipBanned: true, affectedAccounts: affectedIds.length });
   } catch (error) {
     next(error);
@@ -2160,6 +2393,7 @@ app.delete("/api/admin/users/:id/ip-ban", requireSameOrigin, requirePermission("
       { $set: { active: false, unbannedAt: new Date(), unbannedBy: req.user.id } },
     );
     await recordSecurityEvent(db, { type: "ip_unban", actorId: req.user.id, targetUserId: target.userId, ipHash: target.user.lastSeenIpHash });
+    await recordModerationLog(db, { action: "Login network unbanned", reason: "Network ban removed.", actorId: req.user.id, actorUsername: req.user.username, targetUserId: target.userId, targetUsername: target.user.username });
     res.json({ ok: true, ipBanned: false });
   } catch (error) {
     next(error);
@@ -2185,6 +2419,7 @@ app.post("/api/admin/users/:id/email-ban", requireSameOrigin, requirePermission(
     const affectedIds = affectedUsers.map((user) => user._id);
     if (affectedIds.length) await db.collection("user_sessions").deleteMany({ userId: { $in: affectedIds } });
     await recordSecurityEvent(db, { type: "email_ban", actorId: req.user.id, targetUserId: target.userId, emailHash: target.user.emailHash, reason: reason || "Owner email ban" });
+    await recordModerationLog(db, { action: "Email banned", reason: reason || "Owner email ban", actorId: req.user.id, actorUsername: req.user.username, targetUserId: target.userId, targetUsername: target.user.username });
     res.json({ ok: true, emailBanned: true, affectedAccounts: affectedIds.length });
   } catch (error) {
     next(error);
@@ -2202,6 +2437,7 @@ app.delete("/api/admin/users/:id/email-ban", requireSameOrigin, requirePermissio
       { $set: { active: false, unbannedAt: new Date(), unbannedBy: req.user.id } },
     );
     await recordSecurityEvent(db, { type: "email_unban", actorId: req.user.id, targetUserId: target.userId, emailHash: target.user.emailHash });
+    await recordModerationLog(db, { action: "Email unbanned", reason: "Email ban removed.", actorId: req.user.id, actorUsername: req.user.username, targetUserId: target.userId, targetUsername: target.user.username });
     res.json({ ok: true, emailBanned: false });
   } catch (error) {
     next(error);
@@ -3510,8 +3746,10 @@ async function initializeDatabaseOnce() {
     db.collection("conversations").createIndex({ userIds: 1, lastMessageAt: -1 }),
     db.collection("chat_messages").createIndex({ conversationId: 1, _id: -1 }),
     db.collection("global_chat_messages").createIndex({ senderId: 1, _id: -1 }),
+    db.collection("chat_notifications").createIndex({ recipientId: 1, readAt: 1, createdAt: -1 }),
     db.collection("chat_reports").createIndex({ status: 1, createdAt: -1 }),
     db.collection("chat_audit").createIndex({ createdAt: -1 }),
+    db.collection("moderation_log").createIndex({ createdAt: -1 }),
     db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }),
     db.collection("ip_bans").createIndex({ active: 1, bannedAt: -1 }),
     db.collection("email_bans").createIndex({ active: 1, bannedAt: -1 }),

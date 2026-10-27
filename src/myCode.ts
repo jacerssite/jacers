@@ -3,7 +3,7 @@ import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_R
 import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
 import { levels, normalizeNonPrestigeLevels, normalizePrestigeLevels } from "./levels";
 import { ApiError, apiRequest, setApiLocalOnlyMode } from "./api";
-import { createMenuButton, createPasswordField, createTextButton } from "./ui";
+import { createMenuButton, createPasswordField, createTextButton, showActionDialog } from "./ui";
 import { createShipArtMarkup, createCssShipArtMarkup } from "./ship-art";
 import { drawTrailParticles } from "./trail";
 import { createLevelMaker } from "./level-maker";
@@ -12,11 +12,11 @@ import { loadManagedUsers } from "./managed-users";
 import { createCustomization } from "./customization";
 import { createLeaderboard } from "./leaderboard";
 import { createAccountRecovery } from "./account-recovery";
-import { renderAdminChatFilterTools, renderAdminChatReports, renderAdminCodeTools, renderAdminMessageTools, renderAdminUpdateLog } from "./admin-tools";
+import { renderAdminChatFilterTools, renderAdminChatReports, renderAdminCodeTools, renderAdminMessageTools, renderAdminModerationLog, renderAdminUpdateLog } from "./admin-tools";
 import { createControlNavigation, type ControlSection } from "./owner-panel";
 import { createRouletteFields } from "./roulette-editor";
 import { createChat } from "./chat";
-import { acceptFriendRequest, blockUser, declineFriendRequest, loadFriends, removeFriend } from "./friends";
+import { acceptFriendRequest, blockUser, declineFriendRequest, loadBlockedUsers, loadFriends, removeFriend, unblockUser } from "./friends";
 
 const playerLabel = document.createElement("div");
 const world = document.createElement("main");
@@ -31,6 +31,7 @@ let gameConfig: GameConfig = structuredClone(DEFAULT_GAME_CONFIG);
 let rouletteTiers: RouletteTier[] = structuredClone(DEFAULT_ROULETTE_TIERS);
 let updateLogEntries: UpdateLogEntry[] = [];
 let profileTitles: ProfileTitle[] = structuredClone(PROFILE_TITLES);
+let accountDeletionNoticeShown = false;
 let builtinLevelOverrides: Record<string, Level> = {};
 let portalAssignments: Record<string, string> = {};
 const secretPortalTargetLabels: Record<string, string> = {
@@ -134,6 +135,7 @@ let roleQuickPanelStartedAt = 0;
 let accountNoticeTimer = 0;
 let presenceHeartbeatTimer = 0;
 let presenceHeartbeatInFlight = false;
+let gameChatNotice: HTMLElement | null = null;
 let accountNoticeOpen = false;
 let goldenTimeLimitMs = 60000;
 type MusicScene = "menu" | "normal" | "prestige" | "secret" | "boss";
@@ -355,6 +357,7 @@ const createShipPreview = customizationController.createShipPreview;
 
 
 const leaderboardController = createLeaderboard({
+    getCurrentUser: () => currentOnlineUser,
     showAccount,
     showLevelMenu,
     showMenu,
@@ -371,6 +374,7 @@ const showLeaderboard = () => {
 const showLeaderboardPlayerProfile = (playerId: string, returnTo: () => void = showLeaderboard) => {
     const page = () => showLeaderboardPlayerProfile(playerId, returnTo);
     enterAppPage(page);
+    void sendPresenceHeartbeat();
     void leaderboardController.showLeaderboardPlayerProfile(playerId, returnTo);
 };
 const { getRoleBadge, formatAbilityName } = leaderboardController;
@@ -498,14 +502,31 @@ async function sendPresenceHeartbeat() {
     if (offlineOwnerMode || !currentOnlineUser || presenceHeartbeatInFlight) return;
     presenceHeartbeatInFlight = true;
     try {
-        const result = await apiRequest<{ pendingRequests?: number; unreadMessages?: number }>("/presence/heartbeat", { method: "POST", body: "{}" });
+        const result = await apiRequest<{ pendingRequests?: number; unreadMessages?: number; chatNotification?: import("./types").ChatNotification | null }>("/presence/heartbeat", { method: "POST", body: "{}" });
         pendingFriendRequests = Math.max(0, Number(result?.pendingRequests) || 0);
-        chatController?.setUnread(pendingFriendRequests, Math.max(0, Number(result?.unreadMessages) || 0));
+        chatController?.setUnread(pendingFriendRequests, Math.max(0, Number(result?.unreadMessages) || 0), result.chatNotification);
     } catch (error) {
         if (currentOnlineUser) console.error("Could not update online status:", error);
     } finally {
         presenceHeartbeatInFlight = false;
     }
+}
+
+function showGameChatNotice(notification?: import("./types").ChatNotification) {
+    if (!notification || !gameActive) return;
+    gameChatNotice?.remove();
+    const notice = document.createElement("aside");
+    notice.className = "game-chat-notice";
+    notice.innerHTML = "<strong></strong><p></p>";
+    notice.querySelector("strong")!.textContent = notification.kind === "mention" ? `@ mention from ${notification.sender}` : `Message from ${notification.sender}`;
+    notice.querySelector("p")!.textContent = notification.text || "Sent an attachment";
+    const reply = createTextButton("Reply", () => { notice.remove(); chatController?.openNotification(notification); });
+    const open = createTextButton("Open chat", () => { notice.remove(); chatController?.openNotification(notification); });
+    notice.append(reply, open);
+    notice.addEventListener("click", () => { notice.remove(); chatController?.openNotification(notification); });
+    document.body.append(notice);
+    gameChatNotice = notice;
+    globalThis.setTimeout(() => { if (gameChatNotice === notice) { notice.remove(); gameChatNotice = null; } }, 9000);
 }
 
 function getLocalAccountProgress() {
@@ -743,6 +764,19 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
         lastSyncedAccountProgress = serializeAccountProgress(result.progress);
         rememberProgressSnapshot(identity, result.progress);
     } catch (error) {
+        if (error instanceof ApiError && error.status === 403 && error.message.startsWith("Your account is being deleted:")) {
+            clearLocalAccountData();
+            setOnlineUser(null);
+            if (!accountDeletionNoticeShown) {
+                accountDeletionNoticeShown = true;
+                void showActionDialog({
+                    title: "Account is being deleted",
+                    description: error.message.replace("Your account is being deleted: ", ""),
+                    confirmLabel: "Return to menu",
+                    danger: true,
+                }).then(() => showMenu());
+            }
+        }
         if (direction === "save" && error instanceof ApiError && error.status === 409 && accountIdentity(currentOnlineUser) === identity) {
             loadedAccountProgressFor = null;
             showAccountSyncConflict(error.message);
@@ -919,7 +953,7 @@ export function startApp() {
     configurePortalDistribution();
     document.body.innerHTML = "";
     chatController?.remove();
-    chatController = createChat({ getUser: () => currentOnlineUser, onUnread: (pending) => { pendingFriendRequests = pending; updateOwnerAccountIndicator(); }, onMessage: () => playSound("message"), onProfile: (id) => showLeaderboardPlayerProfile(id, showLeaderboard) });
+    chatController = createChat({ getUser: () => currentOnlineUser, onUnread: (pending) => { pendingFriendRequests = pending; updateOwnerAccountIndicator(); }, onMessage: (notification) => { playSound("message"); showGameChatNotice(notification); }, onProfile: (id) => showLeaderboardPlayerProfile(id, showLeaderboard) });
     const chatMountObserver = new MutationObserver(() => chatController?.mount());
     chatMountObserver.observe(document.body, { childList: true });
     ownerBadgeObserver ??= new MutationObserver(updateOwnerAccountIndicator);
@@ -1373,7 +1407,12 @@ function openRoleQuickPanel() {
         button.className = "text-button";
         button.textContent = text;
         button.addEventListener("click", () => {
-            if (confirmText && !globalThis.confirm(confirmText)) return;
+            if (confirmText) {
+                void showActionDialog({ title: "Confirm action", description: confirmText, confirmLabel: text, danger: true }).then((dialog) => {
+                    if (dialog.confirmed) action();
+                });
+                return;
+            }
             action();
         });
         levelActions.append(button);
@@ -2601,6 +2640,32 @@ function showAccount(initialMessage = "") {
             const inboxContent = document.createElement("div");
             inboxContent.className = "account-inbox-list";
             inboxPanel.append(inboxHeading, inboxStatus, inboxContent);
+            const blockedPanel = document.createElement("section");
+            blockedPanel.className = "account-settings-category";
+            blockedPanel.dataset.controlSection = "blocked";
+            blockedPanel.hidden = true;
+            const blockedHeading = document.createElement("h2");
+            blockedHeading.textContent = "Blocked players";
+            const blockedStatus = document.createElement("small");
+            blockedStatus.setAttribute("role", "status");
+            const blockedContent = document.createElement("div");
+            blockedContent.className = "account-inbox-list";
+            const drawBlocked = async () => {
+                blockedStatus.textContent = "Loading blocked players...";
+                try {
+                    const data = await loadBlockedUsers();
+                    blockedContent.replaceChildren();
+                    if (!data.blocked.length) blockedContent.textContent = "You have not blocked any players.";
+                    data.blocked.forEach((player) => {
+                        const row = document.createElement("article"); row.className = "account-inbox-row";
+                        const label = document.createElement("span"); label.textContent = `${player.username} / ${roleLabel(player.role as OnlineUser["role"])} · blocked`;
+                        const unblock = createTextButton("Unblock", async () => { unblock.disabled = true; await unblockUser(player.id); await drawBlocked(); });
+                        row.append(label, unblock); blockedContent.append(row);
+                    });
+                    blockedStatus.textContent = data.blocked.length ? `${data.blocked.length} blocked player${data.blocked.length === 1 ? "" : "s"}.` : "";
+                } catch (error) { blockedStatus.textContent = error instanceof Error ? error.message : "Could not load blocked players."; }
+            };
+            blockedPanel.append(blockedHeading, blockedStatus, blockedContent);
             const drawInbox = async () => {
                 inboxContent.textContent = "Loading friend requests...";
                 try {
@@ -2630,6 +2695,7 @@ function showAccount(initialMessage = "") {
                 { id: "profile", title: "Profile", group: "Account", description: "Change your display name, online visibility, and earned pilot title.", panel: profilePanel },
                 { id: "security", title: "Security", group: "Account", description: "Change your password or create a recovery code for this account.", panel: securityPanel },
                 { id: "inbox", title: pendingFriendRequests ? `Inbox (${pendingFriendRequests})` : "Inbox", group: "Account", description: "Friend requests sent to you, and requests you have sent.", panel: inboxPanel },
+                { id: "blocked", title: "Blocked players", group: "Account", description: "Manage players you have blocked. Blocks hide each other’s global chat, online status, messages, and friend requests.", panel: blockedPanel },
             ];
             const accountContent = document.createElement("div");
             accountContent.className = "account-settings-content";
@@ -2655,6 +2721,7 @@ function showAccount(initialMessage = "") {
                 accountNavigation.select(id);
                 localStorage.setItem("orbit-account-tab", id);
                 if (id === "inbox") void drawInbox();
+                if (id === "blocked") void drawBlocked();
             }
             dashboard.append(accountNavigation.nav, accountContent);
             const previousAccountSection = localStorage.getItem("orbit-account-tab");
@@ -2739,7 +2806,10 @@ function showAccount(initialMessage = "") {
                         syncWarning = ` You are signed out, but the latest progress could not sync: ${error instanceof Error ? error.message : "online service error"}`;
                         console.error("Could not save account progress before sign-out:", error);
                     }
-                    if (syncFailed && !globalThis.confirm("We could not save your latest progress. Sign out anyway and lose it?")) return;
+                    if (syncFailed) {
+                        const dialog = await showActionDialog({ title: "Sign out without saving?", description: "We could not save your latest progress. Signing out now may lose it.", confirmLabel: "Sign out", danger: true });
+                        if (!dialog.confirmed) return;
+                    }
                     await apiRequest<void>("/auth/logout", { method: "POST" });
                     setOnlineUser(null);
                     clearLocalAccountData();
@@ -3182,10 +3252,11 @@ function showShop() {
     cooldownBuy.textContent = `Reset / ${COOLDOWN_RESET_COST.toLocaleString()} asteroids`;
     cooldownBuy.disabled = asteroidsClaimed < COOLDOWN_RESET_COST || resettableSecretIndexes.length === 0;
     if (!resettableSecretIndexes.length) cooldownDescription.textContent = "Nothing to reset right now.";
-    cooldownBuy.addEventListener("click", () => {
+    cooldownBuy.addEventListener("click", async () => {
         const balance = Number(localStorage.getItem("orbit-claims") ?? asteroidsClaimed);
         if (!Number.isSafeInteger(balance) || balance < COOLDOWN_RESET_COST || !resettableSecretIndexes.length) return;
-        if (!globalThis.confirm(`Spend ${COOLDOWN_RESET_COST.toLocaleString()} normal asteroids to reset every secret-level cooldown?`)) return;
+        const dialog = await showActionDialog({ title: "Reset secret cooldowns?", description: `Spend ${COOLDOWN_RESET_COST.toLocaleString()} normal asteroids to reset every secret-level cooldown.`, confirmLabel: "Spend and reset", danger: true });
+        if (!dialog.confirmed) return;
         asteroidsClaimed = balance - COOLDOWN_RESET_COST;
         localStorage.setItem("orbit-claims", String(asteroidsClaimed));
         resettableSecretIndexes.forEach(({ level, index }) => {
@@ -3600,6 +3671,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const reportManagement = document.createElement("section");
     reportManagement.className = "tester-player-management";
     reportManagement.hidden = true;
+    const moderationLogManagement = document.createElement("section");
+    moderationLogManagement.className = "tester-player-management";
+    moderationLogManagement.hidden = true;
     const updateLogManagement = document.createElement("section");
     updateLogManagement.className = "tester-player-management";
     updateLogManagement.hidden = true;
@@ -3690,9 +3764,11 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             requirement.addEventListener("change", syncRequirementEditor);
             syncRequirementEditor();
             const remove = createTextButton("Remove", () => {
-                if (!globalThis.confirm(`Remove the ${title.name} title from the shared catalog?`)) return;
-                profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
-                drawTitleManagement();
+                void showActionDialog({ title: "Remove profile title?", description: `Remove ${title.name} from the shared catalog?`, confirmLabel: "Remove title", danger: true }).then((dialog) => {
+                    if (!dialog.confirmed) return;
+                    profileTitles = readDraftTitles().filter((_, titleIndex) => titleIndex !== index);
+                    drawTitleManagement();
+                });
             });
             remove.classList.add("title-management-remove");
             const rowHeader = document.createElement("div");
@@ -4294,7 +4370,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const name = document.createElement("span");
         name.textContent = `${level.name} / ${level.prestige ? "PRESTIGE" : "NORMAL"}`;
         const remove = createTextButton("Delete", async () => {
-            if (!level.customId || !globalThis.confirm(`Delete the shared workshop level "${level.name}" for every player?`)) return;
+            if (!level.customId) return;
+            const dialog = await showActionDialog({ title: "Delete workshop level?", description: `Delete the shared workshop level “${level.name}” for every player?`, confirmLabel: "Delete level", danger: true });
+            if (!dialog.confirmed) return;
             remove.disabled = true;
             try {
                 await apiRequest<void>(`/levels/${encodeURIComponent(level.customId)}`, { method: "DELETE" });
@@ -4338,8 +4416,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     resetButton.className = "tester-reset-button";
     resetButton.type = "button";
     resetButton.textContent = "Reset all game data";
-    resetButton.addEventListener("click", () => {
-        if (!globalThis.confirm("Clear this device's game data? Shared settings and workshop levels will not be deleted.")) return;
+    resetButton.addEventListener("click", async () => {
+        const dialog = await showActionDialog({ title: "Reset this device's game data?", description: "This clears local progress, unlocks, cached levels, and inventory. Shared settings and workshop levels remain.", confirmLabel: "Reset device", danger: true });
+        if (!dialog.confirmed) return;
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter((key): key is string => Boolean(key?.startsWith("orbit-"))).forEach((key) => localStorage.removeItem(key));
         globalThis.location.reload();
     });
@@ -4526,6 +4605,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     if (canModerate) sections.push(
         { id: "players", title: "Player accounts", group: isOwner ? "Owner management" : "Moderation", description: isOwner ? "Review accounts, progress, roles, and access." : "Review accounts and enforce bans without editing rewards or saved progress.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement, { canEditProfiles: isOwner, canManageRoles: isOwner, canManageSensitive: isOwner })) },
         { id: "reports", title: "Chat reports", group: "Moderation", description: "Review reports submitted from global chat and direct messages.", panel: reportManagement, onOpen: () => loadOnce("reports", reportManagement, () => renderAdminChatReports(reportManagement)) },
+        { id: "moderation-log", title: "Moderation log", group: "Moderation", description: "Review bans, locks, and their recorded reasons.", panel: moderationLogManagement, onOpen: () => loadOnce("moderation-log", moderationLogManagement, () => renderAdminModerationLog(moderationLogManagement)) },
     );
     if (isAdmin || isOwner) sections.push(
         { id: "codes", title: "Reward codes", group: "Content management", description: "Create and manage redeemable asteroid, power-up, cosmetic, and title rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement, profileTitles)) },
@@ -4546,7 +4626,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const sectionDescription = document.createElement("p");
     sectionHeader.append(sectionGroup, sectionTitle, sectionDescription);
     form.replaceChildren(...sections.filter((section) => settingsIds.has(section.id)).map((section) => section.panel), saveFooter);
-    content.append(sectionHeader, worldTabs, form, accountManagement, reportManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
+    content.append(sectionHeader, worldTabs, form, accountManagement, reportManagement, moderationLogManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
     const navigation = createControlNavigation(sections, (section) => selectSection(section.id));
     function selectSection(id: string) {
         const selected = sections.find((section) => section.id === id);

@@ -1,12 +1,13 @@
-import type { ChatAttachment, ChatConversation, ChatMessage, FriendEntry, FriendRequest, OnlineUser } from "./types";
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatNotification, FriendEntry, FriendRequest, OnlineUser } from "./types";
 import { apiRequest } from "./api";
 import { acceptFriendRequest, blockUser, declineFriendRequest, loadFriends, removeFriend } from "./friends";
+import { showActionDialog } from "./ui";
 
 type ChatContext = {
     getUser: () => OnlineUser | null;
     onProfile?: (userId: string) => void;
     onUnread?: (pending: number, unread: number) => void;
-    onMessage?: () => void;
+    onMessage?: (notification?: ChatNotification) => void;
 };
 
 function roleLabel(role: OnlineUser["role"]) { return role === "owner" ? "\u2605" : role === "developer" ? "D" : role === "admin" ? "A" : role === "moderator" ? "M" : role === "level-maker" ? "L" : role === "tester" ? "T" : ""; }
@@ -49,13 +50,17 @@ export function createChat(context: ChatContext) {
     let ownTyping = false;
     let typingStopTimer = 0;
     let hasUnreadSnapshot = false;
+    let lastNotificationId = "";
     const chatEmojis = ["😀", "😄", "😂", "🥹", "😎", "😭", "😡", "❤️", "👍", "👎", "👏", "🙌", "🎉", "🔥", "✨", "💯", "🚀", "⭐", "👀", "🤝", "💀", "😮", "🤔", "🫡", "😴", "🤖", "👽", "🪐"];
 
-    const setUnread = (nextPending: number, nextUnread: number) => {
+    const setUnread = (nextPending: number, nextUnread: number, notification?: ChatNotification | null) => {
         const previousUnread = unread;
         pending = Math.max(0, nextPending);
         unread = Math.max(0, nextUnread);
-        if (hasUnreadSnapshot && unread > previousUnread && panel?.hidden !== false) context.onMessage?.();
+        if (notification?.id && notification.id !== lastNotificationId) {
+            lastNotificationId = notification.id;
+            if (hasUnreadSnapshot) context.onMessage?.(notification);
+        } else if (hasUnreadSnapshot && unread > previousUnread && panel?.hidden !== false) context.onMessage?.();
         hasUnreadSnapshot = true;
         if (button) {
             const badge = button.querySelector<HTMLElement>(".chat-unread-badge");
@@ -245,7 +250,7 @@ export function createChat(context: ChatContext) {
                 const userActions = document.createElement("div"); userActions.className = "chat-message-actions chat-user-actions"; userActions.hidden = true;
                 const reactToMessage = async (emoji: string) => {
                     try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) }); await refreshActiveMessages(mode); }
-                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not add reaction."); }
+                    catch (error) { void showActionDialog({ title: "Reaction not added", description: error instanceof Error ? error.message : "Could not add reaction.", confirmLabel: "Close", danger: true }); }
                 };
                 const quickReactions = document.createElement("div"); quickReactions.className = "chat-user-quick-reactions";
                 ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}"].forEach((emoji) => {
@@ -263,14 +268,21 @@ export function createChat(context: ChatContext) {
                 userActions.append(quickReactions, reply, profile);
                 if (!mine) {
                     const report = document.createElement("button"); report.type = "button"; report.textContent = "Report"; report.addEventListener("click", async () => {
-                        const reason = globalThis.prompt("Why are you reporting this message?", "") ?? "";
-                        try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/report`, { method: "POST", body: JSON.stringify({ reason }) }); userActions.hidden = true; globalThis.alert("Report sent to the moderation team."); }
-                        catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not report this message."); }
+                        const dialog = await showActionDialog({ title: "Report message", description: `Tell the moderation team why you are reporting ${message.sender}'s message.`, confirmLabel: "Submit report", danger: true, input: { label: "Reason (optional)", placeholder: "Describe the problem", optional: true } });
+                        if (!dialog.confirmed) return;
+                        try {
+                            await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/report`, { method: "POST", body: JSON.stringify({ reason: dialog.value }) });
+                            userActions.hidden = true;
+                            await showActionDialog({ title: "Report sent", description: "The moderation team can now review this message.", confirmLabel: "Done" });
+                        } catch (error) {
+                            await showActionDialog({ title: "Report not sent", description: error instanceof Error ? error.message : "Could not report this message.", confirmLabel: "Close", danger: true });
+                        }
                     });
                     const block = document.createElement("button"); block.type = "button"; block.textContent = "Block"; block.className = "danger"; block.addEventListener("click", async () => {
-                        if (!globalThis.confirm(`Block ${message.sender}?`)) return;
+                        const dialog = await showActionDialog({ title: `Block ${message.sender}?`, description: "You will no longer receive messages or friend requests from this player.", confirmLabel: "Block player", danger: true });
+                        if (!dialog.confirmed) return;
                         try { await blockUser(message.senderId); userActions.hidden = true; await refreshSnapshot(); }
-                        catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not block this player."); }
+                        catch (error) { await showActionDialog({ title: "Could not block player", description: error instanceof Error ? error.message : "Could not block this player.", confirmLabel: "Close", danger: true }); }
                     });
                     userActions.append(report, block);
                 }
@@ -291,15 +303,16 @@ export function createChat(context: ChatContext) {
                 const more = document.createElement("button"); more.type = "button"; more.className = "chat-message-more"; more.textContent = "⋯"; more.setAttribute("aria-label", "Message actions"); more.setAttribute("aria-expanded", "false");
                 const actions = document.createElement("div"); actions.className = "chat-message-actions"; actions.hidden = true;
                 const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.hidden = !mine; edit.addEventListener("click", async () => {
-                    const nextText = globalThis.prompt("Edit message", message.text);
-                    if (nextText === null || nextText.trim() === message.text) return;
-                    try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}`, { method: "PATCH", body: JSON.stringify({ text: nextText }) }); await refreshActiveMessages(mode); }
-                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not edit message."); }
+                    const dialog = await showActionDialog({ title: "Edit message", description: "Update your message for everyone in this conversation.", confirmLabel: "Save changes", input: { label: "Message", value: message.text } });
+                    if (!dialog.confirmed || dialog.value === message.text) return;
+                    try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}`, { method: "PATCH", body: JSON.stringify({ text: dialog.value }) }); await refreshActiveMessages(mode); }
+                    catch (error) { await showActionDialog({ title: "Could not edit message", description: error instanceof Error ? error.message : "Could not edit message.", confirmLabel: "Close", danger: true }); }
                 });
                 const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Delete"; remove.addEventListener("click", async () => {
-                    if (!globalThis.confirm("Delete this message?")) return;
+                    const dialog = await showActionDialog({ title: "Delete message?", description: "This message will be removed from the conversation.", confirmLabel: "Delete message", danger: true });
+                    if (!dialog.confirmed) return;
                     try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}`, { method: "DELETE" }); await refreshActiveMessages(mode); }
-                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not delete message."); }
+                    catch (error) { await showActionDialog({ title: "Could not delete message", description: error instanceof Error ? error.message : "Could not delete message.", confirmLabel: "Close", danger: true }); }
                 });
                 more.addEventListener("click", (event) => { event.stopPropagation(); actions.hidden = !actions.hidden; more.setAttribute("aria-expanded", String(!actions.hidden)); });
                 actions.append(edit, remove); bubble.append(more, actions);
@@ -315,7 +328,7 @@ export function createChat(context: ChatContext) {
                 const reactions = document.createElement("div"); reactions.className = "chat-reactions";
                 const toggleReaction = async (emoji: string) => {
                     try { await apiRequest(`/chat/messages/${encodeURIComponent(message.id)}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) }); await refreshActiveMessages(mode); }
-                    catch (error) { globalThis.alert(error instanceof Error ? error.message : "Could not add reaction."); }
+                    catch (error) { void showActionDialog({ title: "Reaction not added", description: error instanceof Error ? error.message : "Could not add reaction.", confirmLabel: "Close", danger: true }); }
                 };
                 (message.reactions ?? []).forEach((reaction) => {
                     const reactionButton = document.createElement("button"); reactionButton.type = "button"; reactionButton.className = `chat-reaction${reaction.reacted ? " selected" : ""}`; reactionButton.textContent = `${reaction.emoji} ${reaction.count}`; reactionButton.setAttribute("aria-label", `React ${reaction.emoji}`); reactionButton.addEventListener("click", () => { void toggleReaction(reaction.emoji); }); reactions.append(reactionButton);
@@ -423,6 +436,7 @@ export function createChat(context: ChatContext) {
                 globalMessages = [...globalMessages, ...response.messages.filter((message) => !known.has(message.id))];
             } else globalMessages = response.messages;
             if (!after || globalMessages.length !== previousLength) renderConversation(globalMessages, "global");
+            void apiRequest<void>("/chat/mentions/read", { method: "POST", body: "{}" }).catch(() => undefined);
         } catch (error) { const target = content(); if (target) target.textContent = error instanceof Error ? error.message : "Global chat is unavailable."; }
     };
     const openGlobalChat = async () => {
@@ -435,6 +449,11 @@ export function createChat(context: ChatContext) {
         pollTimer = globalThis.setInterval(() => { if (!document.hidden) void loadGlobalMessages(true); }, 2500);
     };
     const openConversation = async (userId: string, username: string) => { saveCurrentDraft(); clearTimers(); activeUserId = userId; activeName = username; activeView = "conversation"; lastMessageId = ""; conversationMessages = []; pendingAttachment = null; activeTyping = false; await loadMessages(false); startSnapshotPolling(); pollTimer = globalThis.setInterval(() => { if (!document.hidden) void loadMessages(true); }, 2500); };
+    const openNotification = (notification: ChatNotification) => {
+        open();
+        if (notification.kind === "direct" && notification.conversationUserId) void openConversation(notification.conversationUserId, notification.sender);
+        else { tab = "global"; activeView = null; renderTab(); }
+    };
     const refreshSnapshot = async () => { if (!context.getUser() || !panel || panel.hidden) return; try { snapshot = await loadFriends(); const result = await apiRequest<{ conversations: ChatConversation[] }>("/chat/conversations"); conversations = result.conversations; setUnread(snapshot.incoming.length, conversations.reduce((sum, item) => sum + item.unread, 0)); if (!activeUserId && activeView !== "global") renderTab(); } catch (error) { const target = content(); if (target && !target.querySelector(".chat-composer textarea")) target.textContent = error instanceof Error ? error.message : "Chat is unavailable."; } };
 
     const mount = () => {
@@ -457,9 +476,9 @@ export function createChat(context: ChatContext) {
         panel.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); button?.focus(); } });
     };
     const setUser = (user: OnlineUser | null) => { if (!button) return; button.hidden = !user || gameActiveState; if (!user) { close(); hasUnreadSnapshot = false; setUnread(0, 0); } };
-    const setGameActive = (active: boolean) => { gameActiveState = active; if (!button) return; button.hidden = !context.getUser() || active; if (active) close(); };
+    const setGameActive = (active: boolean) => { gameActiveState = active; if (!button) return; button.hidden = !context.getUser(); };
     const remove = () => { clearTimers(); button?.remove(); panel?.remove(); button = null; panel = null; launchIcon = null; setUnread(0, 0); };
     mount();
-    return { setUser, setUnread, setGameActive, remove, open, close, mount };
+    return { setUser, setUnread, setGameActive, remove, open, close, openNotification, mount };
 }
 

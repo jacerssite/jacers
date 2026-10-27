@@ -708,6 +708,8 @@ test("control center keeps sections separate and preserves drafts while switchin
     clickButton(document, "Add update");
     assert.equal(document.querySelector('[data-update-title="1"]').value, "Draft title");
     clickButton(document, "Remove");
+    clickButton(document, "Remove update");
+    await delay(0);
     assert.equal(document.querySelector('[data-update-title="0"]').value, "Draft title");
   } finally {
     dom.window.close();
@@ -784,7 +786,11 @@ test("update log preserves pasted formatting, supports indentation, and publishe
     document.querySelector(".update-log-editor").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     assert.equal(writes, 0);
     assert.match(document.querySelector('.update-log-editor [role="status"]').textContent, /200 KB/);
-    for (let index = 0; index < 5; index++) clickButton(document, "Remove");
+    for (let index = 0; index < 5; index++) {
+      clickButton(document, "Remove");
+      clickButton(document, "Remove update");
+      await delay(0);
+    }
     body = document.querySelector('[data-update-body="0"]');
 
     const pasted = `    First paragraph\n\n\t- Second paragraph\n      ${"x".repeat(900)}\n\n<img src=x onerror=alert(1)>  \n`;

@@ -1,6 +1,6 @@
 import type { CodeReward, ManagedUser, PowerupKind, ProfileTitle, UpdateLogEntry } from "./types";
 import { apiRequest } from "./api";
-import { createTextButton } from "./ui";
+import { createTextButton, showActionDialog } from "./ui";
 import { adjustIndentation } from "./text-editor";
 import { avatars, skins, trails } from "./cosmetics";
 import { powerupLabels } from "./game-config";
@@ -457,6 +457,38 @@ export async function renderAdminChatReports(container: HTMLElement) {
     await loadReports();
 }
 
+export async function renderAdminModerationLog(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Moderation log";
+    const description = document.createElement("p");
+    description.textContent = "Account, email, and login-network moderation actions are recorded here with the actor and reason.";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const list = document.createElement("section");
+    list.className = "tester-player-management chat-report-list";
+    const loadLog = async () => {
+        const response = await apiRequest<{ entries: { id: string; action: string; reason: string; actor: string; target: string; createdAt: string | null }[] }>("/admin/moderation-log");
+        list.replaceChildren();
+        if (!response.entries.length) { list.textContent = "No moderation actions have been recorded yet."; return; }
+        response.entries.forEach((entry) => {
+            const row = document.createElement("article");
+            row.className = "tester-custom-level-row chat-report-row";
+            const action = document.createElement("strong");
+            action.textContent = `${entry.action}: ${entry.target}`;
+            const details = document.createElement("small");
+            details.textContent = `By ${entry.actor}${entry.createdAt ? ` / ${new Date(entry.createdAt).toLocaleString()}` : ""}`;
+            const reason = document.createElement("p");
+            reason.textContent = `Reason: ${entry.reason || "No reason supplied."}`;
+            row.append(action, details, reason);
+            list.append(row);
+        });
+    };
+    const refresh = createTextButton("Refresh moderation log", () => void loadLog().catch((error) => { status.textContent = error instanceof Error ? error.message : "Could not load moderation log."; }));
+    container.append(heading, description, refresh, status, list);
+    await loadLog();
+}
+
 export async function renderAdminChatFilterTools(container: HTMLElement) {
     container.replaceChildren();
     const heading = document.createElement("h2");
@@ -613,9 +645,11 @@ export async function renderAdminUpdateLog(container: HTMLElement, entriesFromSe
             edit.setAttribute("aria-label", `Edit update ${index + 1}`);
             editorActions.prepend(edit);
             const remove = createTextButton("Remove", () => {
-                if (!globalThis.confirm(`Remove update ${index + 1} from the draft? You must publish to make this permanent.`)) return;
-                draft = readEntries().filter((_, entryIndex) => entryIndex !== index);
-                drawEntries();
+                void showActionDialog({ title: "Remove update from draft?", description: `Remove update ${index + 1}? You must publish for this change to affect players.`, confirmLabel: "Remove update", danger: true }).then((dialog) => {
+                    if (!dialog.confirmed) return;
+                    draft = readEntries().filter((_, entryIndex) => entryIndex !== index);
+                    drawEntries();
+                });
             });
             row.append(date, title, body, count, editorActions, tabHint, remove);
             entries.append(row);

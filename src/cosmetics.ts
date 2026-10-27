@@ -9,29 +9,29 @@ import prestigeNovaImage from "./assets/ships/prestige-nova.png";
 
 import type { AvatarStyle, Rarity, SkinStyle, TrailStyle } from "./types";
 
-export const STARTER_SHIP_COLORS = ["#62d6b2", "#f6c46e", "#ed7657", "#b991ff", "#6ecbff", "#f26d9b", "#f3f5e9", "#8bd46e"];
-export const ROULETTE_SHIP_COLORS = ["#ff5ea8", "#c5f35a", "#ff914d", "#8d73ff", "#5bf0e8"];
+export const STARTER_SHIP_COLORS = ["#58c9aa", "#f3b955", "#e85d75", "#aa83e8", "#45aee2", "#e85a9a", "#e9e6c9", "#78c96a"];
+export const ROULETTE_SHIP_COLORS = ["#c93d6f", "#b1df4d", "#ff873d", "#735de0", "#38c9bb"];
 export const skins: SkinStyle[] = [
     // Each skin owns a unique swatch, so a color cannot unlock through an
     // unrelated skin in a different rarity tier.
-    { name: "Solar", color: "#ff765a", shape: "classic", required: 0 },
-    { name: "Mint Dart", color: "#47d8a5", shape: "dart", required: 3, image: dartShipImage },
-    { name: "Gold UFO", color: "#ffc95e", shape: "ring", required: 7, image: ufoShipImage },
-    { name: "Plasma Sword", color: "#ad7cff", shape: "blade", required: 12, image: swordShipImage },
-    { name: "Aurora", color: "#5ebdff", shape: "classic", required: 18 },
-    { name: "Titan Core", color: "#ffdf72", shape: "ring", required: 24, boss: true },
-    { name: "Eclipse", color: "#f58bff", shape: "blade", required: 0, secret: true },
-    { name: "Ion Glass", color: "#8de7ff", shape: "dart", required: 30 },
-    { name: "Rose Prism", color: "#ff8fbd", shape: "ring", required: 38 },
-    { name: "Void Flame", color: "#8b7dff", shape: "blade", required: 46, boss: true },
-    { name: "Comet Copper", color: "#f29d68", shape: "dart", required: 86 },
-    { name: "Prism Ice", color: "#c8f5ff", shape: "ring", required: 98 },
-    { name: "Starforge", color: "#f4f3cf", shape: "classic", required: 54 },
-    { name: "Solar Flare", color: "#ff9b55", shape: "blade", required: 62 },
-    { name: "Moon Silver", color: "#d9f5ff", shape: "ring", required: 70 },
-    { name: "Horizon Pink", color: "#ff72c8", shape: "dart", required: 78 },
-    { name: "Vault Prism", color: "#d6a8ff", shape: "blade", required: 0, secret: true },
-    { name: "Golden Body", color: "#ffe36e", shape: "classic", required: 0, golden: true },
+    { name: "Solar", color: "#ff7043", shape: "classic", required: 0 },
+    { name: "Mint Dart", color: "#20b894", shape: "dart", required: 3, image: dartShipImage },
+    { name: "Gold UFO", color: "#e8b23c", shape: "ring", required: 7, image: ufoShipImage },
+    { name: "Plasma Sword", color: "#a86de0", shape: "blade", required: 12, image: swordShipImage },
+    { name: "Aurora", color: "#258dcc", shape: "classic", required: 18 },
+    { name: "Titan Core", color: "#c92f48", shape: "ring", required: 24, boss: true },
+    { name: "Eclipse", color: "#c64ac9", shape: "blade", required: 0, secret: true },
+    { name: "Ion Glass", color: "#47c7d9", shape: "dart", required: 30 },
+    { name: "Rose Prism", color: "#d95691", shape: "ring", required: 38 },
+    { name: "Void Flame", color: "#5544ad", shape: "blade", required: 46, boss: true },
+    { name: "Comet Copper", color: "#b96c3d", shape: "dart", required: 86 },
+    { name: "Prism Ice", color: "#8fd7e4", shape: "ring", required: 98 },
+    { name: "Starforge", color: "#b7b85a", shape: "classic", required: 54 },
+    { name: "Solar Flare", color: "#f08b25", shape: "blade", required: 62 },
+    { name: "Moon Silver", color: "#9fb9c8", shape: "ring", required: 70 },
+    { name: "Horizon Pink", color: "#ed3e87", shape: "dart", required: 78 },
+    { name: "Vault Prism", color: "#7d57cf", shape: "blade", required: 0, secret: true },
+    { name: "Golden Body", color: "#f4c430", shape: "classic", required: 0, golden: true },
     // Prestige-exclusive skins from special rolls
     { name: "Stellar Crown", color: "#ffcc33", shape: "classic", required: 0, prestige: 1 },
     { name: "Nebula Dancer", color: "#b24bff", shape: "dart", required: 0, prestige: 1 },
@@ -46,9 +46,9 @@ export const skins: SkinStyle[] = [
 export const trails: TrailStyle[] = [
     { name: "Ember", color: "#ed7657", required: 0, effect: "ember" },
     { name: "Mint Comet", color: "#62d6b2", required: 5, effect: "comet" },
-    { name: "Gold Dust", color: "#f6c46e", required: 10, effect: "spark" },
+    { name: "Gold Dust", color: "#b8843f", secondaryColor: "#e3aa55", required: 10, effect: "spark" },
     { name: "Nebula", color: "#b991ff", required: 16, effect: "ribbon" },
-    { name: "Titan Sparks", color: "#ffdf72", required: 24, effect: "spark", boss: true },
+    { name: "Titan Sparks", color: "#c92f48", secondaryColor: "#ff805c", required: 24, effect: "spark", boss: true },
     { name: "Eclipse Ribbon", color: "#f58bff", required: 0, effect: "ribbon", secret: true },
     { name: "Ion Beam", color: "#8de7ff", required: 30, effect: "comet" },
     { name: "Prism Wake", color: "#ff8fbd", required: 38, effect: "ribbon" },
