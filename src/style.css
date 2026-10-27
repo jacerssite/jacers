@@ -1021,6 +1021,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 }
 .chat-unread-badge { right: -4px; top: -5px; }
 .game-chat-notice { position: fixed; z-index: 1300; right: 18px; bottom: 90px; display: grid; grid-template-columns: 1fr auto auto; gap: 8px 10px; width: min(350px, calc(100vw - 32px)); padding: 12px; border: 1px solid #6ecbff88; border-radius: 10px; color: #e9f4f2; background: #101b2bf2; box-shadow: 0 12px 32px #0009, 0 0 18px #6ecbff33; cursor: pointer; animation: game-chat-notice-in .2s ease-out; }
+.chat-panel:not([hidden]) + .game-chat-notice:not(.in-level) { top: 16px; bottom: auto; }
 .game-chat-notice strong { grid-column: 1 / -1; color: #bcecff; font: 700 .66rem "DM Mono", monospace; }
 .game-chat-notice p { grid-column: 1 / -1; max-height: 2.8em; margin: 0; overflow: hidden; color: #f3f5e9; font: .72rem/1.4 "DM Mono", monospace; }
 .game-chat-notice .text-button { padding: 6px 8px; border: 1px solid #385267; color: #cfeafa; background: #172c40; font-size: .62rem; }

@@ -517,7 +517,7 @@ function showGameChatNotice(notification?: import("./types").ChatNotification) {
     if (gameChatNoticeTimer) globalThis.clearTimeout(gameChatNoticeTimer);
     gameChatNotice?.remove();
     const notice = document.createElement("aside");
-    notice.className = "game-chat-notice";
+    notice.className = `game-chat-notice${gameActive ? " in-level" : ""}`;
     notice.innerHTML = "<strong></strong><p></p>";
     notice.querySelector("strong")!.textContent = notification.kind === "mention" ? `@ mention from ${notification.sender}` : `Message from ${notification.sender}`;
     notice.querySelector("p")!.textContent = notification.text || "Sent an attachment";
