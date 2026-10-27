@@ -1581,12 +1581,18 @@ function showMenu() {
     accountButton.append(accountBadge);
     accountButton.setAttribute("aria-label", currentOnlineUser ? `Account: ${currentOnlineUser.username}` : "Open account");
     accountRail.append(accountButton);
+    const updateRail = document.createElement("aside");
+    updateRail.className = "update-log-rail";
+    const updateButton = createTextButton("Updates", () => showCredits("updates"));
+    updateButton.classList.add("update-log-rail-button");
+    updateButton.setAttribute("aria-label", "Open update log");
+    updateRail.append(updateButton);
     const secondaryActions = document.createElement("div"); secondaryActions.className = "secondary-actions"; secondaryActions.append(createTextButton("Special asteroid odds", showDropRates), createTextButton("Credits", showCredits));
     const offlineOwnerButton = createTextButton("Offline owner", showOfflineOwnerUnlock);
     offlineOwnerButton.classList.add("offline-owner-button");
     offlineOwnerButton.setAttribute("aria-label", "Open offline owner access");
     offlineOwnerButton.hidden = true;
-    menu.append(accountRail, menuActions, secondaryActions, offlineOwnerButton);
+    menu.append(updateRail, accountRail, menuActions, secondaryActions, offlineOwnerButton);
     menu.append(createPageCounter()); document.body.replaceChildren(menu);
     if (readOfflineOwnerGrant()) {
         const updateOfflineOwnerControl = async () => {
@@ -2069,10 +2075,16 @@ function createProgressArea() {
     return section;
 }
 
-function showCredits() {
+function showCredits(view: "credits" | "updates" = "credits") {
     enterAppPage(showCredits);
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
-    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
+    if (view === "credits") {
+        menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
+        menu.append(createTextButton("Back", showMenu));
+        document.body.replaceChildren(menu);
+        return;
+    }
+    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / FLIGHT UPDATES</p><h1>Update <em>log</em></h1><p class="menu-copy">See the latest additions, fixes, and changes to Jacer.</p>`;
     const updates = document.createElement("section");
     updates.className = "credits-updates";
     const heading = document.createElement("h2");

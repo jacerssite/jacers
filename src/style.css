@@ -859,6 +859,10 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .account-profile-form small { min-height: 1.4em; color: #99b3a6; font: .62rem 'DM Mono', monospace; }
 .account-profile-form button { justify-self: start; }
 .account-rail { position: fixed; z-index: 12; top: 50%; left: 18px; transform: translateY(-50%); }
+.update-log-rail { position: fixed; z-index: 12; top: 18px; left: 18px; }
+.update-log-rail-button { padding: 9px 12px; border: 1px solid #f6c46e; border-radius: 3px; color: #f6c46e; background: #101b2be8; box-shadow: 0 8px 28px #08121f77; font: 700 .62rem 'DM Mono', monospace; letter-spacing: 1px; text-transform: uppercase; }
+.update-log-rail-button::before { margin-right: 6px; content: '✦'; }
+.update-log-rail-button:hover, .update-log-rail-button:focus-visible { border-color: #ed7657; color: #f3f5e9; background: #ed7657; outline: none; transform: translateY(-2px); }
 .account-rail-button { display: grid; place-items: center; width: 72px; min-height: 72px; padding: 8px; border: 1px solid #6ecbff99; border-radius: 50%; color: #f3f5e9; background: #143746ee; box-shadow: 0 8px 28px #08121f77; font: 600 .65rem 'DM Mono', monospace; overflow-wrap: anywhere; }
 .account-rail-button::before { display: block; width: 24px; height: 24px; margin-bottom: 3px; border: 2px solid #f6c46e; border-radius: 50%; color: #f6c46e; content: '✦'; font: 1rem/20px 'Space Grotesk', sans-serif; }
 .account-rail-button:hover, .account-rail-button:focus-visible { border-color: #f6c46e; color: #f6c46e; outline: none; transform: scale(1.04); }
@@ -969,6 +973,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 
 @media (max-width: 600px) {
 	.account-rail { top: auto; bottom: 12px; left: 12px; transform: none; }
+	.update-log-rail { top: 12px; left: 12px; }
 	.home-screen .account-rail { bottom: 68px; }
 	.account-rail-button { width: 58px; min-height: 58px; font-size: .55rem; }
 	.account-rail-button::before { width: 20px; height: 20px; line-height: 16px; }
