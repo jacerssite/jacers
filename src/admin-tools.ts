@@ -517,7 +517,7 @@ export async function renderAdminChatReports(container: HTMLElement) {
     const heading = document.createElement("h2");
     heading.textContent = "Chat reports";
     const description = document.createElement("p");
-    description.textContent = "Review open player reports from global chat and direct messages. Use Player accounts to apply moderation actions.";
+    description.textContent = "Review open player reports and take immediate moderation action. Every action asks for a reason and is recorded in the moderation log.";
     const status = document.createElement("small");
     status.setAttribute("role", "status");
     const list = document.createElement("section");
@@ -537,7 +537,29 @@ export async function renderAdminChatReports(container: HTMLElement) {
             const reason = document.createElement("small");
             reason.textContent = `Reason: ${report.reason}${report.createdAt ? ` / ${new Date(report.createdAt).toLocaleString()}` : ""}`;
             details.append(summary, message, reason);
-            row.append(details);
+            const actions = document.createElement("div");
+            actions.className = "chat-report-actions";
+            const takeAction = (label: string, endpoint: string, descriptionText: string, danger = false) => {
+                const button = createTextButton(label, async () => {
+                    const dialog = await showActionDialog({ title: label, description: descriptionText, confirmLabel: label, danger, input: { label: "Reason", placeholder: "Explain this action" } });
+                    if (!dialog.confirmed) return;
+                    button.disabled = true;
+                    try {
+                        const body = endpoint.endsWith("/ban") ? { banned: true, reason: dialog.value } : endpoint.endsWith("/login-lock") ? { locked: true, reason: dialog.value } : endpoint.endsWith("/chat-mute") ? { muted: true, reason: dialog.value } : { reason: dialog.value };
+                        await apiRequest(endpoint, { method: "POST", body: JSON.stringify(body) });
+                        status.textContent = `${label} applied to ${report.sender}.`;
+                    } catch (error) {
+                        status.textContent = error instanceof Error ? error.message : `Could not ${label.toLowerCase()}.`;
+                        button.disabled = false;
+                    }
+                });
+                actions.append(button);
+            };
+            takeAction("Warn", `/admin/users/${encodeURIComponent(report.senderId)}/warn`, `Send ${report.sender} an in-game account warning about this report.`);
+            takeAction("Mute chat", `/admin/users/${encodeURIComponent(report.senderId)}/chat-mute`, `Prevent ${report.sender} from sending chat messages until staff unmute the account.`);
+            takeAction("Lock login", `/admin/users/${encodeURIComponent(report.senderId)}/login-lock`, `Sign ${report.sender} out and temporarily prevent login.`);
+            takeAction("Ban account", `/admin/users/${encodeURIComponent(report.senderId)}/ban`, `Ban ${report.sender} and sign them out immediately.`, true);
+            row.append(details, actions);
             list.append(row);
         });
     };

@@ -566,9 +566,15 @@ function showGameChatNotice(notification?: import("./types").ChatNotification) {
         input.focus();
     });
     reply.addEventListener("click", (event) => event.stopPropagation());
+    const ignore = document.createElement("button");
+    ignore.type = "button";
+    ignore.className = "game-chat-notice-dismiss";
+    ignore.textContent = "×";
+    ignore.setAttribute("aria-label", "Dismiss message notification");
+    ignore.addEventListener("click", (event) => { event.stopPropagation(); dismiss(); });
     const open = createTextButton("Open chat", () => { dismiss(); chatController?.openNotification(notification); });
     open.addEventListener("click", (event) => event.stopPropagation());
-    notice.append(reply, open);
+    notice.append(ignore, reply, open);
     notice.addEventListener("click", () => { dismiss(); chatController?.openNotification(notification); });
     document.body.append(notice);
     gameChatNotice = notice;

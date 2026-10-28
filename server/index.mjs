@@ -2518,6 +2518,35 @@ app.post("/api/admin/users/:id/ban", requireSameOrigin, requirePermission("moder
   }
 });
 
+app.post("/api/admin/users/:id/warn", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const target = await getTargetManagedUser(db, req.params.id, req.user.role);
+    if (target.error) return res.status(target.error.status).json({ error: target.error.message });
+    const reason = moderationReason(req.body?.reason, "A moderator issued a warning.");
+    const filterTerms = await getChatFilterTerms(db);
+    const result = await db.collection("owner_messages").insertOne({
+      title: "Account warning",
+      body: moderateChatText(reason, filterTerms),
+      type: "warning",
+      userId: target.userId,
+      createdAt: new Date(),
+      createdBy: req.user.id,
+    });
+    await recordModerationLog(db, {
+      action: "Account warned",
+      reason,
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      targetUserId: target.userId,
+      targetUsername: target.user.username,
+    });
+    res.status(201).json({ ok: true, warningId: userIdString(result.insertedId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/users/:id/login-lock", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
   try {
     const db = await getDatabase();
