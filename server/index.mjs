@@ -52,6 +52,45 @@ const humanChallengeSecret = process.env.HUMAN_CHALLENGE_SECRET || ownerAccounts
 // A signed challenge must also be single-use, otherwise one solved prompt can
 // be replayed to create a batch of accounts.
 const usedHumanChallenges = new Map();
+const DEFAULT_MODERATION_SETTINGS = Object.freeze({
+  networkAccountLimitEnabled: true,
+  networkAccountLimit: 2,
+  humanVerificationRequired: true,
+  humanChallengeMode: "captcha",
+  newAccountProtectionEnabled: true,
+  newAccountWindowMinutes: 3,
+  newAccountAsteroidLimit: 1000,
+  newAccountSpecialAsteroidLimit: 100,
+  lowProgressProtectionEnabled: true,
+  lowProgressRouteLimit: 3,
+  lowProgressAsteroidLimit: 5000,
+  lowProgressPowerupLimit: 100,
+});
+let moderationSettingsCache = { ...DEFAULT_MODERATION_SETTINGS };
+
+function validateModerationSettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const booleanKeys = ["networkAccountLimitEnabled", "humanVerificationRequired", "newAccountProtectionEnabled", "lowProgressProtectionEnabled"];
+  if (!booleanKeys.every((key) => typeof value[key] === "boolean")) return null;
+  if (!["captcha", "math"].includes(value.humanChallengeMode)) return null;
+  const within = (key, min, max) => Number.isSafeInteger(value[key]) && value[key] >= min && value[key] <= max;
+  if (!within("networkAccountLimit", 1, 100)
+    || !within("newAccountWindowMinutes", 1, 10)
+    || !within("newAccountAsteroidLimit", 1, 100000)
+    || !within("newAccountSpecialAsteroidLimit", 1, 10000)
+    || !within("lowProgressRouteLimit", 0, 100)
+    || !within("lowProgressAsteroidLimit", 1, 1000000)
+    || !within("lowProgressPowerupLimit", 1, 100000)) return null;
+  return Object.fromEntries(Object.keys(DEFAULT_MODERATION_SETTINGS).map((key) => [key, value[key]]));
+}
+
+async function getModerationSettings(db) {
+  const collection = db.collection("game_settings");
+  if (typeof collection.findOne !== "function") return { ...moderationSettingsCache };
+  const record = await collection.findOne({ _id: "moderation_settings" });
+  moderationSettingsCache = validateModerationSettings(record?.value) ?? { ...DEFAULT_MODERATION_SETTINGS };
+  return { ...moderationSettingsCache };
+}
 const defaultRouletteTiers = [
   { buyIn: 5, chances: { claims: 42, specialClaims: 15, color: 20, trail: 12, avatar: 8, title: 3 }, rewards: { claims: [50, 150], specialClaims: [1, 2] } },
   { buyIn: 10, chances: { claims: 24, specialClaims: 18, color: 22, trail: 18, avatar: 12, title: 6 }, rewards: { claims: [125, 350], specialClaims: [1, 3] } },
@@ -317,21 +356,25 @@ function temporaryPassword() {
   return password;
 }
 
-function createHumanChallenge() {
+function createHumanChallenge(settings = DEFAULT_MODERATION_SETTINGS) {
+  const mode = settings.humanChallengeMode === "math" ? "math" : "captcha";
   const left = crypto.randomInt(2, 10);
   const right = crypto.randomInt(2, 10);
-  const answer = String(left + right);
+  const captchaAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const captcha = Array.from({ length: 6 }, () => captchaAlphabet[crypto.randomInt(captchaAlphabet.length)]).join("");
+  const answer = mode === "math" ? String(left + right) : captcha;
   const issuedAt = Date.now();
   const payload = {
     version: 1,
-    question: `What is ${left} + ${right}?`,
+    mode,
+    question: mode === "math" ? `What is ${left} + ${right}?` : `Type this CAPTCHA code: ${captcha}`,
     answerHash: crypto.createHash("sha256").update(answer).digest("hex"),
     issuedAt,
     expiresAt: issuedAt + humanChallengeTtlMs,
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = crypto.createHmac("sha256", humanChallengeSecret).update(encoded).digest("base64url");
-  return { token: `${encoded}.${signature}`, question: payload.question, issuedAt, expiresAt: payload.expiresAt };
+  return { token: `${encoded}.${signature}`, mode, question: payload.question, issuedAt, expiresAt: payload.expiresAt };
 }
 
 function verifyHumanChallenge(value) {
@@ -343,11 +386,13 @@ function verifyHumanChallenge(value) {
   if (suppliedSignature !== expectedSignature) return false;
   let payload;
   try { payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")); } catch { return false; }
-  if (payload?.version !== 1 || typeof payload.answerHash !== "string" || !Number.isSafeInteger(payload.issuedAt) || !Number.isSafeInteger(payload.expiresAt)) return false;
+  // Accept previously issued math challenges during a rolling deployment.
+  const mode = payload?.mode === undefined ? "math" : payload.mode;
+  if (payload?.version !== 1 || !["math", "captcha"].includes(mode) || typeof payload.answerHash !== "string" || !Number.isSafeInteger(payload.issuedAt) || !Number.isSafeInteger(payload.expiresAt)) return false;
   const now = Date.now();
   if (payload.issuedAt > now || now - payload.issuedAt < humanChallengeMinAgeMs || payload.expiresAt <= now) return false;
-  const answer = value.answer.trim().replace(/\s+/g, "");
-  if (!/^\d{1,3}$/.test(answer)) return false;
+  const answer = value.answer.trim().replace(/\s+/g, "").toUpperCase();
+  if (mode === "math" ? !/^\d{1,3}$/.test(answer) : !/^[A-Z2-9]{6}$/.test(answer)) return false;
   const answerHash = crypto.createHash("sha256").update(answer).digest("hex");
   return answerHash === payload.answerHash;
 }
@@ -829,14 +874,15 @@ async function accountHandler(req, res, next, mode) {
     }
 
     if (mode === "register") {
-      if (ipHash && typeof db.collection("users").countDocuments === "function") {
+      const moderationSettings = await getModerationSettings(db);
+      if (moderationSettings.networkAccountLimitEnabled && ipHash && typeof db.collection("users").countDocuments === "function") {
         const recentRegistrations = await db.collection("users").countDocuments({
           lastSeenIpHash: ipHash,
           createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         });
-        if (recentRegistrations >= 2) return res.status(429).json({ error: "Too many new accounts from this network today. Try again tomorrow." });
+        if (recentRegistrations >= moderationSettings.networkAccountLimit) return res.status(429).json({ error: "Too many new accounts from this network today. Try again tomorrow." });
       }
-      const humanVerified = consumeHumanChallenge(credentials?.humanChallenge);
+      const humanVerified = moderationSettings.humanVerificationRequired ? consumeHumanChallenge(credentials?.humanChallenge) : true;
       if (!humanVerified) return res.status(400).json({ error: "Complete the current human check before creating an account." });
       const emailHash = hashEmail(email);
       if (emailHash && await isEmailBanned(db, emailHash)) {
@@ -918,9 +964,9 @@ async function accountHandler(req, res, next, mode) {
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-app.get("/api/auth/human-challenge", humanChallengeLimiter, (req, res) => {
+app.get("/api/auth/human-challenge", humanChallengeLimiter, (_req, res) => {
   noStore(res);
-  res.json(createHumanChallenge());
+  res.json({ ...createHumanChallenge(moderationSettingsCache), required: moderationSettingsCache.humanVerificationRequired });
 });
 
 app.use("/api", (_req, res, next) => {
@@ -1159,22 +1205,24 @@ app.get("/api/account/progress", requireUser, async (req, res, next) => {
 
 async function deleteAbusiveNewAccount(db, user, progress) {
   if (user.role !== "player") return null;
+  const settings = await getModerationSettings(db);
+  if (!settings.newAccountProtectionEnabled) return null;
   const account = await db.collection("users").findOne(
     { _id: user.id },
     { projection: { username: 1, createdAt: 1 } },
   );
-  if (!account?.createdAt || Date.now() - new Date(account.createdAt).getTime() > 3 * 60 * 1000) return null;
+  if (!account?.createdAt || Date.now() - new Date(account.createdAt).getTime() > settings.newAccountWindowMinutes * 60 * 1000) return null;
   const asteroids = Number(progress?.["orbit-claims"] ?? 0);
   const specialAsteroids = Number(progress?.["orbit-special-claims"] ?? 0);
-  if (asteroids <= 1000 && specialAsteroids <= 100) return null;
+  if (asteroids <= settings.newAccountAsteroidLimit && specialAsteroids <= settings.newAccountSpecialAsteroidLimit) return null;
   const redemptions = db.collection("code_redemptions");
   const usedCode = typeof redemptions.countDocuments === "function"
     && await redemptions.countDocuments({ userId: user.id }, { limit: 1 }) > 0;
   if (usedCode) return null;
 
-  const reason = asteroids > 1000
-    ? "More than 1,000 asteroids were received during the first three minutes without a reward code."
-    : "More than 100 special asteroids were received during the first three minutes without a reward code.";
+  const reason = asteroids > settings.newAccountAsteroidLimit
+    ? `More than ${settings.newAccountAsteroidLimit.toLocaleString()} asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`
+    : `More than ${settings.newAccountSpecialAsteroidLimit.toLocaleString()} special asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`;
   await Promise.all([
     db.collection("user_sessions").deleteMany({ userId: user.id }),
     db.collection("player_progress").deleteOne({ _id: user.id }),
@@ -1219,13 +1267,15 @@ function powerupInventoryTotal(progress) {
 
 async function banLowProgressAbuse(db, user, progress) {
   if (user.role !== "player" || await hasRedeemedCode(db, user.id)) return null;
+  const settings = await getModerationSettings(db);
+  if (!settings.lowProgressProtectionEnabled) return null;
   const routes = completedRouteCount(progress);
   const asteroids = Number(progress?.["orbit-claims"] ?? 0);
   const powerups = powerupInventoryTotal(progress);
-  if (routes >= 4 || (asteroids < 5000 && powerups < 100)) return null;
+  if (routes > settings.lowProgressRouteLimit || (asteroids < settings.lowProgressAsteroidLimit && powerups < settings.lowProgressPowerupLimit)) return null;
   const account = await db.collection("users").findOne({ _id: user.id }, { projection: { username: 1 } });
   if (!account) return null;
-  const reason = asteroids >= 5000
+  const reason = asteroids >= settings.lowProgressAsteroidLimit
     ? `${asteroids.toLocaleString()} asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
     : `${powerups.toLocaleString()} power-ups with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`;
   await Promise.all([
@@ -1422,10 +1472,11 @@ app.put("/api/account/chat-preferences", requireSameOrigin, requireUser, async (
 
 app.post("/api/account/human-verify", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
-    if (!consumeHumanChallenge(req.body?.humanChallenge)) {
+    const db = await getDatabase();
+    const settings = await getModerationSettings(db);
+    if (settings.humanVerificationRequired && !consumeHumanChallenge(req.body?.humanChallenge)) {
       return res.status(400).json({ error: "Complete the human check before playing online levels." });
     }
-    const db = await getDatabase();
     const result = await db.collection("users").updateOne(
       { _id: req.user.id, banned: { $ne: true } },
       { $set: { humanVerified: true, humanVerifiedAt: new Date() } },
@@ -2365,6 +2416,41 @@ async function getTargetManagedUser(db, rawId, actorRole = "owner") {
   return { user, userId };
 }
 
+app.get("/api/admin/moderation-settings", requirePermission("moderation"), async (_req, res, next) => {
+  try {
+    noStore(res);
+    res.json({ settings: await getModerationSettings(await getDatabase()) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/admin/moderation-settings", requireSameOrigin, requirePermission("moderation"), async (req, res, next) => {
+  try {
+    const settings = validateModerationSettings(req.body?.settings);
+    if (!settings) return res.status(400).json({ error: "Moderation settings contain an invalid value." });
+    const db = await getDatabase();
+    await db.collection("game_settings").updateOne(
+      { _id: "moderation_settings" },
+      { $set: { value: settings, updatedAt: new Date(), updatedBy: req.user.id } },
+      { upsert: true },
+    );
+    moderationSettingsCache = { ...settings };
+    await recordModerationLog(db, {
+      action: "Moderation settings updated",
+      reason: "Shared anti-bot and account-protection rules were changed.",
+      actorId: req.user.id,
+      actorUsername: req.user.username,
+      targetUserId: null,
+      targetUsername: "Game moderation settings",
+    });
+    noStore(res);
+    res.json({ settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/moderation-log", requirePermission("moderation"), async (_req, res, next) => {
   try {
     noStore(res);
@@ -3156,8 +3242,9 @@ app.get("/api/staff/leaderboard", requireStaff, async (req, res, next) => {
 
 app.post("/api/runs/start", requireSameOrigin, runStartLimiter, requireUser, async (req, res, next) => {
   try {
-    if (req.user.role === "player" && req.user.humanVerified === false) {
-      await recordSecurityEvent(await getDatabase(), { type: "unverified-run-start", userId: req.user.id, role: req.user.role });
+    const db = await getDatabase();
+    if (req.user.role === "player" && req.user.humanVerified === false && (await getModerationSettings(db)).humanVerificationRequired) {
+      await recordSecurityEvent(db, { type: "unverified-run-start", userId: req.user.id, role: req.user.role });
       return res.status(403).json({ error: "Complete the human check in Player settings before playing online levels." });
     }
     const levelName = typeof req.body?.level === "string" ? req.body.level.trim() : "";
@@ -3167,7 +3254,6 @@ app.post("/api/runs/start", requireSameOrigin, runStartLimiter, requireUser, asy
     const now = new Date();
     const runId = crypto.randomBytes(24).toString("base64url");
     const expiresAt = new Date(now.getTime() + RUN_PROOF_TTL_MS);
-    const db = await getDatabase();
     await db.collection("run_proofs").insertOne({
       _id: runId,
       userId: req.user.id,
@@ -3186,8 +3272,9 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
   try {
     const run = req.body;
     if (!isValidRun(run)) return res.status(400).json({ error: "The run details are invalid." });
-    if (req.user.role === "player" && req.user.humanVerified === false) {
-      await recordSecurityEvent(await getDatabase(), { type: "unverified-run-submit", userId: req.user.id, role: req.user.role });
+    const db = await getDatabase();
+    if (req.user.role === "player" && req.user.humanVerified === false && (await getModerationSettings(db)).humanVerificationRequired) {
+      await recordSecurityEvent(db, { type: "unverified-run-submit", userId: req.user.id, role: req.user.role });
       return res.status(403).json({ error: "Complete the human check in Player settings before submitting online runs." });
     }
     const runId = typeof run.proofId === "string" && /^[A-Za-z0-9_-]{32,80}$/.test(run.proofId) ? run.proofId : "";
@@ -3196,7 +3283,6 @@ app.post("/api/runs", requireSameOrigin, runSubmissionLimiter, requireUser, asyn
     if (req.user.role !== "player" && !ownerSubmission) return res.json({ improved: false, ignored: true, reason: "owner-private", entry: null });
     if (req.user.role === "player" && req.user.leaderboardOptIn === false) return res.json({ improved: false, ignored: true, reason: "opted-out", entry: null });
     const levelName = run.level.trim();
-    const db = await getDatabase();
     const runProofs = db.collection("run_proofs");
     const now = new Date();
     const proof = await runProofs.findOne({ _id: runId, userId: req.user.id, levelName, consumedAt: null, expiresAt: { $gt: now } });
@@ -3864,11 +3950,17 @@ async function initializeDatabaseOnce() {
       { upsert: true },
     ),
     settings.updateOne(
+      { _id: "moderation_settings" },
+      { $setOnInsert: { value: DEFAULT_MODERATION_SETTINGS, createdAt: new Date() } },
+      { upsert: true },
+    ),
+    settings.updateOne(
       { _id: "builtin_level_overrides" },
       { $setOnInsert: { value: {}, createdAt: new Date() } },
       { upsert: true },
     ),
   ]);
+  await getModerationSettings(db);
 
   dummyPasswordHash = await argon2.hash("constant-time account lookup", passwordHashOptions);
   dummyRecoveryHash = await argon2.hash("constant-time recovery lookup", passwordHashOptions);

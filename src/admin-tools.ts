@@ -9,6 +9,93 @@ import { powerupLabels } from "./game-config";
 const MAX_UPDATE_LOG_BODY_LENGTH = 20_000;
 const MAX_UPDATE_LOG_BYTES = 200_000;
 
+type ModerationSettings = {
+    networkAccountLimitEnabled: boolean;
+    networkAccountLimit: number;
+    humanVerificationRequired: boolean;
+    humanChallengeMode: "captcha" | "math";
+    newAccountProtectionEnabled: boolean;
+    newAccountWindowMinutes: number;
+    newAccountAsteroidLimit: number;
+    newAccountSpecialAsteroidLimit: number;
+    lowProgressProtectionEnabled: boolean;
+    lowProgressRouteLimit: number;
+    lowProgressAsteroidLimit: number;
+    lowProgressPowerupLimit: number;
+};
+
+export async function renderAdminModerationSettings(container: HTMLElement) {
+    container.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = "Moderation settings";
+    const description = document.createElement("p");
+    description.textContent = "These shared rules apply on the server to every player. Reward-code claims stay exempt from automatic progression moderation.";
+    const status = document.createElement("small");
+    status.setAttribute("role", "status");
+    const form = document.createElement("form");
+    form.className = "account-profile-form";
+    const settings = await apiRequest<{ settings: ModerationSettings }>("/admin/moderation-settings");
+    const toggle = (labelText: string, key: keyof ModerationSettings, help?: string) => {
+        const label = document.createElement("label");
+        label.className = "account-presence-setting";
+        const copy = document.createElement("span");
+        copy.textContent = labelText;
+        if (help) { const small = document.createElement("small"); small.textContent = help; copy.append(small); }
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = Boolean(settings.settings[key]);
+        input.dataset.setting = String(key);
+        label.append(copy, input);
+        form.append(label);
+    };
+    const number = (labelText: string, key: keyof ModerationSettings, min: number, max: number, help?: string) => {
+        const label = document.createElement("label");
+        label.append(document.createTextNode(labelText));
+        if (help) { const small = document.createElement("small"); small.textContent = help; label.append(small); }
+        const input = document.createElement("input");
+        input.type = "number"; input.min = String(min); input.max = String(max); input.step = "1";
+        input.required = true; input.value = String(settings.settings[key]); input.dataset.setting = String(key);
+        label.append(input); form.append(label);
+    };
+    const select = document.createElement("label");
+    select.append(document.createTextNode("Human verification type"));
+    const selectInput = document.createElement("select");
+    selectInput.dataset.setting = "humanChallengeMode";
+    [["captcha", "CAPTCHA code"], ["math", "Quick math"]].forEach(([value, labelText]) => { const option = document.createElement("option"); option.value = value; option.textContent = labelText; selectInput.append(option); });
+    selectInput.value = settings.settings.humanChallengeMode;
+    select.append(selectInput); form.append(select);
+    toggle("Limit accounts per network", "networkAccountLimitEnabled", "Turn off to allow unlimited registrations from the same network.");
+    number("Accounts allowed per network each day", "networkAccountLimit", 1, 100);
+    toggle("Require human verification", "humanVerificationRequired", "New accounts must solve the selected check before they can be created.");
+    toggle("Protect new accounts from impossible rewards", "newAccountProtectionEnabled");
+    number("New-account protection window (minutes)", "newAccountWindowMinutes", 1, 10);
+    number("Normal asteroid limit during that window", "newAccountAsteroidLimit", 1, 100000);
+    number("Special asteroid limit during that window", "newAccountSpecialAsteroidLimit", 1, 10000);
+    toggle("Ban impossible low-progress accounts", "lowProgressProtectionEnabled");
+    number("Maximum routes before low-progress protection stops", "lowProgressRouteLimit", 0, 100);
+    number("Asteroid limit at low progress", "lowProgressAsteroidLimit", 1, 1000000);
+    number("Power-up limit at low progress", "lowProgressPowerupLimit", 1, 100000);
+    const save = createTextButton("Save moderation settings", async () => {
+        const next = { ...settings.settings } as ModerationSettings;
+        form.querySelectorAll<HTMLInputElement>("input[data-setting]").forEach((input) => {
+            const key = input.dataset.setting as keyof ModerationSettings;
+            (next as Record<string, unknown>)[key] = input.type === "checkbox" ? input.checked : Number(input.value);
+        });
+        next.humanChallengeMode = selectInput.value as ModerationSettings["humanChallengeMode"];
+        save.disabled = true;
+        status.textContent = "Saving moderation settings...";
+        try {
+            const response = await apiRequest<{ settings: ModerationSettings }>("/admin/moderation-settings", { method: "PUT", body: JSON.stringify({ settings: next }) });
+            Object.assign(settings.settings, response.settings);
+            status.textContent = "Moderation settings saved for all players.";
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not save moderation settings.";
+        } finally { save.disabled = false; }
+    });
+    form.append(save, status);
+    container.append(heading, description, form);
+}
+
 export async function renderAdminCodeTools(container: HTMLElement, availableTitles: ProfileTitle[] = []) {
     container.replaceChildren();
     const heading = document.createElement("h2");

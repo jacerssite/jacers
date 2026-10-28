@@ -12,7 +12,7 @@ import { loadManagedUsers } from "./managed-users";
 import { createCustomization } from "./customization";
 import { createLeaderboard } from "./leaderboard";
 import { createAccountRecovery } from "./account-recovery";
-import { renderAdminChatFilterTools, renderAdminChatReports, renderAdminCodeTools, renderAdminMessageTools, renderAdminModerationLog, renderAdminUpdateLog } from "./admin-tools";
+import { renderAdminChatFilterTools, renderAdminChatReports, renderAdminCodeTools, renderAdminMessageTools, renderAdminModerationLog, renderAdminModerationSettings, renderAdminUpdateLog } from "./admin-tools";
 import { createControlNavigation, type ControlSection } from "./owner-panel";
 import { createRouletteFields } from "./roulette-editor";
 import { createChat } from "./chat";
@@ -2495,9 +2495,9 @@ function showAccount(initialMessage = "") {
                 question.className = "human-check-status";
                 question.textContent = "Loading human check...";
                 const answer = document.createElement("input");
-                answer.inputMode = "numeric";
-                answer.maxLength = 3;
-                answer.placeholder = "Answer";
+                answer.inputMode = "text";
+                answer.maxLength = 6;
+                answer.placeholder = "CAPTCHA answer";
                 answer.disabled = true;
                 const verify = document.createElement("button");
                 verify.type = "button";
@@ -2948,12 +2948,12 @@ function showAccount(initialMessage = "") {
                 email.title = "Enter a valid email address.";
                 emailLabel.append(email);
                 humanLabel = document.createElement("label");
-                humanLabel.textContent = "Human check";
+                humanLabel.textContent = "CAPTCHA check";
                 humanAnswer = document.createElement("input");
                 humanAnswer.name = "human-answer";
-                humanAnswer.inputMode = "numeric";
+                humanAnswer.inputMode = "text";
                 humanAnswer.autocomplete = "off";
-                humanAnswer.maxLength = 3;
+                humanAnswer.maxLength = 6;
                 humanAnswer.placeholder = "Loading check...";
                 humanAnswer.disabled = true;
                 humanLabel.append(humanAnswer);
@@ -2975,7 +2975,7 @@ function showAccount(initialMessage = "") {
                         if (humanAnswer) {
                             humanAnswer.disabled = false;
                             humanAnswer.required = true;
-                            humanAnswer.placeholder = "Answer";
+                            humanAnswer.placeholder = "CAPTCHA answer";
                         }
                         submit.disabled = false;
                         if (humanChallengeStatus) humanChallengeStatus.textContent = challenge.question;
@@ -3767,6 +3767,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const moderationLogManagement = document.createElement("section");
     moderationLogManagement.className = "tester-player-management";
     moderationLogManagement.hidden = true;
+    const moderationSettingsManagement = document.createElement("section");
+    moderationSettingsManagement.className = "tester-player-management";
+    moderationSettingsManagement.hidden = true;
     const updateLogManagement = document.createElement("section");
     updateLogManagement.className = "tester-player-management";
     updateLogManagement.hidden = true;
@@ -4719,6 +4722,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         { id: "players", title: "Player accounts", group: isOwner ? "Owner management" : "Moderation", description: isOwner ? "Review accounts, progress, roles, and access." : "Review accounts and enforce bans without editing rewards or saved progress.", panel: accountManagement, onOpen: () => loadOnce("players", accountManagement, () => loadManagedUsers(accountManagement, { canEditProfiles: isOwner, canManageRoles: isOwner, canManageSensitive: isOwner })) },
         { id: "reports", title: "Chat reports", group: "Moderation", description: "Review reports submitted from global chat and direct messages.", panel: reportManagement, onOpen: () => loadOnce("reports", reportManagement, () => renderAdminChatReports(reportManagement)) },
         { id: "moderation-log", title: "Moderation log", group: "Moderation", description: "Review bans, locks, and their recorded reasons.", panel: moderationLogManagement, onOpen: () => loadOnce("moderation-log", moderationLogManagement, () => renderAdminModerationLog(moderationLogManagement)) },
+        { id: "moderation-settings", title: "Moderation settings", group: "Moderation", description: "Set network account limits, CAPTCHA checks, and automatic anti-abuse rules.", panel: moderationSettingsManagement, onOpen: () => loadOnce("moderation-settings", moderationSettingsManagement, () => renderAdminModerationSettings(moderationSettingsManagement)) },
     );
     if (isAdmin || isOwner) sections.push(
         { id: "codes", title: "Reward codes", group: "Content management", description: "Create and manage redeemable asteroid, power-up, cosmetic, and title rewards.", panel: codeManagement, onOpen: () => loadOnce("codes", codeManagement, () => renderAdminCodeTools(codeManagement, profileTitles)) },
@@ -4739,7 +4743,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const sectionDescription = document.createElement("p");
     sectionHeader.append(sectionGroup, sectionTitle, sectionDescription);
     form.replaceChildren(...sections.filter((section) => settingsIds.has(section.id)).map((section) => section.panel), saveFooter);
-    content.append(sectionHeader, worldTabs, form, accountManagement, reportManagement, moderationLogManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
+    content.append(sectionHeader, worldTabs, form, accountManagement, reportManagement, moderationLogManagement, moderationSettingsManagement, codeManagement, messageManagement, chatFilterManagement, updateLogManagement, titleManagement);
     const navigation = createControlNavigation(sections, (section) => selectSection(section.id));
     function selectSection(id: string) {
         const selected = sections.find((section) => section.id === id);
@@ -5379,10 +5383,6 @@ async function waitForRunProof(levelName: string, timeoutMs = 3000) {
 function startGame(levelIndex = currentLevel) {
     const level = levels[levelIndex];
     if (!level) return;
-    if (!isLevelMakerPreview && currentOnlineUser?.role === "player" && currentOnlineUser.humanVerified === false) {
-        showAccount("Complete the human check in Player settings before playing online levels.");
-        return;
-    }
     if (isPrestigeRouteLocked(level)) {
         const required = Math.min(level.prestigeRequirement ?? 1, prestigeMax);
         const screen = document.createElement("main");
