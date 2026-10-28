@@ -1771,6 +1771,13 @@ async function canAccessChatMessage(db, located, user) {
   const conversation = await db.collection("conversations").findOne({ pairKey: located.message.conversationId, userIds: user.id });
   return Boolean(conversation);
 }
+async function getReplyPreview(db, replyToId, { global, conversationId }) {
+  if (replyToId === undefined || replyToId === null || replyToId === "") return null;
+  if (typeof replyToId !== "string" || !ObjectId.isValid(replyToId)) throw Object.assign(new Error("Reply target is invalid."), { statusCode: 400 });
+  const located = await findChatMessage(db, replyToId);
+  if (!located || located.global !== global || (!global && located.message.conversationId !== conversationId)) throw Object.assign(new Error("Reply target is unavailable."), { statusCode: 400 });
+  return { id: userIdString(located.message._id), senderId: userIdString(located.message.senderId), sender: located.message.sender ?? "Pilot", text: located.message.deletedAt ? "Message deleted" : String(located.message.text ?? "").slice(0, 180) };
+}
 
 app.get("/api/chat/mentions", requireUser, async (req, res, next) => {
   try {
@@ -1809,6 +1816,7 @@ app.get("/api/chat/global", requireUser, async (req, res, next) => {
     res.json({ messages: messages.reverse().map((message) => ({
       id: userIdString(message._id), conversationId: "global", senderId: userIdString(message.senderId),
       sender: message.sender, role: message.role, text: message.deletedAt ? "Message deleted" : message.text,
+      mentions: message.deletedAt ? [] : message.mentions ?? [], replyTo: message.replyTo ?? null,
       reactions: message.deletedAt ? [] : publicChatReactions(message.reactions, req.user.id),
       createdAt: message.createdAt?.toISOString?.() ?? message.createdAt, editedAt: message.editedAt?.toISOString?.() ?? message.editedAt ?? null, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
     })) });
@@ -1831,13 +1839,18 @@ app.post("/api/chat/global", requireSameOrigin, chatMessageLimiter, requireUser,
       : [];
     if (recent.length >= 3 && recent.every((message) => message.text === moderatedText)) return res.status(429).json({ error: "Please do not repeat the same message." });
     const now = new Date();
-    const inserted = await messages.insertOne({ senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, createdAt: now });
+    const replyTo = await getReplyPreview(db, req.body?.replyToId, { global: true });
     const mentions = mentionedUsernames(moderatedText).filter((name) => name !== req.user.usernameNormalized);
+    let mentionRecords = [];
     if (mentions.length && typeof db.collection("users").find === "function") {
-      const targets = await db.collection("users").find({ usernameNormalized: { $in: mentions }, _id: { $ne: req.user.id }, banned: { $ne: true } }, { projection: { _id: 1 } }).toArray();
+      const targets = await db.collection("users").find({ usernameNormalized: { $in: mentions }, _id: { $ne: req.user.id }, banned: { $ne: true } }, { projection: { _id: 1, username: 1, role: 1 } }).toArray();
+      mentionRecords = targets.map((target) => ({ id: userIdString(target._id), username: target.username, role: target.role }));
+      const inserted = await messages.insertOne({ senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, ...(replyTo ? { replyTo } : {}), ...(mentionRecords.length ? { mentions: mentionRecords } : {}), createdAt: now });
       if (targets.length) await db.collection("chat_notifications").insertMany(targets.map((target) => ({ recipientId: target._id, senderId: req.user.id, messageId: inserted.insertedId, kind: "mention", createdAt: now })));
+      return res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: "global", senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, mentions: mentionRecords, replyTo, createdAt: now.toISOString() } });
     }
-    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: "global", senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, createdAt: now.toISOString() } });
+    const inserted = await messages.insertOne({ senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, ...(replyTo ? { replyTo } : {}), createdAt: now });
+    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: "global", senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, replyTo, createdAt: now.toISOString() } });
   } catch (error) {
     next(error);
   }
@@ -1923,6 +1936,7 @@ app.get("/api/chat/conversations/:userId/messages", requireUser, async (req, res
         sender: message.sender ?? (senderId === userIdString(req.user.id) ? req.user.username : access.target.username),
         role: message.role ?? (senderId === userIdString(req.user.id) ? req.user.role : access.target.role),
         text: message.deletedAt ? "Message deleted" : message.text,
+        mentions: message.deletedAt ? [] : message.mentions ?? [], replyTo: message.replyTo ?? null,
         attachment: message.deletedAt ? undefined : message.attachment,
         reactions: message.deletedAt ? [] : publicChatReactions(message.reactions, req.user.id),
         createdAt, readAt, editedAt: message.editedAt?.toISOString?.() ?? message.editedAt ?? null, deletedAt: message.deletedAt?.toISOString?.() ?? message.deletedAt ?? null,
@@ -1953,7 +1967,8 @@ app.post("/api/chat/conversations/:userId/messages", requireSameOrigin, chatMess
     const recent = typeof messages.find === "function" ? await messages.find({ conversationId: pairKey, senderId: req.user.id, deletedAt: { $exists: false } }).sort({ _id: -1 }).limit(3).toArray() : [];
     if (moderatedText && recent.length >= 3 && recent.every((message) => message.text === moderatedText)) return res.status(429).json({ error: "Please do not repeat the same message." });
     const now = new Date();
-    const message = { conversationId: pairKey, senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, ...(attachment ? { attachment } : {}), createdAt: now };
+    const replyTo = await getReplyPreview(db, req.body?.replyToId, { global: false, conversationId: pairKey });
+    const message = { conversationId: pairKey, senderId: req.user.id, sender: req.user.username, role: req.user.role, text: moderatedText, ...(replyTo ? { replyTo } : {}), ...(attachment ? { attachment } : {}), createdAt: now };
     const inserted = await messages.insertOne(message);
     const conversations = db.collection("conversations");
     await conversations.updateOne(
@@ -1962,7 +1977,7 @@ app.post("/api/chat/conversations/:userId/messages", requireSameOrigin, chatMess
       { upsert: true },
     );
     await db.collection("chat_notifications").insertOne({ recipientId: targetId, senderId: req.user.id, messageId: inserted.insertedId, conversationUserId: req.user.id, kind: "direct", createdAt: now });
-    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: pairKey, senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, ...(attachment ? { attachment } : {}), createdAt: now.toISOString() } });
+    res.status(201).json({ message: { id: inserted.insertedId.toHexString(), conversationId: pairKey, senderId: userIdString(req.user.id), sender: req.user.username, role: req.user.role, text: moderatedText, replyTo, ...(attachment ? { attachment } : {}), createdAt: now.toISOString() } });
   } catch (error) {
     next(error);
   }

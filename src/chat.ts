@@ -51,6 +51,7 @@ export function createChat(context: ChatContext) {
     let typingStopTimer = 0;
     let hasUnreadSnapshot = false;
     let lastNotificationId = "";
+    let replyTarget: ChatMessage | null = null;
     const chatEmojis = ["😀", "😄", "😂", "🥹", "😎", "😭", "😡", "❤️", "👍", "👎", "👏", "🙌", "🎉", "🔥", "✨", "💯", "🚀", "⭐", "👀", "🤝", "💀", "😮", "🤔", "🫡", "😴", "🤖", "👽", "🪐"];
 
     const setUnread = (nextPending: number, nextUnread: number, notification?: ChatNotification | null) => {
@@ -220,6 +221,18 @@ export function createChat(context: ChatContext) {
         input.setSelectionRange(start + emoji.length, start + emoji.length);
         input.dispatchEvent(new Event("input", { bubbles: true }));
     };
+    const appendMessageText = (target: HTMLElement, message: ChatMessage) => {
+        const mentions = new Map((message.mentions ?? []).map((mention) => [mention.username.toLowerCase(), mention]));
+        message.text.split(/(@[a-z0-9_]{3,20})/gi).forEach((token) => {
+            const mention = token.startsWith("@") ? mentions.get(token.slice(1).toLowerCase()) : undefined;
+            if (!mention) { target.append(token); return; }
+            const link = document.createElement("button");
+            link.type = "button"; link.className = "chat-inline-mention"; link.textContent = token;
+            link.setAttribute("aria-label", `View ${mention.username}'s profile`);
+            link.addEventListener("click", () => context.onProfile?.(mention.id));
+            target.append(link);
+        });
+    };
 
     const renderConversation = (messages: ChatMessage[], mode: "direct" | "global" = "direct") => {
         const target = content(); if (!target) return;
@@ -244,8 +257,16 @@ export function createChat(context: ChatContext) {
             const author = document.createElement("button"); author.type = "button"; author.className = "chat-message-author"; author.textContent = message.sender; author.setAttribute("aria-label", `Actions for ${message.sender}`); author.setAttribute("aria-expanded", "false");
             const timestamp = document.createElement("small"); timestamp.textContent = `${ageLabel(message.createdAt)}${message.editedAt ? " · edited" : ""}`;
             meta.append(author, timestamp);
-            const text = document.createElement("p"); text.textContent = message.text;
-            bubble.append(meta, text);
+            const text = document.createElement("p"); appendMessageText(text, message);
+            bubble.append(meta);
+            if (message.replyTo) {
+                const quoted = document.createElement("button"); quoted.type = "button"; quoted.className = "chat-reply-preview";
+                const name = document.createElement("strong"); name.textContent = message.replyTo.sender;
+                const quote = document.createElement("span"); quote.textContent = message.replyTo.text || "Attachment";
+                quoted.append(name, quote); quoted.addEventListener("click", () => context.onProfile?.(message.replyTo!.senderId));
+                bubble.append(quoted);
+            }
+            bubble.append(text);
             if (!message.deletedAt) {
                 const userActions = document.createElement("div"); userActions.className = "chat-message-actions chat-user-actions"; userActions.hidden = true;
                 const reactToMessage = async (emoji: string) => {
@@ -260,9 +281,9 @@ export function createChat(context: ChatContext) {
                 const reply = document.createElement("button"); reply.type = "button"; reply.textContent = "Reply"; reply.addEventListener("click", () => {
                     const input = content()?.querySelector<HTMLTextAreaElement>(".chat-composer textarea");
                     if (!input) return;
-                    const prefix = `@${message.sender} `;
-                    if (!input.value.startsWith(prefix)) input.value = `${prefix}${input.value}`;
-                    input.focus(); input.dispatchEvent(new Event("input", { bubbles: true })); userActions.hidden = true;
+                    replyTarget = message;
+                    userActions.hidden = true;
+                    renderConversation(messages, mode);
                 });
                 const profile = document.createElement("button"); profile.type = "button"; profile.textContent = "View profile"; profile.addEventListener("click", () => context.onProfile?.(message.senderId));
                 userActions.append(quickReactions, reply, profile);
@@ -344,6 +365,14 @@ export function createChat(context: ChatContext) {
         target.append(list);
         globalThis.requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
         const form = document.createElement("form"); form.className = "chat-composer";
+        if (replyTarget && !messages.some((message) => message.id === replyTarget!.id)) replyTarget = null;
+        if (replyTarget) {
+            const replyBar = document.createElement("div"); replyBar.className = "chat-composer-reply";
+            const replyCopy = document.createElement("span"); replyCopy.textContent = `Replying to ${replyTarget.sender}: ${replyTarget.text || "Attachment"}`;
+            const cancelReply = document.createElement("button"); cancelReply.type = "button"; cancelReply.textContent = "×"; cancelReply.setAttribute("aria-label", "Cancel reply");
+            cancelReply.addEventListener("click", () => { replyTarget = null; renderConversation(messages, mode); });
+            replyBar.append(replyCopy, cancelReply); form.append(replyBar);
+        }
         const input = document.createElement("textarea"); input.maxLength = 300; input.rows = 2; input.placeholder = "Write a message…"; input.setAttribute("aria-label", "Chat message");
         input.value = draftKey ? messageDrafts.get(draftKey) ?? "" : "";
         const mentionPicker = document.createElement("div");
@@ -426,10 +455,11 @@ export function createChat(context: ChatContext) {
             send.disabled = true;
             try {
                 const endpoint = mode === "global" ? "/chat/global" : `/chat/conversations/${encodeURIComponent(activeUserId!)}/messages`;
-                const result = await apiRequest<{ message: ChatMessage }>(endpoint, { method: "POST", body: JSON.stringify({ text: input.value, ...(mode === "direct" && pendingAttachment ? { attachment: pendingAttachment } : {}) }) });
+                const result = await apiRequest<{ message: ChatMessage }>(endpoint, { method: "POST", body: JSON.stringify({ text: input.value, ...(replyTarget ? { replyToId: replyTarget.id } : {}), ...(mode === "direct" && pendingAttachment ? { attachment: pendingAttachment } : {}) }) });
                 if (draftKey) messageDrafts.delete(draftKey);
                 input.value = "";
                 pendingAttachment = null;
+                replyTarget = null;
                 if (ownTyping) { ownTyping = false; sendTypingState(false); }
                 if (typingStopTimer) { globalThis.clearTimeout(typingStopTimer); typingStopTimer = 0; }
                 count.textContent = "0/300";

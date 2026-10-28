@@ -105,8 +105,10 @@ export type FriendEntry = { userId: string; username: string; role: OnlineUser["
 export type FriendRequest = { id: string; userId: string; username: string; role: OnlineUser["role"]; title: string; createdAt: string; direction: "incoming" | "outgoing" };
 export type ChatAttachment = { kind: "image" | "gif" | "video"; url: string; contentType: string; bytes: number };
 export type ChatReaction = { emoji: string; count: number; reacted: boolean };
+export type ChatMention = { id: string; username: string; role: OnlineUser["role"] };
+export type ChatReplyPreview = { id: string; senderId: string; sender: string; text: string };
 export type ChatNotification = { id: string; kind: "direct" | "mention"; sender: string; senderId: string; text: string; conversationUserId?: string };
-export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; attachment?: ChatAttachment; reactions?: ChatReaction[]; createdAt: string; readAt?: string | null; editedAt?: string | null; deletedAt?: string | null };
+export type ChatMessage = { id: string; conversationId: string; senderId: string; sender: string; role: OnlineUser["role"]; text: string; mentions?: ChatMention[]; replyTo?: ChatReplyPreview | null; attachment?: ChatAttachment; reactions?: ChatReaction[]; createdAt: string; readAt?: string | null; editedAt?: string | null; deletedAt?: string | null };
 export type ChatConversation = { id: string; userId: string; username: string; role: OnlineUser["role"]; isOnline: boolean; lastMessagePreview: string; lastMessageAt: string | null; unread: number };
 export type RouletteTier = {
     buyIn: 5 | 10 | 25;
