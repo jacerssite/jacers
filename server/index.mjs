@@ -64,6 +64,7 @@ const DEFAULT_MODERATION_SETTINGS = Object.freeze({
   lowProgressProtectionEnabled: true,
   lowProgressRouteLimit: 3,
   lowProgressAsteroidLimit: 5000,
+  lowProgressSpecialAsteroidLimit: 100,
   lowProgressPowerupLimit: 100,
 });
 let moderationSettingsCache = { ...DEFAULT_MODERATION_SETTINGS };
@@ -80,6 +81,7 @@ function validateModerationSettings(value) {
     || !within("newAccountSpecialAsteroidLimit", 1, 10000)
     || !within("lowProgressRouteLimit", 0, 100)
     || !within("lowProgressAsteroidLimit", 1, 1000000)
+    || !within("lowProgressSpecialAsteroidLimit", 1, 100000)
     || !within("lowProgressPowerupLimit", 1, 100000)) return null;
   return Object.fromEntries(Object.keys(DEFAULT_MODERATION_SETTINGS).map((key) => [key, value[key]]));
 }
@@ -88,7 +90,10 @@ async function getModerationSettings(db) {
   const collection = db.collection("game_settings");
   if (typeof collection.findOne !== "function") return { ...moderationSettingsCache };
   const record = await collection.findOne({ _id: "moderation_settings" });
-  moderationSettingsCache = validateModerationSettings(record?.value) ?? { ...DEFAULT_MODERATION_SETTINGS };
+  const stored = record?.value && typeof record.value === "object" && !Array.isArray(record.value)
+    ? { ...DEFAULT_MODERATION_SETTINGS, ...record.value }
+    : DEFAULT_MODERATION_SETTINGS;
+  moderationSettingsCache = validateModerationSettings(stored) ?? { ...DEFAULT_MODERATION_SETTINGS };
   return { ...moderationSettingsCache };
 }
 const defaultRouletteTiers = [
@@ -1271,18 +1276,21 @@ async function banLowProgressAbuse(db, user, progress) {
   if (!settings.lowProgressProtectionEnabled) return null;
   const routes = completedRouteCount(progress);
   const asteroids = Number(progress?.["orbit-claims"] ?? 0);
+  const specialAsteroids = Number(progress?.["orbit-special-claims"] ?? 0);
   const powerups = powerupInventoryTotal(progress);
-  if (routes > settings.lowProgressRouteLimit || (asteroids < settings.lowProgressAsteroidLimit && powerups < settings.lowProgressPowerupLimit)) return null;
+  if (routes > settings.lowProgressRouteLimit || (asteroids < settings.lowProgressAsteroidLimit && specialAsteroids < settings.lowProgressSpecialAsteroidLimit && powerups < settings.lowProgressPowerupLimit)) return null;
   const account = await db.collection("users").findOne({ _id: user.id }, { projection: { username: 1 } });
   if (!account) return null;
   const reason = asteroids >= settings.lowProgressAsteroidLimit
     ? `${asteroids.toLocaleString()} asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
-    : `${powerups.toLocaleString()} power-ups with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`;
+    : specialAsteroids >= settings.lowProgressSpecialAsteroidLimit
+      ? `${specialAsteroids.toLocaleString()} special asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
+      : `${powerups.toLocaleString()} power-ups with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`;
   await Promise.all([
     db.collection("users").updateOne({ _id: user.id, role: "player" }, { $set: { banned: true } }),
     db.collection("user_sessions").deleteMany({ userId: user.id }),
   ]);
-  await recordSecurityEvent(db, { type: "automatic-low-progress-ban", userId: user.id, reason, asteroids, powerups, routes });
+  await recordSecurityEvent(db, { type: "automatic-low-progress-ban", userId: user.id, reason, asteroids, specialAsteroids, powerups, routes });
   await recordModerationLog(db, {
     action: "Automatic account ban",
     reason,

@@ -21,6 +21,7 @@ type ModerationSettings = {
     lowProgressProtectionEnabled: boolean;
     lowProgressRouteLimit: number;
     lowProgressAsteroidLimit: number;
+    lowProgressSpecialAsteroidLimit: number;
     lowProgressPowerupLimit: number;
 };
 
@@ -74,6 +75,7 @@ export async function renderAdminModerationSettings(container: HTMLElement) {
     toggle("Ban impossible low-progress accounts", "lowProgressProtectionEnabled");
     number("Maximum routes before low-progress protection stops", "lowProgressRouteLimit", 0, 100);
     number("Asteroid limit at low progress", "lowProgressAsteroidLimit", 1, 1000000);
+    number("Special asteroid limit at low progress", "lowProgressSpecialAsteroidLimit", 1, 100000);
     number("Power-up limit at low progress", "lowProgressPowerupLimit", 1, 100000);
     const save = createTextButton("Save moderation settings", async () => {
         const next = { ...settings.settings } as ModerationSettings;
