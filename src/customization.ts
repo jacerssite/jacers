@@ -13,12 +13,13 @@ type CustomizationContext = {
     isTrailUnlocked: (trail: TrailStyle) => boolean;
     isAvatarUnlocked: (avatar: AvatarStyle) => boolean;
     isSpinCosmeticUnlocked: (group: CosmeticGroup, index: number) => boolean;
+    isHolidayCosmeticOwned: (group: "skin" | "trail" | "avatar", index: number) => boolean;
     showMenu: () => void;
     createPageCounter: () => HTMLElement;
 };
 
 export function createCustomization(context: CustomizationContext) {
-    const { getLoadout, setLoadout, isSkinUnlocked, isTrailUnlocked, isAvatarUnlocked, isSpinCosmeticUnlocked, showMenu, createPageCounter } = context;
+    const { getLoadout, setLoadout, isSkinUnlocked, isTrailUnlocked, isAvatarUnlocked, isSpinCosmeticUnlocked, isHolidayCosmeticOwned, showMenu, createPageCounter } = context;
 
     function showCustomization() {
         const menu = document.createElement("main");
@@ -52,12 +53,12 @@ export function createCustomization(context: CustomizationContext) {
         // Create arrays with original indices. Skins are represented by the
         // color swatches above; they are intentionally not shown as a second
         // selectable collection.
-        const trailsWithIndex = trails.map((t, i) => ({ ...t, originalIndex: i }));
+        const trailsWithIndex = trails.map((t, i) => ({ ...t, originalIndex: i })).filter((trail) => trail.holiday !== "christmas" || isHolidayCosmeticOwned("trail", trail.originalIndex));
         // Keep the complete avatar catalog in one collection. Prestige avatars
         // can be won from the roulette wheel just like the normal collection,
         // so hiding them behind the planetary-flip preview made rewards look
         // missing even though they were already unlocked on the account.
-        const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i }));
+        const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i })).filter((avatar) => avatar.holiday !== "christmas" || isHolidayCosmeticOwned("avatar", avatar.originalIndex));
         
         const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity) => HTMLButtonElement) => {
             const group = document.createElement("details");
@@ -75,7 +76,8 @@ export function createCustomization(context: CustomizationContext) {
             group.append(grid);
             target.append(group);
         };
-        const colorOptions = getShipColorOptions(STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins);
+        const colorOptions = getShipColorOptions(STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins)
+            .filter((option) => option.source !== "skin" || option.holiday !== "christmas" || isHolidayCosmeticOwned("skin", option.index));
         const appearance = document.createElement("details");
         appearance.className = "appearance-loadout-section cosmetic-dropdown";
         appearance.open = true;

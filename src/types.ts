@@ -9,10 +9,10 @@ export type Powerup = { x: number; y: number; kind: PowerupKind; collected: bool
 export type LevelKey = { id: string; x: number; y: number; collected: boolean; requiresPortal: boolean };
 export type Boss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean; attackTimer?: number };
 export type MiniBoss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean; attackTimer?: number };
-export type SkinStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean };
-export type TrailStyle = { name: string; color: string; secondaryColor?: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; secret?: boolean; boss?: boolean; golden?: boolean; jackpot?: boolean; prestige?: number };
+export type SkinStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean; holiday?: "christmas" };
+export type TrailStyle = { name: string; color: string; secondaryColor?: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; secret?: boolean; boss?: boolean; golden?: boolean; jackpot?: boolean; prestige?: number; holiday?: "christmas" };
 export type PrestigeShipArt = "stellar-guard" | "quantum-dancer" | "cosmic-queen" | "void-knight" | "eclipse-oracle" | "infinity-pilot" | "stellar-legend";
-export type AvatarStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; cssArt?: PrestigeShipArt; defaultSkin: number; prestige?: number; golden?: boolean; jackpot?: boolean };
+export type AvatarStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; cssArt?: PrestigeShipArt; defaultSkin: number; prestige?: number; golden?: boolean; jackpot?: boolean; holiday?: "christmas" };
 export type FlippedRoute = { walls: number[]; enemies: number[]; spikes: number[]; gravity: number[]; powerups?: { index: number; kind: PowerupKind }[]; key?: number };
 export type SecretKeyPlacement = { id: string; index: number; y?: number; requiresPortal?: boolean };
 export type SecretPortal = { id?: string; index: number; secretId: string; y?: number };
@@ -38,7 +38,7 @@ export type UnflippedRouteSnapshot = {
     boss: Boss | null;
     playerX: number;
 };
-export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; prestigeRequirement?: number; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean };
+export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; prestigeRequirement?: number; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean; holiday?: "christmas" };
 export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "restart" | "back" | "confirm" | "switchPlanet";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
@@ -74,7 +74,7 @@ export type ProfileTitleRequirement = {
     type: "routes" | "golden" | "prestige" | "roulette" | "locked" | "enemies" | "bosses";
     amount: number;
 };
-export type TitleAnimation = "none" | "pulse" | "shimmer" | "rainbow" | "dark-matter" | "star-shimmer" | "comet-trail" | "nebula-drift" | "aurora-wave" | "solar-flare";
+export type TitleAnimation = "none" | "pulse" | "shimmer" | "rainbow" | "dark-matter" | "star-shimmer" | "comet-trail" | "nebula-drift" | "aurora-wave" | "solar-flare" | "winter-glow" | "snowfall" | "candy-cane";
 export type ProfileTitleStyle = { color?: string; animation?: TitleAnimation };
 export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement } & ProfileTitleStyle;
 export type CodeReward =
@@ -118,7 +118,8 @@ export type RouletteTier = {
 export type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
 export type UpdateLogEntry = { date: string; title: string; body: string };
 export type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
-export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level>; portalAssignments?: Record<string, string> };
+export type HolidayEventSettings = { christmasEnabled: boolean };
+export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level>; portalAssignments?: Record<string, string>; holidayEvent?: HolidayEventSettings };
 export type WorldGameConfig = {
     /** Downward acceleration and gravity-well pull for this world. */
     gravityForce: number;

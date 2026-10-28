@@ -37,7 +37,7 @@ export const PROFILE_TITLE_MILESTONES = [
   { id: "lucky-star", name: "Lucky Star", routes: 0, color: "#ffdf72", animation: "solar-flare", requirement: { type: "roulette", amount: 1 } },
   { id: "void-jackpot", name: "Void Jackpot", routes: 0, color: "#b991ff", animation: "dark-matter", requirement: { type: "roulette", amount: 1 } },
 ];
-const TITLE_ANIMATIONS = ["none", "pulse", "shimmer", "rainbow", "dark-matter", "star-shimmer", "comet-trail", "nebula-drift", "aurora-wave", "solar-flare"];
+const TITLE_ANIMATIONS = ["none", "pulse", "shimmer", "rainbow", "dark-matter", "star-shimmer", "comet-trail", "nebula-drift", "aurora-wave", "solar-flare", "winter-glow", "snowfall", "candy-cane"];
 function defaultTitlePresentation(requirement) {
   if (requirement.type === "locked" || requirement.type === "roulette") return {};
   if (requirement.amount >= 40) return { color: "#f6c46e", animation: "dark-matter" };
@@ -71,6 +71,10 @@ export function validateProfileTitles(value) {
     titles.push(normalized);
   }
   return titles;
+}
+export function validateHolidayEventSettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.christmasEnabled !== "boolean") return null;
+  return { christmasEnabled: value.christmasEnabled };
 }
 const defaultRarityOdds = { Common: 52, Uncommon: 27, Rare: 13, Epic: 6, Legendary: 2 };
 const defaultRewardRanges = { Common: [50, 100], Uncommon: [101, 250], Rare: [251, 500], Epic: [501, 750], Legendary: [751, 1000] };

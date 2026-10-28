@@ -41,6 +41,9 @@ export const skins: SkinStyle[] = [
     { name: "Eclipse Dancer", color: "#9933ff", shape: "dart", required: 0, prestige: 2 },
     { name: "Infinity Gate", color: "#00ff66", shape: "ring", required: 0, prestige: 3 },
     { name: "Stellar Blade", color: "#ff6600", shape: "blade", required: 0, prestige: 3 },
+    { name: "Holly Comet", color: "#c91f37", shape: "dart", required: 0, holiday: "christmas" },
+    { name: "Snowglobe", color: "#dff7ff", shape: "ring", required: 0, holiday: "christmas" },
+    { name: "Evergreen Blade", color: "#0d7a49", shape: "blade", required: 0, holiday: "christmas" },
 ];
 
 export const trails: TrailStyle[] = [
@@ -66,6 +69,9 @@ export const trails: TrailStyle[] = [
     { name: "Infinite Comet", color: "#e0e0e0", required: 0, effect: "comet", prestige: 2 },
     { name: "Stellar Ribbon", color: "#00ff66", required: 0, effect: "ribbon", prestige: 3 },
     { name: "Infinity Spark", color: "#ff6600", required: 0, effect: "spark", prestige: 3 },
+    { name: "Present Parade", color: "#e63946", secondaryColor: "#f6c46e", required: 0, effect: "spark", holiday: "christmas" },
+    { name: "Snowfall Wake", color: "#e9fbff", secondaryColor: "#8fd7e4", required: 0, effect: "comet", holiday: "christmas" },
+    { name: "Holly Ribbon", color: "#138a55", secondaryColor: "#e63946", required: 0, effect: "ribbon", holiday: "christmas" },
 ];
 export const avatars: AvatarStyle[] = [
     { name: "Classic", color: "#ed7657", shape: "classic", required: 0, defaultSkin: 0 },
@@ -85,6 +91,8 @@ export const avatars: AvatarStyle[] = [
     { name: "Eclipse Oracle", color: "#9933ff", shape: "classic", required: 0, defaultSkin: 23, prestige: 2, cssArt: "eclipse-oracle" },
     { name: "Infinity Pilot", color: "#00ff66", shape: "dart", required: 0, defaultSkin: 24, prestige: 3, cssArt: "infinity-pilot" },
     { name: "Stellar Legend", color: "#ff6600", shape: "ring", required: 0, defaultSkin: 25, prestige: 3, cssArt: "stellar-legend" },
+    { name: "North Star", color: "#f6c46e", shape: "classic", required: 0, defaultSkin: 26, holiday: "christmas" },
+    { name: "Gift Ship", color: "#d92038", shape: "ring", required: 0, defaultSkin: 27, holiday: "christmas" },
 ];
 
 export function getCosmeticRarity(item: { required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }): Rarity {

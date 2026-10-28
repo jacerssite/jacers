@@ -32,6 +32,7 @@ import {
   validateWorkshopLevel,
   validateBuiltinLevelOverrides,
   validatePortalAssignments,
+  validateHolidayEventSettings,
   hasRolePermission,
   isOwnerEquivalentRole,
 } from "./game-data.mjs";
@@ -214,6 +215,13 @@ const codeRedemptionLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: { error: "Too many code attempts. Wait and try again." },
+});
+const emailVerificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many email verification attempts. Wait a few minutes and try again." },
 });
 const friendRequestLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -632,6 +640,36 @@ function maskEmail(value) {
   return `${maskedLocal}@${maskedDomain}`;
 }
 
+function emailVerificationCode() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+function hashEmailVerificationCode(emailHash, code) {
+  return crypto.createHash("sha256").update(`${emailHash}:${code}`).digest("hex");
+}
+
+async function sendEmailVerificationCode(email, code) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_VERIFICATION_FROM;
+  if (!apiKey || !from) {
+    throw Object.assign(new Error("Email verification is not configured yet. Ask the owner to set RESEND_API_KEY and EMAIL_VERIFICATION_FROM, or leave the optional email field blank."), { statusCode: 503 });
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: "Your Jacer email verification code",
+      text: `Your Jacer verification code is ${code}. It expires in 15 minutes. If you did not request this, you can ignore this email.`,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw Object.assign(new Error(`Could not send the verification email.${detail ? " Check the owner email settings." : ""}`), { statusCode: 502 });
+  }
+}
+
 async function isIpBanned(db, ipHash) {
   if (!ipHash) return false;
   const bans = db.collection("ip_bans");
@@ -893,6 +931,14 @@ async function accountHandler(req, res, next, mode) {
       if (emailHash && await isEmailBanned(db, emailHash)) {
         return res.status(403).json({ error: "This email address has been permanently banned. Contact the owner for help." });
       }
+      if (emailHash) {
+        const verificationToken = typeof credentials?.emailVerificationToken === "string" ? credentials.emailVerificationToken : "";
+        const pending = await db.collection("pending_email_verifications").findOne({ _id: emailHash });
+        if (!pending || !pending.verifiedAt || !(pending.expiresAt instanceof Date) || pending.expiresAt <= new Date()
+          || !verificationToken || pending.verificationTokenHash !== hashSessionToken(verificationToken)) {
+          return res.status(400).json({ error: "Verify this optional email address before creating the account, or clear the email field to continue without one." });
+        }
+      }
       const passwordHash = await argon2.hash(credentials.password, passwordHashOptions);
       const code = recoveryCode();
       const recoveryCodeCreatedAt = new Date();
@@ -924,6 +970,7 @@ async function accountHandler(req, res, next, mode) {
       // Seed a new account with an empty cloud profile so a refresh or a
       // failed first sync can never import guest localStorage progression.
       await initializePlayerProgress(db.collection("player_progress"), user._id, {});
+      if (emailHash) await db.collection("pending_email_verifications").deleteOne({ _id: emailHash });
       await recordModerationLog(db, {
         action: "Account created",
         reason: "New account registration completed.",
@@ -979,6 +1026,50 @@ app.use("/api", (_req, res, next) => {
   res.set("Retry-After", "10");
   res.set("Cache-Control", "no-store");
   return res.status(503).json({ error: "The online service is temporarily unavailable. Please try again shortly." });
+});
+
+app.post("/api/auth/email-verification/request", requireSameOrigin, emailVerificationLimiter, async (req, res, next) => {
+  noStore(res);
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!email) return res.status(400).json({ error: "Enter a valid email address first." });
+    const emailHash = hashEmail(email);
+    const db = await getDatabase();
+    if (await isEmailBanned(db, emailHash)) return res.status(403).json({ error: "This email address cannot be used." });
+    const code = emailVerificationCode();
+    const verificationToken = crypto.randomBytes(32).toString("base64url");
+    const now = new Date();
+    await db.collection("pending_email_verifications").updateOne(
+      { _id: emailHash },
+      { $set: { codeHash: hashEmailVerificationCode(emailHash, code), verificationTokenHash: hashSessionToken(verificationToken), expiresAt: new Date(Date.now() + 15 * 60 * 1000), attempts: 0, createdAt: now } },
+      { upsert: true },
+    );
+    await sendEmailVerificationCode(email, code);
+    res.json({ ok: true, verificationToken, expiresInSeconds: 900 });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/auth/email-verification/confirm", requireSameOrigin, emailVerificationLimiter, async (req, res, next) => {
+  noStore(res);
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    if (!email || !/^\d{6}$/.test(code)) return res.status(400).json({ error: "Enter the email address and six-digit verification code." });
+    const emailHash = hashEmail(email);
+    const db = await getDatabase();
+    const collection = db.collection("pending_email_verifications");
+    const pending = await collection.findOne({ _id: emailHash });
+    const verificationToken = typeof req.body?.verificationToken === "string" ? req.body.verificationToken : "";
+    if (!pending || !(pending.expiresAt instanceof Date) || pending.expiresAt <= new Date()) return res.status(400).json({ error: "That verification code expired. Send a new code and try again." });
+    if (!verificationToken || pending.verificationTokenHash !== hashSessionToken(verificationToken)) return res.status(400).json({ error: "Send a new verification code and try again." });
+    if ((pending.attempts ?? 0) >= 8) return res.status(429).json({ error: "Too many incorrect codes. Send a new verification code." });
+    if (pending.codeHash !== hashEmailVerificationCode(emailHash, code)) {
+      await collection.updateOne({ _id: emailHash }, { $inc: { attempts: 1 } });
+      return res.status(400).json({ error: "That verification code is not correct." });
+    }
+    await collection.updateOne({ _id: emailHash }, { $set: { verifiedAt: new Date() } });
+    res.json({ ok: true, verificationToken });
+  } catch (error) { next(error); }
 });
 
 app.post("/api/auth/register", requireSameOrigin, registrationLimiter, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
@@ -3003,7 +3094,7 @@ app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async 
 app.get("/api/settings", async (_req, res, next) => {
   try {
     const db = await getDatabase();
-    const [golden, roulette, version, updateLog, profileTitles, builtinLevelOverrides, portalAssignments] = await Promise.all([
+    const [golden, roulette, version, updateLog, profileTitles, builtinLevelOverrides, portalAssignments, holidayEvent] = await Promise.all([
       db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }),
       db.collection("game_settings").findOne({ _id: "roulette_tiers" }),
       db.collection("game_settings").findOne({ _id: "app_version" }),
@@ -3011,6 +3102,7 @@ app.get("/api/settings", async (_req, res, next) => {
       db.collection("game_settings").findOne({ _id: "profile_titles" }),
       db.collection("game_settings").findOne({ _id: "builtin_level_overrides" }),
       db.collection("game_settings").findOne({ _id: "portal_assignments" }),
+      db.collection("game_settings").findOne({ _id: "holiday_event" }),
     ]);
     res.json({
       goldenTimeLimitMs: parseGoldenTimeLimit(golden?.value) ? golden.value : 60000,
@@ -3020,7 +3112,20 @@ app.get("/api/settings", async (_req, res, next) => {
       profileTitles: includeRouletteTitles(validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES),
       builtinLevelOverrides: validateBuiltinLevelOverrides(builtinLevelOverrides?.value) ?? {},
       portalAssignments: validatePortalAssignments(portalAssignments?.value) ?? {},
+      holidayEvent: validateHolidayEventSettings(holidayEvent?.value) ?? { christmasEnabled: false },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/holiday-event", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const holidayEvent = validateHolidayEventSettings(req.body?.holidayEvent);
+    if (!holidayEvent) return res.status(400).json({ error: "Holiday event settings are invalid." });
+    const db = await getDatabase();
+    await saveSetting(db, "holiday_event", holidayEvent, req.user.id);
+    res.json({ holidayEvent });
   } catch (error) {
     next(error);
   }
@@ -3967,6 +4072,7 @@ async function initializeDatabaseOnce() {
     db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 }),
     db.collection("ip_bans").createIndex({ active: 1, bannedAt: -1 }),
     db.collection("email_bans").createIndex({ active: 1, bannedAt: -1 }),
+    db.collection("pending_email_verifications").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection("setting_history").createIndex({ settingKey: 1, changedAt: -1 }),
   ]);
   await users.updateMany({ role: { $exists: false } }, { $set: { role: "player" } });
