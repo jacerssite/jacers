@@ -117,6 +117,36 @@ test("Backspace returns to the previous in-app screen", async () => {
   }
 });
 
+test("Prestige Gate appears in Secret Space only after every normal route is complete", async () => {
+  const incomplete = await createPage();
+  try {
+    await waitFor(() => incomplete.document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(incomplete.document, "Launch mission");
+    incomplete.document.querySelector(".secret-gate").click();
+    assert.equal([...incomplete.document.querySelectorAll(".level-button")].some((button) => button.textContent.includes("Prestige Gate")), false);
+  } finally {
+    incomplete.dom.window.close();
+  }
+
+  // Mark every built-in slot complete. The menu ignores secret/prestige slots
+  // when calculating the normal-route gate, so this remains resilient when
+  // more normal routes are added.
+  const completedRoutes = Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`orbit-level-complete-${index}`, "1"]));
+  const complete = await createPage({}, completedRoutes);
+  try {
+    await waitFor(() => complete.document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(complete.document, "Launch mission");
+    complete.document.querySelector(".secret-gate").click();
+    const gate = [...complete.document.querySelectorAll(".prestige-gate-level")].find((button) => button.textContent.includes("Prestige Gate"));
+    assert.ok(gate, "Completed players should see the Prestige Gate");
+    assert.equal(gate.disabled, false, "The Prestige Gate should be playable immediately");
+    assert.match(gate.textContent, /PRESTIGE GATE/i);
+    assert.doesNotMatch(gate.textContent, /AVAILABLE IN/i);
+  } finally {
+    complete.dom.window.close();
+  }
+});
+
 test("global chat remains usable when the friends snapshot is unavailable", async () => {
   const user = { username: "Pilot_7", role: "player", appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true };
   const globalMessages = [];

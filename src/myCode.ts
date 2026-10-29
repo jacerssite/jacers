@@ -1956,17 +1956,22 @@ function showSecretLevels() {
     levelList.className = "level-list";
     levels.forEach((level, index) => {
         if (level.holiday || !level.secret || Boolean(level.prestige) !== (activePlanet === "prestige")) return;
+        // The Prestige Gate is a milestone route, not a discovered-key route.
+        // Keep Secret Space focused by revealing it only once every normal
+        // route has been completed (staff can always inspect it).
+        if (level.secretId === "prestige-gate" && !isPrestigeGateAvailable()) return;
         const unlocked = isSecretLevelUnlocked(level);
-        const cooldownUntil = level.secretId ? Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") + SECRET_LEVEL_COOLDOWN_MS : 0;
+        const cooldownUntil = usesSecretRouteCooldown(level) ? Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") + SECRET_LEVEL_COOLDOWN_MS : 0;
         const remainingMs = Math.max(0, cooldownUntil - Date.now());
         const button = document.createElement("button");
-        button.className = `level-button secret-level ${unlocked ? "" : "locked"}`;
+        button.className = `level-button secret-level ${level.secretId === "prestige-gate" ? "prestige-gate-level" : ""} ${unlocked ? "" : "locked"}`;
         button.type = "button";
         button.disabled = !unlocked || remainingMs > 0;
         const claimed = getClaimedAsteroids(index).size;
         const readyText = remainingMs <= 0 && claimed > 0 ? "SPECIAL ASTEROIDS READY" : "";
         const cooldownText = remainingMs > 0 ? `AVAILABLE IN ${formatCooldown(remainingMs)}` : readyText;
-        button.innerHTML = `<span><b>??</b> ${level.name}</span><small>${!unlocked ? `LOCKED / find its ${level.prestige ? "prestige " : ""}key` : cooldownText || `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}`}</small>`;
+        const gateReadyText = `PRESTIGE GATE / ${level.asteroids.length} special asteroids / ${level.briefing}`;
+        button.innerHTML = `<span><b>${level.secretId === "prestige-gate" ? "✦" : "??"}</b> ${level.name}</span><small>${!unlocked ? `LOCKED / find its ${level.prestige ? "prestige " : ""}key` : cooldownText || (level.secretId === "prestige-gate" ? gateReadyText : `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}`)}</small>`;
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelList.append(button);
     });
@@ -3746,7 +3751,7 @@ function showShop() {
     const cooldownTitle = document.createElement("b");
     cooldownTitle.textContent = "COOLDOWN RESET";
     const cooldownDescription = document.createElement("small");
-    const resettableSecretIndexes = levels.map((level, index) => ({ level, index })).filter(({ level, index }) => Boolean(level.secretId) && (Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") > 0 || getClaimedAsteroids(index).size > 0));
+    const resettableSecretIndexes = levels.map((level, index) => ({ level, index })).filter(({ level, index }) => usesSecretRouteCooldown(level) && (Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") > 0 || getClaimedAsteroids(index).size > 0));
     cooldownDescription.textContent = "Costs 1,000 normal asteroids. Clears every secret-level cooldown and brings back their special asteroids.";
     const cooldownBuy = document.createElement("button");
     cooldownBuy.type = "button";
@@ -3763,7 +3768,7 @@ function showShop() {
             asteroidsClaimed = balance - COOLDOWN_RESET_COST;
             localStorage.setItem("orbit-claims", String(asteroidsClaimed));
             resettableSecretIndexes.forEach(({ level, index }) => {
-                if (level.secretId) localStorage.removeItem(`orbit-secret-cooldown-${level.secretId}`);
+                if (usesSecretRouteCooldown(level)) localStorage.removeItem(`orbit-secret-cooldown-${level.secretId}`);
                 respawnSecretAsteroids(index);
             });
             showShop();
@@ -4049,9 +4054,17 @@ function getActiveSecretPortals(level: Level) {
     return (level.secretPortals ?? []).filter((portal) => hasOwnerAccess() || !isSecretPortalClaimed(portal.secretId));
 }
 
+function isPrestigeGateAvailable() {
+    return hasOwnerAccess() || getNormalRouteCompletionCount() >= getNormalRouteCount();
+}
+
+function usesSecretRouteCooldown(level: Level) {
+    return Boolean(level.secretId && level.secretId !== "prestige-gate");
+}
+
 function isSecretLevelUnlocked(level: Level) {
     if (hasOwnerAccess()) return true;
-    if (level.secretId === "prestige-gate") return localStorage.getItem("orbit-key-prestige-gate") === "1" || getNormalRouteCompletionCount() >= getNormalRouteCount();
+    if (level.secretId === "prestige-gate") return isPrestigeGateAvailable();
     return level.secretId === "eclipse" ? localStorage.getItem("orbit-key-eclipse") === "1" || localStorage.getItem("orbit-secret-unlocked") === "1" : level.secretId ? localStorage.getItem(`orbit-key-${level.secretId}`) === "1" : localStorage.getItem("orbit-secret-unlocked") === "1";
 }
 
@@ -6057,7 +6070,7 @@ function startGame(levelIndex = currentLevel) {
         document.body.replaceChildren(screen);
         return;
     }
-    if (level.secret && level.secretId) {
+    if (usesSecretRouteCooldown(level)) {
         const cooldownKey = `orbit-secret-cooldown-${level.secretId}`;
         const completedAt = Number(localStorage.getItem(cooldownKey) ?? "0");
         const cooldownUntil = completedAt + SECRET_LEVEL_COOLDOWN_MS;
@@ -6125,7 +6138,7 @@ function showWinScreen() {
         setChristmasPresents(getChristmasPresents() + presents);
         localStorage.setItem(`orbit-christmas-cooldown-${currentLevel}`, String(Date.now() + 15 * 60 * 1000));
     }
-    if (level.secret && level.secretId) localStorage.setItem(`orbit-secret-cooldown-${level.secretId}`, String(Date.now()));
+    if (usesSecretRouteCooldown(level)) localStorage.setItem(`orbit-secret-cooldown-${level.secretId}`, String(Date.now()));
     const nextLevel = getNextRouteIndex(currentLevel);
     if (nextLevel >= 0) localStorage.setItem(`orbit-level-${nextLevel}`, "1");
     if (levels[currentLevel].boss) localStorage.setItem("orbit-boss-defeated", "1");

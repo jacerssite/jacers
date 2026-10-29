@@ -482,6 +482,9 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .level-button.locked { opacity: .42; cursor: not-allowed; }
 .level-button.secret-level { border-color: #f58bff66; }
 .level-button.secret-level span { color: #f58bff; }
+.level-button.prestige-gate-level { border-color: #f6c46e; background: linear-gradient(120deg, #2a1c4788, #143746cc 58%, #3c2a0f88); box-shadow: 0 0 24px #f6c46e22; }
+.level-button.prestige-gate-level span { color: #fff0a8; }
+.level-button.prestige-gate-level b { color: #f6c46e; }
 .loadout-panel { width: min(680px, 90vw); margin: 0 auto 18px; padding: 12px 16px; border: 1px solid #385267; background: #101b2bcc; text-align: left; }
 .loadout-panel .setting-title { margin: 0 0 5px; }
 .loadout-panel > small { color: #99b3a6; font: .62rem 'DM Mono', monospace; }
