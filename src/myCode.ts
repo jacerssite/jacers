@@ -599,7 +599,7 @@ function showGameChatNotice(notification?: import("./types").ChatNotification) {
 function getLocalAccountProgress() {
     return Object.fromEntries(
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-            .filter((key): key is string => Boolean(key?.startsWith("orbit-") && key !== "orbit-global-level-cache"))
+            .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !LOCAL_DEVICE_PREFERENCE_KEYS.has(key) && !key.startsWith("orbit-tester-")))
             .sort()
             .map((key) => [key, localStorage.getItem(key) ?? ""]),
     );
@@ -867,6 +867,19 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
     }
 }
 
+let accountSaveQueued = false;
+function saveAccountProgressSoon() {
+    if (accountSaveQueued || !currentOnlineUser || loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) return;
+    accountSaveQueued = true;
+    // Group one gameplay action (currency, inventory, unlocks, and route
+    // flags) into a single snapshot.  A microtask ran in the middle of some
+    // owner-panel saves and could upload only half of the change.
+    globalThis.setTimeout(() => {
+        accountSaveQueued = false;
+        void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save account progress:", error));
+    }, 150);
+}
+
 async function restoreOnlineSession() {
     const originalSessionVersion = onlineSessionVersion;
     const session = await apiRequest<{ user: OnlineUser | null }>("/auth/session");
@@ -982,7 +995,9 @@ function configurePortalDistribution() {
 
     (['normal', 'prestige'] as const).forEach((world) => {
         const isPrestige = world === "prestige";
-        const sources = levels.filter((candidate) => !candidate.secret && !candidate.customId && !candidate.localOnly && Boolean(candidate.prestige) === isPrestige);
+        // Holiday routes are self-contained: secret portals must never be
+        // placed in the Christmas area, even when it is treated as normal.
+        const sources = levels.filter((candidate) => !candidate.holiday && !candidate.secret && !candidate.customId && !candidate.localOnly && Boolean(candidate.prestige) === isPrestige);
         const eligibleTargets = secretLevels.filter(({ level }) => Boolean(level.prestige) === isPrestige && portalTargets[world].includes(level.secretId ?? ""));
         const usedSources = new Set<string>();
         eligibleTargets.forEach(({ level }) => {
@@ -1444,7 +1459,7 @@ function openRoleQuickPanel() {
     cancelAnimationFrame(animationFrame);
     pressedKeys.clear();
     shootingHeld = false;
-    const isOwner = currentOnlineUser.role === "owner";
+    const isOwner = hasOwnerAccess();
     const overlay = document.createElement("div");
     overlay.className = `role-quick-overlay ${isOwner ? "owner-quick-overlay" : "tester-quick-overlay"}`;
     overlay.setAttribute("role", "dialog");
@@ -1724,7 +1739,10 @@ function canAccessChristmasEvent() {
 }
 
 function getChristmasPresents() { return Math.max(0, Math.floor(Number(localStorage.getItem("orbit-christmas-presents") ?? "0") || 0)); }
-function setChristmasPresents(value: number) { localStorage.setItem("orbit-christmas-presents", String(Math.max(0, Math.floor(value)))); }
+function setChristmasPresents(value: number) {
+    localStorage.setItem("orbit-christmas-presents", String(Math.max(0, Math.floor(value))));
+    saveAccountProgressSoon();
+}
 function isChristmasLevel(level: Level | undefined) { return level?.holiday === "christmas"; }
 
 function enterChristmasEvent() {
@@ -1762,11 +1780,53 @@ function showChristmasEvent() {
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelsList.append(button);
     });
-    menu.append(presents, levelsList, createMenuButton("Open present wheel", showChristmasWheel), createTextButton("Main menu", showMenu), createPageCounter());
+    menu.append(presents, levelsList, createMenuButton("Open present wheel", showChristmasWheel), createTextButton("Advent calendar", showChristmasAdventCalendar), createTextButton("Main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
 }
 
 function getChristmasLevelPresentReward(levelIndex: number) { return 8 + Math.max(0, levelIndex - (levels.length - CHRISTMAS_LEVELS.length)) * 3; }
+
+async function showChristmasAdventCalendar() {
+    if (!canAccessChristmasEvent()) return showMenu();
+    enterAppPage(showChristmasAdventCalendar);
+    const menu = document.createElement("main");
+    menu.className = "menu-screen christmas-event-screen";
+    menu.innerHTML = `<p class="eyebrow">CHRISTMAS EVENT / ADVENT</p><h1>Advent <em>calendar</em></h1><p class="menu-copy">Open one server-saved reward each day. Earlier days remain available, but future days stay sealed.</p>`;
+    const status = document.createElement("p");
+    status.className = "menu-copy";
+    const grid = document.createElement("div");
+    grid.className = "advent-calendar";
+    menu.append(grid, status, createTextButton("Back to Winter Orbit", showChristmasEvent), createPageCounter());
+    document.body.replaceChildren(menu);
+    try {
+        const calendar = await apiRequest<{ day: number; claimedDays: number[]; start: string; end: string }>("/holiday/christmas-advent");
+        const claimed = new Set(calendar.claimedDays);
+        for (let day = 1; day <= 25; day++) {
+            const button = document.createElement("button");
+            button.type = "button";
+            const available = calendar.day >= day && calendar.day > 0;
+            button.className = `advent-day${claimed.has(day) ? " claimed" : ""}${available ? " available" : ""}`;
+            button.disabled = claimed.has(day) || !available;
+            button.innerHTML = `<b>${day}</b><span>${claimed.has(day) ? "OPENED" : available ? "OPEN" : "LOCKED"}</span>`;
+            if (!button.disabled) button.addEventListener("click", async () => {
+                button.disabled = true;
+                try {
+                    const result = await apiRequest<{ progress: Record<string, string>; reward: string }>(`/holiday/christmas-advent/${day}`, { method: "POST" });
+                    applySyncedProgress(getLocalAccountProgress(), result.progress);
+                    lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                    rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+                    button.classList.add("claimed");
+                    button.innerHTML = `<b>${day}</b><span>OPENED</span>`;
+                    status.textContent = `Day ${day}: ${result.reward}`;
+                } catch (error) { button.disabled = false; status.textContent = error instanceof Error ? error.message : "Could not open that calendar day."; }
+            });
+            grid.append(button);
+        }
+        if (!calendar.day) status.textContent = `The Advent calendar opens ${calendar.start} and closes after ${calendar.end}.`;
+    } catch (error) {
+        status.textContent = error instanceof Error ? error.message : "Could not load the Advent calendar.";
+    }
+}
 
 function showLevelMenu() {
     enterAppPage(showLevelMenu);
@@ -3260,7 +3320,10 @@ function getMovementMultiplier() {
     return boostMultiplier * starMultiplier;
 }
 
-function saveInventory(inventory: Record<PowerupKind, number>) { localStorage.setItem("orbit-powerups", JSON.stringify(inventory)); }
+function saveInventory(inventory: Record<PowerupKind, number>) {
+    localStorage.setItem("orbit-powerups", JSON.stringify(inventory));
+    saveAccountProgressSoon();
+}
 
 const CHRISTMAS_TITLES: ProfileTitle[] = [
     { id: "winter-pilot", name: "Winter Pilot", routes: 0, color: "#dff7ff", animation: "snowfall", requirement: { type: "locked", amount: 0 } },
@@ -3287,32 +3350,38 @@ function showChristmasWheel() {
     wheel.innerHTML = `<span>🎁</span>`;
     const status = document.createElement("p");
     status.className = "menu-copy";
-    const spin = createMenuButton("Open / 10 presents", () => {
-        const presents = getChristmasPresents();
-        if (presents < 10) return;
-        const options: { key: string; name: string; description: string }[] = [
-            ...skins.map((item, index) => ({ item, index })).filter(({ item, index }) => item.holiday === "christmas" && localStorage.getItem(`orbit-christmas-unlock-skin-${index}`) !== "1").map(({ item, index }) => ({ key: `orbit-christmas-unlock-skin-${index}`, name: item.name, description: "Holiday ship color unlocked." })),
-            ...trails.map((item, index) => ({ item, index })).filter(({ item, index }) => item.holiday === "christmas" && localStorage.getItem(`orbit-christmas-unlock-trail-${index}`) !== "1").map(({ item, index }) => ({ key: `orbit-christmas-unlock-trail-${index}`, name: item.name, description: "Limited holiday trail unlocked." })),
-            ...avatars.map((item, index) => ({ item, index })).filter(({ item, index }) => item.holiday === "christmas" && localStorage.getItem(`orbit-christmas-unlock-avatar-${index}`) !== "1").map(({ item, index }) => ({ key: `orbit-christmas-unlock-avatar-${index}`, name: item.name, description: "Holiday ship avatar unlocked." })),
-            ...CHRISTMAS_TITLES.filter((title) => localStorage.getItem(`orbit-title-unlock-${title.id}`) !== "1").map((title) => ({ key: `orbit-title-unlock-${title.id}`, name: title.name, description: "Limited Christmas title unlocked." })),
-        ];
-        if (!options.length) { status.textContent = "Your Christmas collection is complete — save your presents for the next event."; return; }
-        setChristmasPresents(presents - 10);
-        const reward = options[Math.floor(Math.random() * options.length)];
-        localStorage.setItem(reward.key, "1");
-        wheel.classList.add("spinning");
+    const spin = createMenuButton("Open / 10 presents", async () => {
+        if (!currentOnlineUser) { status.textContent = "Sign in to open the present wheel so rewards save to your account."; return; }
+        if (getChristmasPresents() < 10) return;
         spin.disabled = true;
-        globalThis.setTimeout(() => {
-            wheel.classList.remove("spinning");
-            status.textContent = `${reward.name} unlocked — ${reward.description}`;
-            balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
-            spin.disabled = getChristmasPresents() < 10;
-            if (currentOnlineUser) void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save Christmas reward:", error));
-        }, 900);
+        try {
+            const result = await apiRequest<{ progress: Record<string, string>; reward: { name: string; description: string } }>("/holiday/christmas-spin", { method: "POST" });
+            applySyncedProgress(getLocalAccountProgress(), result.progress);
+            lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+            rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+            wheel.classList.add("spinning");
+            globalThis.setTimeout(() => {
+                wheel.classList.remove("spinning");
+                status.textContent = `${result.reward.name} — ${result.reward.description}`;
+                balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
+                spin.disabled = getChristmasPresents() < 10;
+            }, 900);
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not open the present wheel.";
+            spin.disabled = false;
+        }
     });
     balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
     spin.disabled = getChristmasPresents() < 10;
-    menu.append(balance, wheel, spin, status, createTextButton("Back to Christmas event", showChristmasEvent), createPageCounter());
+    const resetCooldown = createTextButton("Reset winter route cooldowns / 25 presents", () => {
+        if (getChristmasPresents() < 25) { status.textContent = "You need 25 presents to reset winter route cooldowns."; return; }
+        setChristmasPresents(getChristmasPresents() - 25);
+        levels.forEach((level, index) => { if (isChristmasLevel(level)) localStorage.removeItem(`orbit-christmas-cooldown-${index}`); });
+        status.textContent = "Winter route cooldowns reset.";
+        balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
+        spin.disabled = getChristmasPresents() < 10;
+    });
+    menu.append(balance, wheel, spin, resetCooldown, status, createTextButton("Back to Christmas event", showChristmasEvent), createPageCounter());
     document.body.replaceChildren(menu);
 }
 
@@ -4168,10 +4237,36 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         toggle.className = "holiday-event-toggle";
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
-        checkbox.checked = holidayEvent.christmasEnabled || (!isOwner && localStorage.getItem("orbit-tester-christmas-preview") === "1");
+        checkbox.checked = (holidayEvent.christmasManualEnabled ?? holidayEvent.christmasEnabled) || (!isOwner && localStorage.getItem("orbit-tester-christmas-preview") === "1");
         const label = document.createElement("span");
         label.innerHTML = `<b>${isOwner ? "Christmas event live" : "Enable Christmas preview"}</b><small>${isOwner ? "Players will see the tree at the bottom-left of the main menu." : "Only this tester device can see the event."}</small>`;
         toggle.append(checkbox, label);
+        const autoStart = document.createElement("label");
+        autoStart.className = "holiday-event-toggle";
+        const autoStartCheckbox = document.createElement("input");
+        autoStartCheckbox.type = "checkbox";
+        autoStartCheckbox.checked = holidayEvent.christmasAutoStart === true;
+        autoStartCheckbox.disabled = !isOwner;
+        const autoStartLabel = document.createElement("span");
+        autoStartLabel.innerHTML = `<b>Start automatically on the scheduled dates</b><small>Use the dates below to choose the annual Christmas season and Advent window.</small>`;
+        autoStart.append(autoStartCheckbox, autoStartLabel);
+        const annualDateInput = (labelText: string, value: string, ariaLabel: string) => {
+            const label = document.createElement("label");
+            label.className = "holiday-event-toggle";
+            const copy = document.createElement("span");
+            copy.innerHTML = `<b>${labelText}</b><small>Repeats every year.</small>`;
+            const input = document.createElement("input");
+            input.type = "date";
+            input.value = `2000-${value}`;
+            input.disabled = !isOwner;
+            input.setAttribute("aria-label", ariaLabel);
+            label.append(copy, input);
+            return { label, input };
+        };
+        const seasonStart = annualDateInput("Christmas season starts", holidayEvent.christmasSeasonStart ?? "12-01", "Christmas season start date");
+        const seasonEnd = annualDateInput("Christmas season ends", holidayEvent.christmasSeasonEnd ?? "12-31", "Christmas season end date");
+        const adventStart = annualDateInput("Advent calendar starts", holidayEvent.adventStart ?? "12-01", "Advent calendar start date");
+        const adventEnd = annualDateInput("Advent calendar ends", holidayEvent.adventEnd ?? "12-25", "Advent calendar end date");
         const launch = createTextButton(isOwner ? "Save Christmas event" : "Save local preview", async () => {
             launch.disabled = true;
             status.textContent = isOwner ? "Publishing Christmas event..." : "Saving local Christmas preview...";
@@ -4180,7 +4275,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 if (isOwner) {
                     const titleResponse = await apiRequest<{ profileTitles: ProfileTitle[] }>("/settings/profile-titles", { method: "PUT", body: JSON.stringify({ profileTitles }) });
                     profileTitles = titleResponse.profileTitles;
-                    const response = await apiRequest<{ holidayEvent: HolidayEventSettings }>("/settings/holiday-event", { method: "PUT", body: JSON.stringify({ holidayEvent: { christmasEnabled: checkbox.checked } }) });
+                    const annualValue = (input: HTMLInputElement) => input.value.slice(5);
+                    const response = await apiRequest<{ holidayEvent: HolidayEventSettings }>("/settings/holiday-event", { method: "PUT", body: JSON.stringify({ holidayEvent: { christmasEnabled: checkbox.checked, christmasAutoStart: autoStartCheckbox.checked, christmasSeasonStart: annualValue(seasonStart.input), christmasSeasonEnd: annualValue(seasonEnd.input), adventStart: annualValue(adventStart.input), adventEnd: annualValue(adventEnd.input) } }) });
                     holidayEvent = response.holidayEvent;
                 } else {
                     localStorage.setItem("orbit-tester-christmas-preview", checkbox.checked ? "1" : "0");
@@ -4195,8 +4291,23 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         status.setAttribute("role", "status");
         const rewards = document.createElement("p");
         rewards.className = "menu-copy";
-        rewards.textContent = "Limited rewards: Holly Comet, Snowglobe, Evergreen Blade, North Star, Gift Ship, Present Parade, Snowfall Wake, Holly Ribbon, and four Christmas titles with new snowfall, winter glow, and candy-cane animations.";
-        holidayManagement.append(heading, description, toggle, launch, status, rewards);
+        rewards.textContent = "Limited rewards: Holly Comet, Snowglobe, Evergreen Blade, North Star, Sleigh, Present Parade, Snowfall Wake, Holly Ribbon, and four Christmas titles with new snowfall, winter glow, and candy-cane animations.";
+        const testTools = document.createElement("div");
+        testTools.className = "title-management-actions";
+        const presentAmount = document.createElement("input");
+        presentAmount.type = "number";
+        presentAmount.min = "1";
+        presentAmount.max = "100000";
+        presentAmount.value = "50";
+        presentAmount.setAttribute("aria-label", "Presents to grant");
+        const grantPresents = createTextButton("Give myself presents", () => {
+            const amount = Math.max(1, Math.min(100000, Math.floor(Number(presentAmount.value) || 0)));
+            setChristmasPresents(getChristmasPresents() + amount);
+            status.textContent = `${amount.toLocaleString()} presents added to this account.`;
+        });
+        const tryWinterOrbit = createTextButton("Try Winter Orbit", enterChristmasEvent);
+        testTools.append(presentAmount, grantPresents, tryWinterOrbit);
+        holidayManagement.append(heading, description, toggle, autoStart, seasonStart.label, seasonEnd.label, adventStart.label, adventEnd.label, launch, status, rewards, testTools);
     };
     drawHolidayManagement();
     const selectedConfig = gameConfig[selectedWorld];
@@ -5190,6 +5301,7 @@ function isUsableRouletteTiers(value: unknown): value is RouletteTier[] {
 function describeCodeReward(reward: CodeReward) {
     if (reward.type === "claims") return `+${reward.amount} asteroids`;
     if (reward.type === "specialClaims") return `+${reward.amount} special asteroids`;
+    if (reward.type === "presents") return `+${reward.amount} Christmas presents`;
     if (reward.type === "powerup") return `+${reward.amount} ${powerupLabels[reward.kind]} power-up${reward.amount === 1 ? "" : "s"}`;
     if (reward.type === "title") return `the ${profileTitles.find((title) => title.id === reward.titleId)?.name ?? reward.titleId} title`;
     const cosmetic = reward as Extract<CodeReward, { type: "skin" | "trail" | "avatar" }>;
@@ -5278,7 +5390,7 @@ function createLevelPowerups(level: Level, positions: { index: number; kind: Pow
 function buildLevel(levelIndex: number) {
     const level = levels[levelIndex];
     const claimedAsteroids = getClaimedAsteroids(levelIndex);
-    levelAsteroids = level.asteroids.map((index, asteroidIndex) => ({ x: 140 + index * TILE_WIDTH, y: 215 - (index % 2) * 55, claimed: claimedAsteroids.has(asteroidIndex), special: Boolean(level.secret) || (level.specialAsteroids ?? []).includes(index) }));
+    levelAsteroids = level.asteroids.map((index, asteroidIndex) => ({ x: 140 + index * TILE_WIDTH, y: 215 - (index % 2) * 55, claimed: claimedAsteroids.has(asteroidIndex), special: Boolean(level.secret) || (level.specialAsteroids ?? []).includes(index), present: isChristmasLevel(level) }));
     const authoredObstacleIndices = getLevelObstacleIndices(level);
     const enemyIndices = getLevelEnemyIndices(level);
     const obstacleIndices = fillLevelGaps(level.length, authoredObstacleIndices, [
@@ -5943,7 +6055,7 @@ function createWorldObjects() {
         else if (obstacle.boundary) element.setAttribute("aria-label", "Map boundary");
         world.append(element);
     });
-    levelAsteroids.forEach((asteroid) => { const element = document.createElement("div"); element.className = `asteroid ${asteroid.special ? "special" : ""} ${asteroid.claimed ? "claimed" : ""}`; element.textContent = asteroid.special ? "✹" : "✦"; element.style.left = `${asteroid.x}px`; element.style.top = `${asteroid.y}px`; world.append(element); });
+    levelAsteroids.forEach((asteroid) => { const element = document.createElement("div"); element.className = `asteroid ${asteroid.present ? "present" : ""} ${asteroid.special ? "special" : ""} ${asteroid.claimed ? "claimed" : ""}`; element.textContent = asteroid.present ? "🎁" : asteroid.special ? "✹" : "✦"; element.style.left = `${asteroid.x}px`; element.style.top = `${asteroid.y}px`; world.append(element); });
     levelHazards.forEach((hazard) => { const element = document.createElement("div"); element.className = `hazard ${hazard.kind}`; element.style.left = `${hazard.x}px`; element.style.top = `${hazard.y}px`; element.style.width = `${hazard.width}px`; element.style.height = `${hazard.height}px`; element.setAttribute("aria-label", hazard.kind === "spikes" ? "Spike hazard" : "Gravity zone"); world.append(element); });
     levelEnemies.forEach((enemy) => { const element = document.createElement("div"); element.className = `enemy${enemy.defeated ? " defeated" : ""}`; element.style.left = `${enemy.x}px`; element.style.top = `${enemy.y}px`; world.append(element); });
     levelMiniBosses.forEach((miniBoss) => { const element = document.createElement("div"); element.className = `mini-boss dark-knight${miniBoss.defeated ? " defeated" : ""}`; element.setAttribute("aria-label", "Dark Knight guardian"); element.style.left = `${miniBoss.x}px`; element.style.top = `${miniBoss.y}px`; world.append(element); });
@@ -6710,7 +6822,7 @@ if (portalTravelInProgress) return;
             else showGameOver("A Dark Knight slammed into your hull.");
         }
     });
-    levelAsteroids.forEach((asteroid, index) => { if (!asteroid.claimed && Math.abs(playerX + 24 - asteroid.x) < 42 && Math.abs(playerY + 28 - asteroid.y) < 58) { asteroid.claimed = true; const claimedAsteroids = getClaimedAsteroids(currentLevel); claimedAsteroids.add(index); saveClaimedAsteroids(currentLevel, claimedAsteroids); if (asteroid.special) { specialAsteroids++; localStorage.setItem("orbit-special-claims", String(specialAsteroids)); } else { asteroidsClaimed++; localStorage.setItem("orbit-claims", String(asteroidsClaimed)); } claimLabel.textContent = `${levelAsteroids.filter((item) => item.claimed).length} / ${levelAsteroids.length}`; statusLabel.textContent = asteroid.special ? "Special asteroid secured. Spend it in the roll wheel." : "Asteroid claimed. This one is secured permanently."; document.querySelectorAll(".asteroid")[index]?.classList.add("claimed"); } });
+    levelAsteroids.forEach((asteroid, index) => { if (!asteroid.claimed && Math.abs(playerX + 24 - asteroid.x) < 42 && Math.abs(playerY + 28 - asteroid.y) < 58) { asteroid.claimed = true; const claimedAsteroids = getClaimedAsteroids(currentLevel); claimedAsteroids.add(index); saveClaimedAsteroids(currentLevel, claimedAsteroids); if (asteroid.present) { setChristmasPresents(getChristmasPresents() + 1); } else if (asteroid.special) { specialAsteroids++; localStorage.setItem("orbit-special-claims", String(specialAsteroids)); saveAccountProgressSoon(); } else { asteroidsClaimed++; localStorage.setItem("orbit-claims", String(asteroidsClaimed)); saveAccountProgressSoon(); } claimLabel.textContent = `${levelAsteroids.filter((item) => item.claimed).length} / ${levelAsteroids.length}`; statusLabel.textContent = asteroid.present ? "Present secured for the winter wheel." : asteroid.special ? "Special asteroid secured. Spend it in the roll wheel." : "Asteroid claimed. This one is secured permanently."; document.querySelectorAll(".asteroid")[index]?.classList.add("claimed"); } });
     if (boss && playerX > boss.x - 120 && !boss.defeated) {
         if (isStarContactDamageActive()) {
             while (boss && !boss.defeated) damageBoss();
@@ -6801,6 +6913,7 @@ function getCompletedLevelCount() { return levels.filter((level, index) => !leve
 function isProfileTitleUnlocked(title: ProfileTitle) {
     if (hasOwnerAccess() || localStorage.getItem("orbit-all-titles") === "1") return true;
     if (localStorage.getItem(`orbit-title-unlock-${title.id}`) === "1") return true;
+    if (localStorage.getItem(`orbit-christmas-title-unlock-${title.id}`) === "1") return true;
     const requirement = title.requirement ?? { type: "routes" as const, amount: title.routes };
     if (requirement.type === "locked") return false;
     if (requirement.type === "golden") return getNormalCompletedLevelCount() >= requirement.amount;
@@ -6882,6 +6995,7 @@ function tryPrestige() {
         .filter((key): key is string => Boolean(key && (/^orbit-spin-(skin|trail|avatar)-\d+$/.test(key) || /^orbit-golden-level-\d+$/.test(key))))
         .forEach((key) => localStorage.removeItem(key));
     refreshProgressStateFromStorage();
+    saveAccountProgressSoon();
     return true;
 }
 function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean; holiday?: "christmas" }, index?: number) { return hasOwnerAccess() || localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && (isSpinCosmeticUnlocked("skin", index) || localStorage.getItem(`orbit-christmas-unlock-skin-${index}`) === "1")) || (skin.holiday ? false : skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required); }

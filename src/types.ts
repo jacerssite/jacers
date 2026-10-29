@@ -1,6 +1,6 @@
 export type Box = { x: number; y: number; width: number; height: number };
 export type Obstacle = Box & { airborne?: boolean; barrier?: boolean; block?: boolean; goalLock?: boolean; boundary?: boolean };
-export type Asteroid = { x: number; y: number; claimed: boolean; special: boolean };
+export type Asteroid = { x: number; y: number; claimed: boolean; special: boolean; present?: boolean };
 export type Hazard = { x: number; y: number; width: number; height: number; kind: "spikes" | "gravity" };
 export type Enemy = { x: number; y: number; defeated: boolean; attackTimer?: number };
 export type Projectile = { x: number; y: number; vx: number; vy: number; angle?: number; element: HTMLElement; owner: "player" | "enemy" };
@@ -78,7 +78,7 @@ export type TitleAnimation = "none" | "pulse" | "shimmer" | "rainbow" | "dark-ma
 export type ProfileTitleStyle = { color?: string; animation?: TitleAnimation };
 export type ProfileTitle = { id: string; name: string; routes: number; requirement?: ProfileTitleRequirement } & ProfileTitleStyle;
 export type CodeReward =
-    | { type: "claims" | "specialClaims"; amount: number }
+    | { type: "claims" | "specialClaims" | "presents"; amount: number }
     | { type: "powerup"; kind: PowerupKind; amount: number }
     | { type: "skin" | "trail" | "avatar"; index: number }
     | { type: "title"; titleId: string };
@@ -118,7 +118,7 @@ export type RouletteTier = {
 export type RouletteWheelPocket = { index: number; startAngle: number; endAngle: number };
 export type UpdateLogEntry = { date: string; title: string; body: string };
 export type RouletteReward = { title: string; description: string; rarity?: Rarity; collectionComplete: boolean; amount?: number; currencyLabel?: string };
-export type HolidayEventSettings = { christmasEnabled: boolean };
+export type HolidayEventSettings = { christmasEnabled: boolean; christmasAutoStart?: boolean; christmasManualEnabled?: boolean; christmasSeasonStart?: string; christmasSeasonEnd?: string; adventStart?: string; adventEnd?: string };
 export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level>; portalAssignments?: Record<string, string>; holidayEvent?: HolidayEventSettings };
 export type WorldGameConfig = {
     /** Downward acceleration and gravity-well pull for this world. */

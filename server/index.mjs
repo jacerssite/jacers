@@ -58,6 +58,7 @@ const DEFAULT_MODERATION_SETTINGS = Object.freeze({
   networkAccountLimit: 2,
   humanVerificationRequired: true,
   humanChallengeMode: "captcha",
+  progressAntiCheatEnabled: true,
   newAccountProtectionEnabled: true,
   newAccountWindowMinutes: 3,
   newAccountAsteroidLimit: 1000,
@@ -70,9 +71,31 @@ const DEFAULT_MODERATION_SETTINGS = Object.freeze({
 });
 let moderationSettingsCache = { ...DEFAULT_MODERATION_SETTINGS };
 
+function annualDateParts(value) {
+  const [month, day] = value.split("-").map(Number);
+  return { month: month - 1, day };
+}
+function isInAnnualRange(start, end, now = new Date()) {
+  const startParts = annualDateParts(start);
+  const endParts = annualDateParts(end);
+  const current = Date.UTC(2000, now.getUTCMonth(), now.getUTCDate());
+  const startTime = Date.UTC(2000, startParts.month, startParts.day);
+  const endTime = Date.UTC(2000, endParts.month, endParts.day);
+  return startTime <= endTime ? current >= startTime && current <= endTime : current >= startTime || current <= endTime;
+}
+function resolveHolidayEventSettings(value, now = new Date()) {
+  const stored = validateHolidayEventSettings(value) ?? { christmasEnabled: false, christmasAutoStart: false, christmasSeasonStart: "12-01", christmasSeasonEnd: "12-31", adventStart: "12-01", adventEnd: "12-25" };
+  return {
+    ...stored,
+    christmasEnabled: stored.christmasEnabled || (stored.christmasAutoStart && isInAnnualRange(stored.christmasSeasonStart, stored.christmasSeasonEnd, now)),
+    christmasAutoStart: stored.christmasAutoStart,
+    christmasManualEnabled: stored.christmasEnabled,
+  };
+}
+
 function validateModerationSettings(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const booleanKeys = ["networkAccountLimitEnabled", "humanVerificationRequired", "newAccountProtectionEnabled", "lowProgressProtectionEnabled"];
+  const booleanKeys = ["networkAccountLimitEnabled", "humanVerificationRequired", "progressAntiCheatEnabled", "newAccountProtectionEnabled", "lowProgressProtectionEnabled"];
   if (!booleanKeys.every((key) => typeof value[key] === "boolean")) return null;
   if (!["captcha", "math"].includes(value.humanChallengeMode)) return null;
   const within = (key, min, max) => Number.isSafeInteger(value[key]) && value[key] >= min && value[key] <= max;
@@ -510,7 +533,7 @@ async function getDatabase() {
   return (await mongoClientPromise).db();
 }
 
-async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined, actorRole = "owner") {
+async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined, actorRole = "owner", progressAntiCheatEnabled = true) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const existing = await collection.findOne({ _id: userId }, session ? { session } : undefined);
     if (!replace && hasCurrencyConflict(existing?.data, progress, baseProgress)) return { progress: null, conflict: true };
@@ -524,7 +547,7 @@ async function writePlayerProgress(collection, userId, progress, baseProgress = 
         else delete mergedProgress[key];
       }
     }
-    const suspiciousMutation = getSuspiciousPlayerMutation(existing?.data, mergedProgress, actorRole);
+    const suspiciousMutation = progressAntiCheatEnabled ? getSuspiciousPlayerMutation(existing?.data, mergedProgress, actorRole) : null;
     if (suspiciousMutation) return { progress: null, conflict: false, suspiciousMutation };
     const validatedProgress = validatePlayerProgress(mergedProgress);
     if (!validatedProgress) return { progress: null, conflict: false };
@@ -1072,7 +1095,9 @@ app.post("/api/auth/email-verification/confirm", requireSameOrigin, emailVerific
   } catch (error) { next(error); }
 });
 
-app.post("/api/auth/register", requireSameOrigin, registrationLimiter, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
+// The owner-panel moderation settings control network/day registration limits.
+// A second hard-coded limiter here would make those settings ineffective.
+app.post("/api/auth/register", requireSameOrigin, authLimiter, (req, res, next) => accountHandler(req, res, next, "register"));
 app.post("/api/auth/login", requireSameOrigin, authLimiter, (req, res, next) => accountHandler(req, res, next, "login"));
 
 app.post("/api/auth/recover", requireSameOrigin, recoveryLimiter, async (req, res, next) => {
@@ -1310,15 +1335,21 @@ async function deleteAbusiveNewAccount(db, user, progress) {
   if (!account?.createdAt || Date.now() - new Date(account.createdAt).getTime() > settings.newAccountWindowMinutes * 60 * 1000) return null;
   const asteroids = Number(progress?.["orbit-claims"] ?? 0);
   const specialAsteroids = Number(progress?.["orbit-special-claims"] ?? 0);
-  if (asteroids <= settings.newAccountAsteroidLimit && specialAsteroids <= settings.newAccountSpecialAsteroidLimit) return null;
+  // A verified prestige reset is a strong signal that the account has already
+  // completed a full planet. Give that account extra room for legitimate
+  // post-prestige rewards, while still stopping truly extreme values.
+  const prestiged = Number(progress?.["orbit-prestige"] ?? 0) > 0;
+  const asteroidLimit = settings.newAccountAsteroidLimit * (prestiged ? 5 : 1);
+  const specialAsteroidLimit = settings.newAccountSpecialAsteroidLimit * (prestiged ? 5 : 1);
+  if (asteroids <= asteroidLimit && specialAsteroids <= specialAsteroidLimit) return null;
   const redemptions = db.collection("code_redemptions");
   const usedCode = typeof redemptions.countDocuments === "function"
     && await redemptions.countDocuments({ userId: user.id }, { limit: 1 }) > 0;
   if (usedCode) return null;
 
-  const reason = asteroids > settings.newAccountAsteroidLimit
-    ? `More than ${settings.newAccountAsteroidLimit.toLocaleString()} asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`
-    : `More than ${settings.newAccountSpecialAsteroidLimit.toLocaleString()} special asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`;
+  const reason = asteroids > asteroidLimit
+    ? `More than ${asteroidLimit.toLocaleString()} asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`
+    : `More than ${specialAsteroidLimit.toLocaleString()} special asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`;
   await Promise.all([
     db.collection("user_sessions").deleteMany({ userId: user.id }),
     db.collection("player_progress").deleteOne({ _id: user.id }),
@@ -1369,12 +1400,17 @@ async function banLowProgressAbuse(db, user, progress) {
   const asteroids = Number(progress?.["orbit-claims"] ?? 0);
   const specialAsteroids = Number(progress?.["orbit-special-claims"] ?? 0);
   const powerups = powerupInventoryTotal(progress);
-  if (routes > settings.lowProgressRouteLimit || (asteroids < settings.lowProgressAsteroidLimit && specialAsteroids < settings.lowProgressSpecialAsteroidLimit && powerups < settings.lowProgressPowerupLimit)) return null;
+  const prestiged = Number(progress?.["orbit-prestige"] ?? 0) > 0;
+  const multiplier = prestiged ? 5 : 1;
+  const asteroidLimit = settings.lowProgressAsteroidLimit * multiplier;
+  const specialAsteroidLimit = settings.lowProgressSpecialAsteroidLimit * multiplier;
+  const powerupLimit = settings.lowProgressPowerupLimit * multiplier;
+  if (routes > settings.lowProgressRouteLimit || (asteroids < asteroidLimit && specialAsteroids < specialAsteroidLimit && powerups < powerupLimit)) return null;
   const account = await db.collection("users").findOne({ _id: user.id }, { projection: { username: 1 } });
   if (!account) return null;
-  const reason = asteroids >= settings.lowProgressAsteroidLimit
+  const reason = asteroids >= asteroidLimit
     ? `${asteroids.toLocaleString()} asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
-    : specialAsteroids >= settings.lowProgressSpecialAsteroidLimit
+    : specialAsteroids >= specialAsteroidLimit
       ? `${specialAsteroids.toLocaleString()} special asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
       : `${powerups.toLocaleString()} power-ups with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`;
   await Promise.all([
@@ -1404,6 +1440,7 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
     }
     const db = await getDatabase();
     const collection = db.collection("player_progress");
+    const moderationSettings = await getModerationSettings(db);
     if (req.body?.initializeOnly === true) {
       if (req.body.baseProgress !== null) return res.status(400).json({ error: "Initial progress must have a null base." });
       const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
@@ -1415,15 +1452,15 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
       }
       const banReason = await banLowProgressAbuse(db, req.user, progress);
       if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
-      const safeInitialProgress = sanitizeInitialPlayerProgress(progress, req.user.role);
-      if (req.user.role === "player" && JSON.stringify(safeInitialProgress) !== JSON.stringify(progress)) {
+      const safeInitialProgress = moderationSettings.progressAntiCheatEnabled ? sanitizeInitialPlayerProgress(progress, req.user.role) : progress;
+      if (moderationSettings.progressAntiCheatEnabled && req.user.role === "player" && JSON.stringify(safeInitialProgress) !== JSON.stringify(progress)) {
         await recordSecurityEvent(db, { type: "sanitized-initial-progress", userId: req.user.id, role: req.user.role });
       }
       const initialized = await initializePlayerProgress(collection, req.user.id, safeInitialProgress);
       if (!initialized) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
       return res.json({ progress: initialized });
     }
-    const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress, false, undefined, req.user.role);
+    const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress, false, undefined, req.user.role, moderationSettings.progressAntiCheatEnabled);
     if (result.suspiciousMutation) {
       await recordSecurityEvent(db, { type: "suspicious-progress-mutation", userId: req.user.id, role: req.user.role, reason: result.suspiciousMutation });
       const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
@@ -1453,6 +1490,129 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
   } catch (error) {
     next(error);
   }
+});
+
+// Holiday spins are resolved on the server so the currency and any asteroid
+// prizes are saved safely and cannot be created by editing browser storage.
+app.post("/api/holiday/christmas-spin", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" });
+    const eventEnabled = resolveHolidayEventSettings(holiday?.value).christmasEnabled;
+    if (!eventEnabled && !["owner", "developer", "tester"].includes(req.user.role)) return res.status(403).json({ error: "The Christmas event is not active." });
+    const collection = db.collection("player_progress");
+    const record = await collection.findOne({ _id: req.user.id });
+    const progress = validatePlayerProgress(record?.data ?? {});
+    if (!progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
+    const presents = Number(progress["orbit-christmas-presents"] ?? 0);
+    if (!Number.isSafeInteger(presents) || presents < 10) return res.status(400).json({ error: "You need 10 presents to open the wheel." });
+    const cosmetics = [
+      ["skin", 26, "Holly Comet"], ["skin", 27, "Snowglobe"], ["skin", 28, "Evergreen Blade"],
+      ["trail", 21, "Present Parade"], ["trail", 22, "Snowfall Wake"], ["trail", 23, "Holly Ribbon"],
+      ["avatar", 16, "North Star"], ["avatar", 17, "Sleigh"],
+    ].filter(([group, index]) => progress[`orbit-christmas-unlock-${group}-${index}`] !== "1");
+    const titles = ["winter-pilot", "gift-runner", "north-star", "snowglobe"]
+      .filter((id) => progress[`orbit-christmas-title-unlock-${id}`] !== "1")
+      .map((id) => ["title", id, id.split("-").map((word) => word[0].toUpperCase() + word.slice(1)).join(" ")]);
+    const options = [...cosmetics, ...titles, ["claims", null, "Normal asteroids"], ["specialClaims", null, "Special asteroids"]];
+    const [kind, value, name] = options[crypto.randomInt(options.length)];
+    const nextProgress = { ...progress, "orbit-christmas-presents": String(presents - 10) };
+    let description;
+    if (kind === "claims") {
+      const amount = crypto.randomInt(1, 1001);
+      nextProgress["orbit-claims"] = String(Math.min(100000000, Number(progress["orbit-claims"] ?? 0) + amount));
+      description = `+${amount.toLocaleString()} normal asteroids`;
+    } else if (kind === "specialClaims") {
+      const amount = crypto.randomInt(1, 51);
+      nextProgress["orbit-special-claims"] = String(Math.min(100000000, Number(progress["orbit-special-claims"] ?? 0) + amount));
+      description = `+${amount} special asteroids`;
+    } else if (kind === "title") {
+      nextProgress[`orbit-christmas-title-unlock-${value}`] = "1";
+      description = `Limited ${name} title unlocked.`;
+    } else {
+      nextProgress[`orbit-christmas-unlock-${kind}-${value}`] = "1";
+      description = `Limited ${name} unlocked.`;
+    }
+    const result = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
+    if (!result.progress) return res.status(409).json({ error: "Could not save this holiday reward. Try again." });
+    res.json({ progress: result.progress, reward: { name, description } });
+  } catch (error) { next(error); }
+});
+
+function christmasAdventDay(settings, now = new Date()) {
+  const start = annualDateParts(settings.adventStart);
+  const end = annualDateParts(settings.adventEnd);
+  let startTime = Date.UTC(2000, start.month, start.day);
+  let endTime = Date.UTC(2000, end.month, end.day);
+  let current = Date.UTC(2000, now.getUTCMonth(), now.getUTCDate());
+  if (endTime < startTime) { endTime = Date.UTC(2001, end.month, end.day); if (current < startTime) current = Date.UTC(2001, now.getUTCMonth(), now.getUTCDate()); }
+  if (current < startTime || current > endTime) return 0;
+  const day = Math.floor((current - startTime) / 86400000) + 1;
+  return day <= 25 ? day : 0;
+}
+
+function applyChristmasAdventReward(progress, day) {
+  const next = { ...progress, [`orbit-christmas-advent-${day}`]: "1" };
+  if (day === 25) {
+    next["orbit-christmas-unlock-avatar-17"] = "1";
+    return { progress: next, reward: "Limited Sleigh avatar" };
+  }
+  if (day === 21) {
+    next["orbit-christmas-title-unlock-north-star"] = "1";
+    return { progress: next, reward: "Limited North Star title" };
+  }
+  if (day === 14) {
+    next["orbit-christmas-unlock-skin-26"] = "1";
+    return { progress: next, reward: "Limited Holly Comet ship color" };
+  }
+  if (day === 7) {
+    next["orbit-christmas-unlock-trail-21"] = "1";
+    return { progress: next, reward: "Limited Present Parade trail" };
+  }
+  if (day % 5 === 0) {
+    const amount = Math.min(1000, day * 50);
+    next["orbit-claims"] = String(Math.min(100000000, Number(progress["orbit-claims"] ?? 0) + amount));
+    return { progress: next, reward: `+${amount} normal asteroids` };
+  }
+  const presents = 10 + day * 2;
+  next["orbit-christmas-presents"] = String(Math.min(1000000, Number(progress["orbit-christmas-presents"] ?? 0) + presents));
+  return { progress: next, reward: `+${presents} presents` };
+}
+
+app.get("/api/holiday/christmas-advent", requireUser, async (req, res, next) => {
+  try {
+    noStore(res);
+    const db = await getDatabase();
+    const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" });
+    const settings = resolveHolidayEventSettings(holiday?.value);
+    const record = await db.collection("player_progress").findOne({ _id: req.user.id });
+    const progress = validatePlayerProgress(record?.data ?? {}) ?? {};
+    const claimedDays = Array.from({ length: 25 }, (_, index) => index + 1)
+      .filter((day) => progress[`orbit-christmas-advent-${day}`] === "1");
+    res.json({ day: christmasAdventDay(settings), claimedDays, start: settings.adventStart, end: settings.adventEnd });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/holiday/christmas-advent/:day", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const day = Number(req.params.day);
+    if (!Number.isInteger(day) || day < 1 || day > 25) return res.status(400).json({ error: "That Advent calendar day is invalid." });
+    const db = await getDatabase();
+    const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" });
+    const settings = resolveHolidayEventSettings(holiday?.value);
+    const currentDay = christmasAdventDay(settings);
+    if (!currentDay || day > currentDay) return res.status(400).json({ error: "That Advent calendar day is not available yet." });
+    if (!settings.christmasEnabled) return res.status(403).json({ error: "The Christmas event is not active." });
+    const collection = db.collection("player_progress");
+    const record = await collection.findOne({ _id: req.user.id });
+    const progress = validatePlayerProgress(record?.data ?? {});
+    if (!progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
+    if (progress[`orbit-christmas-advent-${day}`] === "1") return res.status(409).json({ error: "You already opened this Advent calendar day." });
+    const reward = applyChristmasAdventReward(progress, day);
+    const result = await writePlayerProgress(collection, req.user.id, reward.progress, null, true);
+    if (!result.progress) return res.status(409).json({ error: "Could not save this Advent reward. Try again." });
+    res.json({ progress: result.progress, reward: reward.reward });
+  } catch (error) { next(error); }
 });
 
 app.get("/api/account/profile", requireUser, async (req, res, next) => {
@@ -3112,7 +3272,7 @@ app.get("/api/settings", async (_req, res, next) => {
       profileTitles: includeRouletteTitles(validateProfileTitles(profileTitles?.value) ?? PROFILE_TITLE_MILESTONES),
       builtinLevelOverrides: validateBuiltinLevelOverrides(builtinLevelOverrides?.value) ?? {},
       portalAssignments: validatePortalAssignments(portalAssignments?.value) ?? {},
-      holidayEvent: validateHolidayEventSettings(holidayEvent?.value) ?? { christmasEnabled: false },
+      holidayEvent: resolveHolidayEventSettings(holidayEvent?.value),
     });
   } catch (error) {
     next(error);
@@ -3125,7 +3285,7 @@ app.put("/api/settings/holiday-event", requireSameOrigin, requireOwner, async (r
     if (!holidayEvent) return res.status(400).json({ error: "Holiday event settings are invalid." });
     const db = await getDatabase();
     await saveSetting(db, "holiday_event", holidayEvent, req.user.id);
-    res.json({ holidayEvent });
+    res.json({ holidayEvent: resolveHolidayEventSettings(holidayEvent) });
   } catch (error) {
     next(error);
   }
@@ -3955,8 +4115,8 @@ app.post("/api/codes/redeem", requireSameOrigin, codeRedemptionLimiter, requireU
         const progress = validatePlayerProgress(savedProgress?.data ?? {});
         if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
         const nextProgress = { ...progress };
-        if (reward.type === "claims" || reward.type === "specialClaims") {
-          const rewardKey = reward.type === "claims" ? "orbit-claims" : "orbit-special-claims";
+        if (reward.type === "claims" || reward.type === "specialClaims" || reward.type === "presents") {
+          const rewardKey = reward.type === "claims" ? "orbit-claims" : reward.type === "specialClaims" ? "orbit-special-claims" : "orbit-christmas-presents";
           const currentValue = progress[rewardKey];
           const currentAmount = typeof currentValue === "string" && /^\d{1,10}$/.test(currentValue)
             ? Math.min(Number(currentValue), 100000000)

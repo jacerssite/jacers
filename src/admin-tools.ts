@@ -14,6 +14,7 @@ type ModerationSettings = {
     networkAccountLimit: number;
     humanVerificationRequired: boolean;
     humanChallengeMode: "captcha" | "math";
+    progressAntiCheatEnabled: boolean;
     newAccountProtectionEnabled: boolean;
     newAccountWindowMinutes: number;
     newAccountAsteroidLimit: number;
@@ -68,6 +69,7 @@ export async function renderAdminModerationSettings(container: HTMLElement) {
     toggle("Limit accounts per network", "networkAccountLimitEnabled", "Turn off to allow unlimited registrations from the same network.");
     number("Accounts allowed per network each day", "networkAccountLimit", 1, 100);
     toggle("Require human verification", "humanVerificationRequired", "New accounts must solve the selected check before they can be created.");
+    toggle("Validate gameplay progress", "progressAntiCheatEnabled", "Blocks forged cosmetic unlocks, impossible currency changes, invalid prestige resets, and multiple route rewards in one save.");
     toggle("Protect new accounts from impossible rewards", "newAccountProtectionEnabled");
     number("New-account protection window (minutes)", "newAccountWindowMinutes", 1, 10);
     number("Normal asteroid limit during that window", "newAccountAsteroidLimit", 1, 100000);
@@ -77,6 +79,9 @@ export async function renderAdminModerationSettings(container: HTMLElement) {
     number("Asteroid limit at low progress", "lowProgressAsteroidLimit", 1, 1000000);
     number("Special asteroid limit at low progress", "lowProgressSpecialAsteroidLimit", 1, 100000);
     number("Power-up limit at low progress", "lowProgressPowerupLimit", 1, 100000);
+    const safeguards = document.createElement("p");
+    safeguards.className = "menu-copy";
+    safeguards.textContent = "Always-on safeguards: signed one-use CAPTCHA tokens, rate limits for account, code, message, run, upload, and recovery endpoints, server-side reward generation, and strict saved-data size validation. The switches above control every anti-cheat rule that can safely be configured in-game.";
     const save = createTextButton("Save moderation settings", async () => {
         const next = { ...settings.settings } as ModerationSettings;
         form.querySelectorAll<HTMLInputElement>("input[data-setting]").forEach((input) => {
@@ -94,7 +99,7 @@ export async function renderAdminModerationSettings(container: HTMLElement) {
             status.textContent = error instanceof Error ? error.message : "Could not save moderation settings.";
         } finally { save.disabled = false; }
     });
-    form.append(save, status);
+    form.append(save, status, safeguards);
     container.append(heading, description, form);
 }
 
@@ -124,7 +129,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
     code.title = "Use 8-40 letters, numbers, or ! ? @ # $ % & * + = . _ ~ ( ) -";
     const rewardType = document.createElement("select");
     const rewardTypeOptions: [string, string][] = [
-        ["claims", "Normal asteroids"], ["specialClaims", "Special asteroids"], ["powerup", "Power-up"],
+        ["claims", "Normal asteroids"], ["specialClaims", "Special asteroids"], ["presents", "Christmas presents"], ["powerup", "Power-up"],
         ["skin", "Skin"], ["trail", "Trail"], ["avatar", "Avatar"], ["title", "Profile title"],
     ];
     rewardTypeOptions.forEach(([value, labelText]) => {
@@ -164,7 +169,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
     rewardDetails.append(titleLabel);
     const redrawRewardDetails = () => {
         const type = rewardType.value;
-        amountLabel.hidden = !["claims", "specialClaims", "powerup"].includes(type);
+        amountLabel.hidden = !["claims", "specialClaims", "presents", "powerup"].includes(type);
         amount.max = type === "powerup" ? "1000" : "1000000";
         amount.min = type === "powerup" ? "1" : "0";
         detailLabel.hidden = !["powerup", "skin", "trail", "avatar"].includes(type);
@@ -214,7 +219,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
                     code: code.value.trim() || undefined,
                     reward: (() => {
                         const type = rewardType.value as CodeReward["type"];
-                        if (type === "claims" || type === "specialClaims") return { type, amount: Number(amount.value) } satisfies CodeReward;
+                        if (type === "claims" || type === "specialClaims" || type === "presents") return { type, amount: Number(amount.value) } satisfies CodeReward;
                         if (type === "powerup") return { type, kind: detailSelect.value as PowerupKind, amount: Math.max(1, Number(amount.value)) } satisfies CodeReward;
                         if (type === "title") return { type, titleId: titleId.value } satisfies CodeReward;
                         return { type: type as "skin" | "trail" | "avatar", index: Number(detailSelect.value) } satisfies CodeReward;
@@ -351,7 +356,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
             saveEdit.disabled = true;
             try {
                 const type = editRewardType.value as CodeReward["type"];
-                const reward: CodeReward = type === "claims" || type === "specialClaims"
+                const reward: CodeReward = type === "claims" || type === "specialClaims" || type === "presents"
                     ? { type, amount: Number(editAmount.value) }
                     : type === "powerup"
                         ? { type, kind: editDetailSelect.value as PowerupKind, amount: Math.max(1, Number(editAmount.value)) }
@@ -386,7 +391,7 @@ export async function renderAdminCodeTools(container: HTMLElement, availableTitl
                 row.className = "tester-custom-level-row";
                 const label = document.createElement("span");
                 const reward: CodeReward = typeof entry.reward === "number" ? { type: "claims", amount: entry.reward } : entry.reward;
-                const rewardText = reward.type === "claims" ? `${reward.amount} normal asteroids` : reward.type === "specialClaims" ? `${reward.amount} special asteroids` : reward.type === "powerup" ? `${reward.amount} ${powerupLabels[reward.kind] ?? reward.kind}` : reward.type === "title" ? `title ${reward.titleId}` : `${reward.type} #${(reward as Extract<CodeReward, { type: "skin" | "trail" | "avatar" }>).index}`;
+                const rewardText = reward.type === "claims" ? `${reward.amount} normal asteroids` : reward.type === "specialClaims" ? `${reward.amount} special asteroids` : reward.type === "presents" ? `${reward.amount} Christmas presents` : reward.type === "powerup" ? `${reward.amount} ${powerupLabels[reward.kind] ?? reward.kind}` : reward.type === "title" ? `title ${reward.titleId}` : `${reward.type} #${(reward as Extract<CodeReward, { type: "skin" | "trail" | "avatar" }>).index}`;
                 const usageText = entry.maxUses === null ? `${entry.uses}/unlimited uses` : `${entry.uses}/${entry.maxUses} uses`;
                 label.textContent = `${rewardText} / ${usageText} / ${entry.enabled ? "enabled" : "disabled"}${entry.expiresAt ? ` / expires ${new Date(entry.expiresAt).toLocaleString()}` : ""}`;
                 row.append(label);

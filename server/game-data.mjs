@@ -74,7 +74,22 @@ export function validateProfileTitles(value) {
 }
 export function validateHolidayEventSettings(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.christmasEnabled !== "boolean") return null;
-  return { christmasEnabled: value.christmasEnabled };
+  // Older saved settings did not have the schedule flag; preserve them and
+  // default the optional annual schedule to off.
+  if (value.christmasAutoStart !== undefined && typeof value.christmasAutoStart !== "boolean") return null;
+  const annualDate = (candidate, fallback) => {
+    if (candidate === undefined) return fallback;
+    if (typeof candidate !== "string" || !/^\d{2}-\d{2}$/.test(candidate)) return null;
+    const [month, day] = candidate.split("-").map(Number);
+    const probe = new Date(Date.UTC(2000, month - 1, day));
+    return probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day ? candidate : null;
+  };
+  const christmasSeasonStart = annualDate(value.christmasSeasonStart, "12-01");
+  const christmasSeasonEnd = annualDate(value.christmasSeasonEnd, "12-31");
+  const adventStart = annualDate(value.adventStart, "12-01");
+  const adventEnd = annualDate(value.adventEnd, "12-25");
+  if (!christmasSeasonStart || !christmasSeasonEnd || !adventStart || !adventEnd) return null;
+  return { christmasEnabled: value.christmasEnabled, christmasAutoStart: value.christmasAutoStart === true, christmasSeasonStart, christmasSeasonEnd, adventStart, adventEnd };
 }
 const defaultRarityOdds = { Common: 52, Uncommon: 27, Rare: 13, Epic: 6, Legendary: 2 };
 const defaultRewardRanges = { Common: [50, 100], Uncommon: [101, 250], Rare: [251, 500], Epic: [501, 750], Legendary: [751, 1000] };
@@ -362,7 +377,7 @@ export function formatRecoveryCode(value) {
 /** Redemption rewards may grant currency, power-ups, cosmetics, or a profile title. */
 export function validateCodeReward(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.type !== "string") return null;
-  if (["claims", "specialClaims"].includes(value.type)) {
+  if (["claims", "specialClaims", "presents"].includes(value.type)) {
     if (!Number.isSafeInteger(value.amount) || value.amount < 0 || value.amount > 1000000) return null;
     return { type: value.type, amount: value.amount };
   }

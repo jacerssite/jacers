@@ -77,6 +77,7 @@ test("recovery codes use the unambiguous alphabet and display in four groups", (
 test("code rewards use the bounded claims reward object contract", () => {
   assert.deepEqual(validateCodeReward({ type: "claims", amount: 25 }), { type: "claims", amount: 25 });
   assert.deepEqual(validateCodeReward({ type: "specialClaims", amount: 1 }), { type: "specialClaims", amount: 1 });
+  assert.deepEqual(validateCodeReward({ type: "presents", amount: 25 }), { type: "presents", amount: 25 });
   assert.equal(validateCodeReward({ type: "password", amount: 1 }), null);
   assert.equal(validateCodeReward({ type: "claims", amount: -1 }), null);
 });

@@ -55,10 +55,10 @@ export function hasCurrencyConflict(existing, progress, baseline) {
 // generated rewards (codes, admin actions, and roulette) use replace writes and
 // bypass this client-mutation guard.
 export function getSuspiciousPlayerMutation(existing, progress, role = "player") {
-  // Owner/admin/tester accounts are explicitly allowed to use local test
+  // Owner-equivalent/admin/tester accounts are explicitly allowed to use local test
   // tools. Moderators and level makers still use the normal anti-cheat path;
   // their roles must never become a way to mint currency or unlocks.
-  if (["owner", "admin", "tester"].includes(role) || !existing) return null;
+  if (["owner", "developer", "admin", "tester"].includes(role) || !existing) return null;
   const changedKeys = Object.keys(progress).filter((key) => progress[key] !== existing[key]);
   const privileged = changedKeys.find((key) => /^(orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-))/.test(key));
   if (privileged) return `privileged progress key: ${privileged}`;
@@ -93,6 +93,19 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   for (const key of ["orbit-claims", "orbit-special-claims", "orbit-enemies-killed", "orbit-bosses-killed", "orbit-prestige"]) {
     if (Object.hasOwn(progress, key) && (typeof progress[key] !== "string" || !/^\d{1,10}$/.test(progress[key]))) return `${key} is invalid`;
   }
+  const currentPrestige = readCount("orbit-prestige");
+  const nextPrestige = nextCount("orbit-prestige");
+  // Prestige is the one legitimate player action that resets normal currency,
+  // inventory and route records.  Validate the completed normal routes from
+  // the already-saved record, then allow that single, expected reset through.
+  // Without this exception every prestige save is rejected as a currency drop.
+  const savedNormalRoutes = Object.keys(existing).filter((key) => /^orbit-level-complete-\d+$/.test(key) && existing[key] === "1").length;
+  const isValidatedPrestigeReset = nextPrestige === currentPrestige + 1
+    && savedNormalRoutes >= 20
+    && nextCount("orbit-claims") === 0
+    && nextCount("orbit-special-claims") === 0
+    && progress["orbit-prestige-world-unlocked"] === "1";
+  if (isValidatedPrestigeReset) return null;
   for (const key of ["orbit-claims", "orbit-special-claims"]) {
     if (nextCount(key) < readCount(key)) return `${key} cannot decrease in a player sync`;
   }
@@ -113,8 +126,6 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
     if (next < current) return `${key} cannot decrease`;
     if (next - current > maximumJump) return `${key} jumped too far`;
   }
-  const currentPrestige = readCount("orbit-prestige");
-  const nextPrestige = nextCount("orbit-prestige");
   if (nextPrestige < currentPrestige) return "prestige cannot decrease in a player sync";
   if (nextPrestige - currentPrestige > 1) return "prestige advanced too far in one sync";
   const routeKeys = new Set([...Object.keys(existing), ...Object.keys(progress)]);
@@ -140,7 +151,7 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
 }
 
 export function sanitizeInitialPlayerProgress(progress, role = "player") {
-  if (["owner", "admin", "tester"].includes(role)) return progress;
+  if (["owner", "developer", "admin", "tester"].includes(role)) return progress;
   const sanitized = { ...progress };
   for (const key of Object.keys(sanitized)) {
     if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-)/.test(key)) delete sanitized[key];

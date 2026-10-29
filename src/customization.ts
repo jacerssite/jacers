@@ -48,7 +48,7 @@ export function createCustomization(context: CustomizationContext) {
             preview = nextPreview;
         };
         
-        const rarityOrder: Rarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary"];
+        const rarityOrder: (Rarity | "Limited")[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Limited"];
         
         // Create arrays with original indices. Skins are represented by the
         // color swatches above; they are intentionally not shown as a second
@@ -60,7 +60,7 @@ export function createCustomization(context: CustomizationContext) {
         // missing even though they were already unlocked on the account.
         const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i })).filter((avatar) => avatar.holiday !== "christmas" || isHolidayCosmeticOwned("avatar", avatar.originalIndex));
         
-        const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity) => HTMLButtonElement) => {
+        const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean; holiday?: "christmas" }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity | "Limited") => HTMLButtonElement) => {
             const group = document.createElement("details");
             group.className = "cosmetic-group-section cosmetic-dropdown";
             group.open = title === "Appearance";
@@ -70,7 +70,7 @@ export function createCustomization(context: CustomizationContext) {
                 heading.textContent = title;
                 group.append(heading);
             }
-            const ordered = collection.map((item, index) => ({ item, index, rarity: getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
+            const ordered = collection.map((item, index) => ({ item, index, rarity: item.holiday === "christmas" ? "Limited" as const : getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
             const grid = document.createElement("div"); grid.className = gridClass;
             ordered.forEach(({ item, index, rarity }) => grid.append(createChoice(item, index, rarity)));
             group.append(grid);
@@ -83,9 +83,9 @@ export function createCustomization(context: CustomizationContext) {
         appearance.open = true;
         appearance.innerHTML = `<summary class="cosmetic-dropdown-summary">Appearance</summary><p>Choose your ship color. Colors are grouped by rarity; locked colors are dimmed and marked with a lock.</p>`;
         const appendColorGroups = () => {
-            const grouped = new Map<Rarity, typeof colorOptions>();
+            const grouped = new Map<Rarity | "Limited", typeof colorOptions>();
             rarityOrder.forEach((rarity) => grouped.set(rarity, []));
-            colorOptions.forEach((option) => grouped.get(getCosmeticRarity(option))!.push(option));
+            colorOptions.forEach((option) => grouped.get(option.source === "skin" && skins[option.index]?.holiday === "christmas" ? "Limited" : getCosmeticRarity(option))!.push(option));
             grouped.forEach((options, rarity) => {
                 if (!options.length) return;
                 const heading = document.createElement("p"); heading.className = "setting-title appearance-group-title"; heading.textContent = rarity;

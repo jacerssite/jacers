@@ -92,7 +92,7 @@ export const avatars: AvatarStyle[] = [
     { name: "Infinity Pilot", color: "#00ff66", shape: "dart", required: 0, defaultSkin: 24, prestige: 3, cssArt: "infinity-pilot" },
     { name: "Stellar Legend", color: "#ff6600", shape: "ring", required: 0, defaultSkin: 25, prestige: 3, cssArt: "stellar-legend" },
     { name: "North Star", color: "#f6c46e", shape: "classic", required: 0, defaultSkin: 26, holiday: "christmas" },
-    { name: "Gift Ship", color: "#d92038", shape: "ring", required: 0, defaultSkin: 27, holiday: "christmas" },
+    { name: "Sleigh", color: "#d92038", shape: "ring", required: 0, defaultSkin: 27, holiday: "christmas" },
 ];
 
 export function getCosmeticRarity(item: { required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean }): Rarity {
@@ -103,4 +103,4 @@ export function getCosmeticRarity(item: { required: number; secret?: boolean; bo
     return "Common";
 }
 
-export function createRarityBadge(rarity: Rarity) { return `<span class="rarity-badge rarity-${rarity.toLowerCase()}">${rarity}</span>`; }
+export function createRarityBadge(rarity: Rarity | "Limited") { return `<span class="rarity-badge rarity-${rarity.toLowerCase()}">${rarity}</span>`; }
