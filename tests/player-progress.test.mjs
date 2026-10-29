@@ -63,7 +63,10 @@ test("client saves cannot rewrite expired secret route collection history", () =
     "orbit-asteroids-12": "[0,1,2,3,4,5]",
     "orbit-secret-cooldown-eclipse": String(completedAt),
   };
-  assert.equal(getSuspiciousPlayerMutation(existing, { "orbit-special-claims": "6" }), null);
+  assert.match(
+    getSuspiciousPlayerMutation(existing, { "orbit-special-claims": "6" }),
+    /collection history is server-owned/i,
+  );
   assert.match(
     getSuspiciousPlayerMutation(
       { ...existing, "orbit-asteroids-0": "[0]" },

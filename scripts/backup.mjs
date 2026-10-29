@@ -14,6 +14,25 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const output = path.resolve(repo, requestedOutput || path.join("backups", stamp));
 const databaseUri = process.env.DATABASE_MONGODB_URI || process.env.MONGODB_URI || process.env.DATABASE_URL;
 
+function findMongoDump() {
+  if (process.env.MONGODUMP_PATH) return process.env.MONGODUMP_PATH;
+  if (process.platform !== "win32") return "mongodump";
+
+  // The Windows Database Tools archive can be used without modifying PATH.
+  // This is the documented default location for this project; an environment
+  // override is still available above for a custom installation.
+  const toolsRoot = process.env.MONGODB_TOOLS_DIR || "C:\\mongoDBTools";
+  try {
+    const toolFolder = fs.readdirSync(toolsRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && entry.name.startsWith("mongodb-database-tools-"));
+    const executable = toolFolder && path.join(toolsRoot, toolFolder.name, "bin", "mongodump.exe");
+    if (executable && fs.existsSync(executable)) return executable;
+  } catch {
+    // Fall back to PATH and report the normal actionable error if unavailable.
+  }
+  return "mongodump";
+}
+
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, { cwd: repo, encoding: "utf8", ...options });
   if (result.error) throw result.error;
@@ -43,7 +62,7 @@ function main() {
     const databaseDir = path.join(output, "database");
     fs.mkdirSync(databaseDir, { recursive: true });
     try {
-      run("mongodump", ["--uri", databaseUri, "--out", databaseDir, "--gzip"], { stdio: "inherit" });
+      run(findMongoDump(), ["--uri", databaseUri, "--out", databaseDir, "--gzip"], { stdio: "inherit" });
       databaseBackedUp = true;
     } catch (error) {
       throw new Error(`Database backup failed. Install MongoDB Database Tools and allow this machine in Atlas Network Access. ${error.message}`);
