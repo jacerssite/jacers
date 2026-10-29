@@ -1492,30 +1492,62 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
   }
 });
 
-// Holiday spins are resolved on the server so the currency and any asteroid
-// prizes are saved safely and cannot be created by editing browser storage.
+function christmasWheelOptions(progress) {
+  const cosmetics = [
+    ["skin", 26, "Holly Comet"], ["skin", 27, "Snowglobe"], ["skin", 28, "Evergreen Blade"],
+    ["trail", 21, "Present Parade"], ["trail", 22, "Snowfall Wake"], ["trail", 23, "Holly Ribbon"],
+    ["avatar", 16, "North Star"], ["avatar", 17, "Sleigh"],
+  ].filter(([group, index]) => progress[`orbit-christmas-unlock-${group}-${index}`] !== "1")
+    .map(([kind, value, name]) => ({ kind, value, name, weight: 7 }));
+  const titles = ["winter-pilot", "gift-runner", "north-star", "snowglobe"]
+    .filter((id) => progress[`orbit-christmas-title-unlock-${id}`] !== "1")
+    .map((value) => ({ kind: "title", value, name: value.split("-").map((word) => word[0].toUpperCase() + word.slice(1)).join(" "), weight: 6 }));
+  // Currency is always available. A winning normal/special entry produces a
+  // server random amount capped at 1,000 / 50 respectively.
+  const options = [...cosmetics, ...titles, { kind: "claims", value: null, name: "Normal asteroids", weight: 30 }, { kind: "specialClaims", value: null, name: "Special asteroids", weight: 15 }];
+  const totalWeight = options.reduce((total, option) => total + option.weight, 0);
+  return options.map((option) => ({ ...option, chance: Number((option.weight / totalWeight * 100).toFixed(2)) }));
+}
+
+function chooseChristmasWheelOption(options) {
+  let roll = crypto.randomInt(options.reduce((total, option) => total + option.weight, 0));
+  for (let index = 0; index < options.length; index++) {
+    roll -= options[index].weight;
+    if (roll < 0) return index;
+  }
+  return options.length - 1;
+}
+
+async function readChristmasWheelProgress(req) {
+  const db = await getDatabase();
+  const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" });
+  const eventEnabled = resolveHolidayEventSettings(holiday?.value).christmasEnabled;
+  if (!eventEnabled && !["owner", "developer", "tester"].includes(req.user.role)) throw Object.assign(new Error("The Christmas event is not active."), { statusCode: 403 });
+  const collection = db.collection("player_progress");
+  const record = await collection.findOne({ _id: req.user.id });
+  const progress = validatePlayerProgress(record?.data ?? {});
+  if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+  return { collection, progress };
+}
+
+app.get("/api/holiday/christmas-wheel", requireUser, async (req, res, next) => {
+  try {
+    noStore(res);
+    const { progress } = await readChristmasWheelProgress(req);
+    res.json({ options: christmasWheelOptions(progress) });
+  } catch (error) { if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message }); next(error); }
+});
+
+// Holiday spins are resolved on the server so currency and prizes are saved
+// safely. The returned selected index always refers to the displayed wheel.
 app.post("/api/holiday/christmas-spin", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
-    const db = await getDatabase();
-    const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" });
-    const eventEnabled = resolveHolidayEventSettings(holiday?.value).christmasEnabled;
-    if (!eventEnabled && !["owner", "developer", "tester"].includes(req.user.role)) return res.status(403).json({ error: "The Christmas event is not active." });
-    const collection = db.collection("player_progress");
-    const record = await collection.findOne({ _id: req.user.id });
-    const progress = validatePlayerProgress(record?.data ?? {});
-    if (!progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
+    const { collection, progress } = await readChristmasWheelProgress(req);
     const presents = Number(progress["orbit-christmas-presents"] ?? 0);
     if (!Number.isSafeInteger(presents) || presents < 10) return res.status(400).json({ error: "You need 10 presents to open the wheel." });
-    const cosmetics = [
-      ["skin", 26, "Holly Comet"], ["skin", 27, "Snowglobe"], ["skin", 28, "Evergreen Blade"],
-      ["trail", 21, "Present Parade"], ["trail", 22, "Snowfall Wake"], ["trail", 23, "Holly Ribbon"],
-      ["avatar", 16, "North Star"], ["avatar", 17, "Sleigh"],
-    ].filter(([group, index]) => progress[`orbit-christmas-unlock-${group}-${index}`] !== "1");
-    const titles = ["winter-pilot", "gift-runner", "north-star", "snowglobe"]
-      .filter((id) => progress[`orbit-christmas-title-unlock-${id}`] !== "1")
-      .map((id) => ["title", id, id.split("-").map((word) => word[0].toUpperCase() + word.slice(1)).join(" ")]);
-    const options = [...cosmetics, ...titles, ["claims", null, "Normal asteroids"], ["specialClaims", null, "Special asteroids"]];
-    const [kind, value, name] = options[crypto.randomInt(options.length)];
+    const options = christmasWheelOptions(progress);
+    const selectedIndex = chooseChristmasWheelOption(options);
+    const { kind, value, name } = options[selectedIndex];
     const nextProgress = { ...progress, "orbit-christmas-presents": String(presents - 10) };
     let description;
     if (kind === "claims") {
@@ -1535,8 +1567,8 @@ app.post("/api/holiday/christmas-spin", requireSameOrigin, requireUser, async (r
     }
     const result = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
     if (!result.progress) return res.status(409).json({ error: "Could not save this holiday reward. Try again." });
-    res.json({ progress: result.progress, reward: { name, description } });
-  } catch (error) { next(error); }
+    res.json({ progress: result.progress, options, selectedIndex, reward: { name, description } });
+  } catch (error) { if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message }); next(error); }
 });
 
 function christmasAdventDay(settings, now = new Date()) {

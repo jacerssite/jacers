@@ -53,14 +53,14 @@ export function createCustomization(context: CustomizationContext) {
         // Create arrays with original indices. Skins are represented by the
         // color swatches above; they are intentionally not shown as a second
         // selectable collection.
-        const trailsWithIndex = trails.map((t, i) => ({ ...t, originalIndex: i })).filter((trail) => trail.holiday !== "christmas" || isHolidayCosmeticOwned("trail", trail.originalIndex));
+        const trailsWithIndex = trails.map((t, i) => ({ ...t, originalIndex: i })).filter((trail) => !trail.limited || isHolidayCosmeticOwned("trail", trail.originalIndex));
         // Keep the complete avatar catalog in one collection. Prestige avatars
         // can be won from the roulette wheel just like the normal collection,
         // so hiding them behind the planetary-flip preview made rewards look
         // missing even though they were already unlocked on the account.
-        const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i })).filter((avatar) => avatar.holiday !== "christmas" || isHolidayCosmeticOwned("avatar", avatar.originalIndex));
+        const avatarsWithIndex = avatars.map((a, i) => ({ ...a, originalIndex: i })).filter((avatar) => !avatar.limited || isHolidayCosmeticOwned("avatar", avatar.originalIndex));
         
-        const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean; holiday?: "christmas" }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity | "Limited") => HTMLButtonElement) => {
+        const appendRarityGroups = <T extends { name: string; required: number; secret?: boolean; boss?: boolean; prestige?: number; golden?: boolean; jackpot?: boolean; holiday?: "christmas"; limited?: boolean }>(target: HTMLElement, title: string, collection: T[], gridClass: string, createChoice: (item: T, index: number, rarity: Rarity | "Limited") => HTMLButtonElement) => {
             const group = document.createElement("details");
             group.className = "cosmetic-group-section cosmetic-dropdown";
             group.open = title === "Appearance";
@@ -70,14 +70,14 @@ export function createCustomization(context: CustomizationContext) {
                 heading.textContent = title;
                 group.append(heading);
             }
-            const ordered = collection.map((item, index) => ({ item, index, rarity: item.holiday === "christmas" ? "Limited" as const : getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
+            const ordered = collection.map((item, index) => ({ item, index, rarity: item.limited ? "Limited" as const : getCosmeticRarity(item) })).sort((first, second) => rarityOrder.indexOf(first.rarity) - rarityOrder.indexOf(second.rarity) || first.item.name.localeCompare(second.item.name));
             const grid = document.createElement("div"); grid.className = gridClass;
             ordered.forEach(({ item, index, rarity }) => grid.append(createChoice(item, index, rarity)));
             group.append(grid);
             target.append(group);
         };
         const colorOptions = getShipColorOptions(STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins)
-            .filter((option) => option.source !== "skin" || option.holiday !== "christmas" || isHolidayCosmeticOwned("skin", option.index));
+            .filter((option) => option.source !== "skin" || !option.limited || isHolidayCosmeticOwned("skin", option.index));
         const appearance = document.createElement("details");
         appearance.className = "appearance-loadout-section cosmetic-dropdown";
         appearance.open = true;
@@ -85,7 +85,7 @@ export function createCustomization(context: CustomizationContext) {
         const appendColorGroups = () => {
             const grouped = new Map<Rarity | "Limited", typeof colorOptions>();
             rarityOrder.forEach((rarity) => grouped.set(rarity, []));
-            colorOptions.forEach((option) => grouped.get(option.source === "skin" && skins[option.index]?.holiday === "christmas" ? "Limited" : getCosmeticRarity(option))!.push(option));
+            colorOptions.forEach((option) => grouped.get(option.source === "skin" && skins[option.index]?.limited ? "Limited" : getCosmeticRarity(option))!.push(option));
             grouped.forEach((options, rarity) => {
                 if (!options.length) return;
                 const heading = document.createElement("p"); heading.className = "setting-title appearance-group-title"; heading.textContent = rarity;
@@ -120,7 +120,7 @@ export function createCustomization(context: CustomizationContext) {
             const unlocked = isTrailUnlocked(trails[trail.originalIndex]);
             const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}${unlocked ? "" : " is-locked"}`; button.disabled = !unlocked; button.dataset.trailIndex = String(trail.originalIndex);
             const icon = document.createElement("span");
-            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}`;
+            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
             if (trail.secondaryColor) icon.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             icon.setAttribute("aria-hidden", "true");
@@ -180,7 +180,7 @@ export function createCustomization(context: CustomizationContext) {
         if (trail.secondaryColor) scene.style.setProperty("--trail-secondary-color", trail.secondaryColor);
         const particleElements = Array.from({ length: 5 }, (_, index) => {
             const particle = document.createElement("i");
-            particle.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""} ${index === 0 ? "trail-head" : ""}`;
+            particle.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""} ${index === 0 ? "trail-head" : ""}`;
             particle.style.setProperty("--trail-delay", `${index * 60}ms`);
             if (trail.secondaryColor) particle.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             scene.append(particle);

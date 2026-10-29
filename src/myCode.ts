@@ -175,6 +175,7 @@ let musicScene: MusicScene = "menu";
 let musicVolume = Number(localStorage.getItem("orbit-music-volume") ?? "0.3");
 let musicMuted = localStorage.getItem("orbit-music-muted") === "true";
 let musicUnlocked = false;
+let christmasMusicPreviousTrack: MusicTrackId | null = null;
 if (!Number.isFinite(musicVolume) || musicVolume < 0 || musicVolume > 1) musicVolume = 0.3;
 let usedAbilities = new Set<string>();
 let lastJumpDirection = 0;
@@ -910,7 +911,7 @@ async function refreshOnlineState(includeSession = true) {
                 ? structuredClone(settings.rouletteTiers)
                 : structuredClone(DEFAULT_ROULETTE_TIERS);
             updateLogEntries = Array.isArray(settings.updateLog) ? settings.updateLog : [];
-            holidayEvent = settings.holidayEvent?.christmasEnabled === true ? { christmasEnabled: true } : { christmasEnabled: false };
+            holidayEvent = settings.holidayEvent ? { ...settings.holidayEvent } : { christmasEnabled: false };
             if (isUsableProfileTitles(settings.profileTitles)) profileTitles = structuredClone(settings.profileTitles);
             if (settings.builtinLevelOverrides && typeof settings.builtinLevelOverrides === "object" && !Array.isArray(settings.builtinLevelOverrides)) {
                 builtinLevelOverrides = Object.fromEntries(Object.entries(settings.builtinLevelOverrides).filter(([index, level]) => /^\d+$/.test(index) && level && typeof level === "object")) as Record<string, Level>;
@@ -1369,7 +1370,39 @@ function setMusicMuted(muted: boolean) {
     }
 }
 
+function useChristmasMusic() {
+    if (musicMuted) return;
+    if (christmasMusicPreviousTrack === null) christmasMusicPreviousTrack = selectedMusicTrackId;
+    if (selectedMusicTrackId !== "original") {
+        selectedMusicTrackId = "original";
+        stopMusicSequence();
+        stopProceduralMusic();
+        stopExternalMusic();
+    }
+    unlockMusic();
+    if (musicUnlocked) {
+        startProceduralMusic();
+        scheduleMusicStep(40);
+    }
+}
+
+function restorePreferredMusic() {
+    if (christmasMusicPreviousTrack === null) return;
+    const preferredTrack = christmasMusicPreviousTrack;
+    christmasMusicPreviousTrack = null;
+    if (preferredTrack === selectedMusicTrackId) return;
+    selectedMusicTrackId = preferredTrack;
+    stopMusicSequence();
+    stopProceduralMusic();
+    stopExternalMusic();
+    if (!musicUnlocked || musicMuted) return;
+    if (preferredTrack === "original") { startProceduralMusic(); scheduleMusicStep(80); }
+    else startExternalMusic();
+}
+
 function setMusicScene(scene: MusicScene) {
+    if (scene === "christmas") useChristmasMusic();
+    else restorePreferredMusic();
     musicScene = scene;
     const rootFrequency = musicSceneRoot(scene);
     if (musicContext) {
@@ -1710,11 +1743,9 @@ function showMenu() {
     offlineOwnerButton.classList.add("offline-owner-button");
     offlineOwnerButton.setAttribute("aria-label", "Open offline owner access");
     offlineOwnerButton.hidden = true;
-    const holidayButton = createTextButton("Christmas event", enterChristmasEvent);
-    holidayButton.classList.add("holiday-tree-button");
-    holidayButton.innerHTML = `<span aria-hidden="true">🎄</span><b>Christmas event</b><small>Limited winter routes</small>`;
-    holidayButton.hidden = !canAccessChristmasEvent();
-    menu.append(updateRail, accountRail, menuActions, secondaryActions, holidayButton, offlineOwnerButton);
+    // Holiday events are entered from the Holiday updates control-center tab;
+    // do not expose a seasonal tile on the public main menu.
+    menu.append(updateRail, accountRail, menuActions, secondaryActions, offlineOwnerButton);
     menu.append(createPageCounter()); document.body.replaceChildren(menu);
     if (readOfflineOwnerGrant()) {
         const updateOfflineOwnerControl = async () => {
@@ -1735,7 +1766,7 @@ function showMenu() {
 
 function canAccessChristmasEvent() {
     const role = currentOnlineUser?.role;
-    return holidayEvent.christmasEnabled || role === "owner" || role === "developer" || role === "tester";
+    return holidayEvent.christmasEnabled || ((role === "owner" || role === "developer" || role === "tester") && localStorage.getItem("orbit-tester-christmas-preview") === "1");
 }
 
 function getChristmasPresents() { return Math.max(0, Math.floor(Number(localStorage.getItem("orbit-christmas-presents") ?? "0") || 0)); }
@@ -2712,7 +2743,8 @@ function showAccount(initialMessage = "") {
                 leaderboardRow.append(leaderboardInput);
             }
             const allTitlesGranted = hasOwnerAccess() || (currentOnlineUser.role === "tester" && localStorage.getItem("orbit-all-titles") === "1");
-            const earnedTitles = allTitlesGranted ? profileTitles : profileTitles.filter(isProfileTitleUnlocked);
+            const visibleTitles = profileTitles.filter((title) => !isChristmasTitle(title) || holidayEvent.christmasEnabled);
+            const earnedTitles = allTitlesGranted ? visibleTitles : visibleTitles.filter(isProfileTitleUnlocked);
             const titleRow = document.createElement("label");
             titleRow.className = "account-title-setting";
             titleRow.innerHTML = `<span><b>Pilot title</b><small>Earn titles through their listed requirements. Your chosen title appears on your public profile.</small></span>`;
@@ -3347,21 +3379,50 @@ function showChristmasWheel() {
     balance.className = "christmas-presents";
     const wheel = document.createElement("div");
     wheel.className = "christmas-wheel";
-    wheel.innerHTML = `<span>🎁</span>`;
+    const odds = document.createElement("div");
+    odds.className = "christmas-wheel-odds";
     const status = document.createElement("p");
     status.className = "menu-copy";
+    type ChristmasWheelOption = { name: string; chance: number };
+    const renderWheel = (options: ChristmasWheelOption[], selectedIndex = -1) => {
+        wheel.style.transition = "none";
+        wheel.style.transform = "rotate(0deg)";
+        wheel.replaceChildren();
+        const center = document.createElement("span");
+        center.textContent = "🎁";
+        wheel.append(center);
+        options.forEach((option, index) => {
+            const label = document.createElement("b");
+            label.className = `christmas-wheel-segment${index === selectedIndex ? " selected" : ""}`;
+            label.style.setProperty("--wheel-angle", `${index * 360 / options.length}deg`);
+            label.textContent = option.name;
+            label.title = `${option.name}: ${option.chance}%`;
+            wheel.append(label);
+        });
+        odds.replaceChildren(...options.map((option, index) => {
+            const row = document.createElement("span");
+            row.className = index === selectedIndex ? "selected" : "";
+            row.textContent = `${option.name} — ${option.chance}%`;
+            return row;
+        }));
+    };
     const spin = createMenuButton("Open / 10 presents", async () => {
         if (!currentOnlineUser) { status.textContent = "Sign in to open the present wheel so rewards save to your account."; return; }
         if (getChristmasPresents() < 10) return;
         spin.disabled = true;
         try {
-            const result = await apiRequest<{ progress: Record<string, string>; reward: { name: string; description: string } }>("/holiday/christmas-spin", { method: "POST" });
+            const result = await apiRequest<{ progress: Record<string, string>; options: ChristmasWheelOption[]; selectedIndex: number; reward: { name: string; description: string } }>("/holiday/christmas-spin", { method: "POST" });
             applySyncedProgress(getLocalAccountProgress(), result.progress);
             lastSyncedAccountProgress = serializeAccountProgress(result.progress);
             rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
-            wheel.classList.add("spinning");
+            renderWheel(result.options);
+            const rotation = 1080 + (result.options.length - result.selectedIndex) * 360 / result.options.length;
+            requestAnimationFrame(() => {
+                wheel.style.transition = "transform .9s cubic-bezier(.2,.7,.15,1)";
+                wheel.style.transform = `rotate(${rotation}deg)`;
+            });
             globalThis.setTimeout(() => {
-                wheel.classList.remove("spinning");
+                renderWheel(result.options, result.selectedIndex);
                 status.textContent = `${result.reward.name} — ${result.reward.description}`;
                 balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
                 spin.disabled = getChristmasPresents() < 10;
@@ -3372,7 +3433,7 @@ function showChristmasWheel() {
         }
     });
     balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
-    spin.disabled = getChristmasPresents() < 10;
+    spin.disabled = true;
     const resetCooldown = createTextButton("Reset winter route cooldowns / 25 presents", () => {
         if (getChristmasPresents() < 25) { status.textContent = "You need 25 presents to reset winter route cooldowns."; return; }
         setChristmasPresents(getChristmasPresents() - 25);
@@ -3381,8 +3442,12 @@ function showChristmasWheel() {
         balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
         spin.disabled = getChristmasPresents() < 10;
     });
-    menu.append(balance, wheel, spin, resetCooldown, status, createTextButton("Back to Christmas event", showChristmasEvent), createPageCounter());
+    menu.append(balance, wheel, odds, spin, resetCooldown, status, createTextButton("Back to Christmas event", showChristmasEvent), createPageCounter());
     document.body.replaceChildren(menu);
+    void apiRequest<{ options: ChristmasWheelOption[] }>("/holiday/christmas-wheel").then((response) => {
+        renderWheel(response.options);
+        spin.disabled = getChristmasPresents() < 10;
+    }).catch((error: unknown) => { status.textContent = error instanceof Error ? error.message : "Could not load Christmas wheel odds."; });
 }
 
 function showShop() {
@@ -4668,6 +4733,17 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const input = document.createElement("input"); input.type = "checkbox"; input.checked = localStorage.getItem(`orbit-unlock-${kind}`) === "1"; input.dataset.unlock = kind;
         label.append(input, document.createTextNode(`Unlock all ${kind}`)); unlocks.append(label);
     });
+    const limitedLabel = document.createElement("label");
+    const limitedUnlock = document.createElement("input");
+    limitedUnlock.type = "checkbox";
+    limitedUnlock.dataset.unlock = "limited";
+    limitedUnlock.checked = skins.every((item, index) => !item.limited || localStorage.getItem(`orbit-christmas-unlock-skin-${index}`) === "1")
+        && trails.every((item, index) => !item.limited || localStorage.getItem(`orbit-christmas-unlock-trail-${index}`) === "1")
+        && avatars.every((item, index) => !item.limited || localStorage.getItem(`orbit-christmas-unlock-avatar-${index}`) === "1");
+    // The check is intentionally an owner/tester grant action rather than a
+    // normal collection flag, so seasonal rewards remain individually owned.
+    limitedLabel.append(limitedUnlock, document.createTextNode(" Unlock all limited Christmas rewards"));
+    unlocks.append(limitedLabel);
     form.append(unlocks);
     const unlockEverySkin = createTextButton("Unlock every skin, including special skins", () => {
         localStorage.setItem("orbit-unlock-skins", "1");
@@ -5042,7 +5118,17 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const editedInventory = getInventory();
         form.querySelectorAll<HTMLInputElement>("input[data-powerup]").forEach((input) => { editedInventory[input.dataset.powerup as PowerupKind] = Math.max(0, Number(input.value) || 0); });
         saveInventory(editedInventory);
-        unlocks.querySelectorAll<HTMLInputElement>("input[data-unlock]").forEach((input) => { const key = `orbit-unlock-${input.dataset.unlock}`; if (input.checked) localStorage.setItem(key, "1"); else localStorage.removeItem(key); });
+        unlocks.querySelectorAll<HTMLInputElement>("input[data-unlock]").forEach((input) => {
+            if (input.dataset.unlock === "limited") {
+                if (input.checked) {
+                    skins.forEach((item, index) => { if (item.limited) localStorage.setItem(`orbit-christmas-unlock-skin-${index}`, "1"); });
+                    trails.forEach((item, index) => { if (item.limited) localStorage.setItem(`orbit-christmas-unlock-trail-${index}`, "1"); });
+                    avatars.forEach((item, index) => { if (item.limited) localStorage.setItem(`orbit-christmas-unlock-avatar-${index}`, "1"); });
+                }
+                return;
+            }
+            const key = `orbit-unlock-${input.dataset.unlock}`; if (input.checked) localStorage.setItem(key, "1"); else localStorage.removeItem(key);
+        });
         form.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => { const level = levels[Number(input.dataset.level)]; if (level.secret && level.secretId) { if (input.checked) localStorage.setItem(`orbit-key-${level.secretId}`, "1"); else localStorage.removeItem(`orbit-key-${level.secretId}`); } else if (input.checked) localStorage.setItem(`orbit-level-${input.dataset.level}`, "1"); else localStorage.removeItem(`orbit-level-${input.dataset.level}`); });
         if (prestigeGateInput.checked) localStorage.setItem("orbit-key-prestige-gate", "1"); else localStorage.removeItem("orbit-key-prestige-gate");
     });
@@ -6553,7 +6639,7 @@ function createTrail(visible = true) {
     if (trailElement.length === 0) {
         trailElement = Array.from({ length: 5 }, (_, index) => {
             const element = document.createElement("i");
-            element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""} ${index === 0 ? "trail-head" : ""}`;
+            element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""} ${index === 0 ? "trail-head" : ""}`;
             element.style.setProperty("--trail-delay", `${index * 60}ms`);
             element.style.opacity = "0";
             world.append(element);
@@ -6910,7 +6996,9 @@ function getNormalRouteCount() { return levels.filter((level) => !level.holiday 
 function getNormalRouteCompletionCount() { return levels.filter((level, index) => !level.holiday && !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
 function getNormalCompletedLevelCount() { return levels.filter((level, index) => { const bestTime = Number(localStorage.getItem(`orbit-best-${index}`) ?? "0"); return !level.holiday && !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1" && bestTime > 0 && bestTime <= goldenTimeLimitMs; }).length; }
 function getCompletedLevelCount() { return levels.filter((level, index) => !level.holiday && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
+function isChristmasTitle(title: ProfileTitle) { return CHRISTMAS_TITLES.some((holidayTitle) => holidayTitle.id === title.id); }
 function isProfileTitleUnlocked(title: ProfileTitle) {
+    if (isChristmasTitle(title) && !holidayEvent.christmasEnabled) return false;
     if (hasOwnerAccess() || localStorage.getItem("orbit-all-titles") === "1") return true;
     if (localStorage.getItem(`orbit-title-unlock-${title.id}`) === "1") return true;
     if (localStorage.getItem(`orbit-christmas-title-unlock-${title.id}`) === "1") return true;
@@ -6998,9 +7086,22 @@ function tryPrestige() {
     saveAccountProgressSoon();
     return true;
 }
-function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean; holiday?: "christmas" }, index?: number) { return hasOwnerAccess() || localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && (isSpinCosmeticUnlocked("skin", index) || localStorage.getItem(`orbit-christmas-unlock-skin-${index}`) === "1")) || (skin.holiday ? false : skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required); }
+function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean; holiday?: "christmas"; limited?: boolean }, index?: number) {
+    // Limited cosmetics are account-owned rewards, not an event-only preview
+    // or a staff bypass. Once earned they remain usable permanently.
+    if (skin.limited) return index !== undefined && localStorage.getItem(`orbit-christmas-unlock-skin-${index}`) === "1";
+    return hasOwnerAccess() || localStorage.getItem("orbit-unlock-skins") === "1" || (index !== undefined && isSpinCosmeticUnlocked("skin", index)) || (skin.holiday ? false : skin.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : skin.prestige !== undefined ? prestigeLevel >= skin.prestige : skin.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : skin.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= skin.required);
+}
 function getUnlockedSkinCount() { return skins.filter(isSkinUnlocked).length; }
-function isAvatarUnlocked(avatar: AvatarStyle) { const index = avatars.indexOf(avatar); return hasOwnerAccess() || localStorage.getItem("orbit-unlock-avatars") === "1" || (index >= 0 && (isSpinCosmeticUnlocked("avatar", index) || localStorage.getItem(`orbit-christmas-unlock-avatar-${index}`) === "1")) || (avatar.holiday ? false : avatar.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : avatar.prestige !== undefined ? prestigeLevel >= avatar.prestige : avatar.jackpot ? localStorage.getItem("orbit-jackpot-avatar") === "1" : true); }
-function isTrailUnlocked(trail: TrailStyle) { const index = trails.indexOf(trail); return hasOwnerAccess() || localStorage.getItem("orbit-unlock-trails") === "1" || (index >= 0 && (isSpinCosmeticUnlocked("trail", index) || localStorage.getItem(`orbit-christmas-unlock-trail-${index}`) === "1")) || (trail.holiday ? false : trail.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : trail.prestige !== undefined ? prestigeLevel >= trail.prestige : trail.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : trail.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= trail.required); }
+function isAvatarUnlocked(avatar: AvatarStyle) {
+    const index = avatars.indexOf(avatar);
+    if (avatar.limited) return index >= 0 && localStorage.getItem(`orbit-christmas-unlock-avatar-${index}`) === "1";
+    return hasOwnerAccess() || localStorage.getItem("orbit-unlock-avatars") === "1" || (index >= 0 && isSpinCosmeticUnlocked("avatar", index)) || (avatar.holiday ? false : avatar.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : avatar.prestige !== undefined ? prestigeLevel >= avatar.prestige : avatar.jackpot ? localStorage.getItem("orbit-jackpot-avatar") === "1" : true);
+}
+function isTrailUnlocked(trail: TrailStyle) {
+    const index = trails.indexOf(trail);
+    if (trail.limited) return index >= 0 && localStorage.getItem(`orbit-christmas-unlock-trail-${index}`) === "1";
+    return hasOwnerAccess() || localStorage.getItem("orbit-unlock-trails") === "1" || (index >= 0 && isSpinCosmeticUnlocked("trail", index)) || (trail.holiday ? false : trail.golden ? getNormalCompletedLevelCount() >= getNormalRouteCount() : trail.prestige !== undefined ? prestigeLevel >= trail.prestige : trail.boss ? localStorage.getItem("orbit-boss-defeated") === "1" : trail.secret ? localStorage.getItem("orbit-secret-unlocked") === "1" : asteroidsClaimed >= trail.required);
+}
 function getUnlockedTrailCount() { return trails.filter(isTrailUnlocked).length; }
 function formatTime(milliseconds: number) { const total = Math.max(0, Math.floor(milliseconds)); const minutes = Math.floor(total / 60000).toString().padStart(2, "0"); const seconds = Math.floor(total / 1000 % 60).toString().padStart(2, "0"); const millis = (total % 1000).toString().padStart(3, "0"); return `${minutes}:${seconds}.${millis}`; }
