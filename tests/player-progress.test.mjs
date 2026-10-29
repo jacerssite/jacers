@@ -15,7 +15,7 @@ test("simultaneous currency changes are detected without blocking unrelated chan
 test("player progress anti-cheat blocks forged unlocks, balance decreases, and unearned asteroids", () => {
   assert.match(
     getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "99" }),
-    /cannot decrease/i,
+    /server-owned/i,
   );
   assert.match(
     getSuspiciousPlayerMutation({}, { "orbit-unlock-skins": "1" }),
@@ -27,18 +27,25 @@ test("player progress anti-cheat blocks forged unlocks, balance decreases, and u
   );
   assert.match(
     getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "101" }),
-    /does not match collected asteroids/i,
+    /server-owned/i,
   );
-  assert.equal(getSuspiciousPlayerMutation(
+  assert.match(getSuspiciousPlayerMutation(
     { "orbit-claims": "100", "orbit-asteroids-0": "[0]" },
     { "orbit-claims": "101", "orbit-asteroids-0": "[0,1]" },
-  ), null);
+  ), /server-owned/i);
+  assert.match(
+    getSuspiciousPlayerMutation(
+      { "orbit-claims": "100", "orbit-asteroids-0": "[0]" },
+      { "orbit-claims": "100", "orbit-asteroids-0": "[0,1]" },
+    ),
+    /collection history is server-owned/i,
+  );
   assert.match(
     getSuspiciousPlayerMutation(
       { "orbit-special-claims": "0", "orbit-asteroids-0": "[0]" },
       { "orbit-special-claims": "20", "orbit-asteroids-0": "[0,1]" },
     ),
-    /does not match collected asteroids/i,
+    /server-owned/i,
   );
 });
 
@@ -49,7 +56,7 @@ test("prestige resets require a completed Prestige Gate", () => {
   assert.equal(getSuspiciousPlayerMutation({ ...completedNormalRoutes, "orbit-level-complete-prestige-gate": "1", "orbit-claims": "50", "orbit-special-claims": "4" }, attemptedReset), null);
 });
 
-test("an expired secret route may respawn its special asteroids without allowing normal claim deletion", () => {
+test("client saves cannot rewrite expired secret route collection history", () => {
   const completedAt = Date.now() - (31 * 60 * 1000);
   const existing = {
     "orbit-special-claims": "6",
@@ -62,7 +69,7 @@ test("an expired secret route may respawn its special asteroids without allowing
       { ...existing, "orbit-asteroids-0": "[0]" },
       { "orbit-special-claims": "6" },
     ),
-    /cannot be removed/i,
+    /server-owned/i,
   );
 });
 
@@ -71,8 +78,8 @@ test("moderator progress stays behind the normal anti-cheat boundary", () => {
     getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "100", "orbit-unlock-skins": "1" }, "moderator"),
     /privileged progress key/i,
   );
-  assert.equal(sanitizeInitialPlayerProgress({ "orbit-claims": "999999" }, "moderator")["orbit-claims"], "5000");
-  assert.equal(sanitizeInitialPlayerProgress({ "orbit-claims": "999999" }, "player")["orbit-claims"], "5000");
+  assert.equal(sanitizeInitialPlayerProgress({ "orbit-claims": "999999" }, "moderator")["orbit-claims"], undefined);
+  assert.equal(sanitizeInitialPlayerProgress({ "orbit-claims": "999999" }, "player")["orbit-claims"], undefined);
 });
 
 test("first progress save initializes only when the account has no saved record", async () => {

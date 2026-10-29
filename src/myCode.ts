@@ -77,6 +77,7 @@ let bossesKilled = Number(localStorage.getItem("orbit-bosses-killed") ?? "0");
 let currentLevel = 0;
 let activeRunProof: { runId: string; levelName: string } | null = null;
 let runProofSequence = 0;
+const pendingAsteroidRewards = new Map<string, { level: string; levelIndex: number; asteroidIndex: number }>();
 let levelAsteroids: Asteroid[] = [];
 let levelObstacles: Obstacle[] = [];
 let levelHazards: Hazard[] = [];
@@ -3500,7 +3501,29 @@ function showShop() {
         buy.className = "text-button shop-buy";
         buy.disabled = asteroidsClaimed < powerupPrices[kind];
         buy.textContent = `Buy / ${powerupPrices[kind]} asteroids`;
-        buy.addEventListener("click", () => { if (asteroidsClaimed < powerupPrices[kind]) return; asteroidsClaimed -= powerupPrices[kind]; localStorage.setItem("orbit-claims", String(asteroidsClaimed)); inventory[kind]++; saveInventory(inventory); showShop(); });
+        buy.addEventListener("click", async () => {
+            if (asteroidsClaimed < powerupPrices[kind]) return;
+            if (!currentOnlineUser) {
+                asteroidsClaimed -= powerupPrices[kind];
+                localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+                inventory[kind]++;
+                saveInventory(inventory);
+                showShop();
+                return;
+            }
+            buy.disabled = true;
+            try {
+                const sent = getLocalAccountProgress();
+                const result = await apiRequest<{ progress: Record<string, string> }>("/shop/powerups", { method: "POST", body: JSON.stringify({ kind }) });
+                applySyncedProgress(sent, result.progress);
+                lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+                showShop();
+            } catch (error) {
+                buy.disabled = false;
+                buy.title = error instanceof Error ? error.message : "Could not complete this purchase.";
+            }
+        });
         card.append(buy);
         grid.append(card);
     });
@@ -3595,22 +3618,43 @@ function showShop() {
         selectedRouletteColorPreference = colorPreference.value as "green" | "blue" | "yellow";
         localStorage.setItem("orbit-roulette-color-preference", selectedRouletteColorPreference);
     });
-    roll.addEventListener("click", () => {
+    roll.addEventListener("click", async () => {
         const amount = Math.max(1, Math.floor(Number(customSpinAmount.value) || 1));
         const tier = getRouletteTierForSpend(amount);
         const segments = getRouletteSegments(tier, amount, selectedRouletteColorPreference);
         if (specialAsteroids < amount || spinInProgress || !segments.length) return;
         spinInProgress = true;
         playSound("roulette");
-        specialAsteroids -= amount;
-        localStorage.setItem("orbit-special-claims", String(specialAsteroids));
-        const totalWeight = segments.reduce((sum, segment) => sum + segment.weight, 0);
-        let targetWeight = Math.random() * totalWeight;
-        const chosenSegment = segments.find((segment) => {
-            targetWeight -= segment.weight;
-            return targetWeight < 0;
-        }) ?? segments[segments.length - 1];
-        const reward = getRouletteReward(chosenSegment.type, tier, selectedRouletteColorPreference);
+        roll.disabled = true;
+        let reward: RouletteReward;
+        if (currentOnlineUser) {
+            try {
+                const sent = getLocalAccountProgress();
+                const result = await apiRequest<{ progress: Record<string, string>; reward: RouletteReward }>("/shop/roulette", {
+                    method: "POST",
+                    body: JSON.stringify({ spend: amount }),
+                });
+                applySyncedProgress(sent, result.progress);
+                lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+                reward = result.reward;
+            } catch (error) {
+                spinInProgress = false;
+                drawWheel();
+                wheelStatus.textContent = error instanceof Error ? error.message : "Could not verify this roulette spin.";
+                return;
+            }
+        } else {
+            specialAsteroids -= amount;
+            localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+            const totalWeight = segments.reduce((sum, segment) => sum + segment.weight, 0);
+            let targetWeight = Math.random() * totalWeight;
+            const chosenSegment = segments.find((segment) => {
+                targetWeight -= segment.weight;
+                return targetWeight < 0;
+            }) ?? segments[segments.length - 1];
+            reward = getRouletteReward(chosenSegment.type, tier, selectedRouletteColorPreference);
+        }
         const chosenPocket = rouletteWheelPockets[Math.floor(Math.random() * rouletteWheelPockets.length)];
         const midpoint = (chosenPocket.startAngle + chosenPocket.endAngle) / 2;
         const duration = reward.rarity === "Legendary" ? 7400 : reward.rarity === "Epic" ? 6800 : 6000;
@@ -3622,13 +3666,7 @@ function showShop() {
         wheelStatus.textContent = `The ${amount.toLocaleString()}-asteroid wheel is spinning...`;
         drawWheel();
         roll.disabled = true;
-        let savedAccountError = "";
-        if (currentOnlineUser) {
-            void syncAccountProgress("save", true).catch((error: unknown) => {
-                console.error("Could not sync roulette reward:", error);
-                savedAccountError = " It is saved on this device; account sync failed and will retry.";
-            });
-        }
+        const savedAccountError = "";
         let lastRouletteTick = startedAt;
         const animate = (now: number) => {
             if (!menu.isConnected) {
@@ -3721,14 +3759,29 @@ function showShop() {
         if (!Number.isSafeInteger(balance) || balance < COOLDOWN_RESET_COST || !resettableSecretIndexes.length) return;
         const dialog = await showActionDialog({ title: "Reset secret cooldowns?", description: `Spend ${COOLDOWN_RESET_COST.toLocaleString()} normal asteroids to reset every secret-level cooldown.`, confirmLabel: "Spend and reset", danger: true });
         if (!dialog.confirmed) return;
-        asteroidsClaimed = balance - COOLDOWN_RESET_COST;
-        localStorage.setItem("orbit-claims", String(asteroidsClaimed));
-        resettableSecretIndexes.forEach(({ level, index }) => {
-            if (level.secretId) localStorage.removeItem(`orbit-secret-cooldown-${level.secretId}`);
-            respawnSecretAsteroids(index);
-        });
-        if (currentOnlineUser) void syncAccountProgress("save", true).then(() => showShop()).catch((error: unknown) => console.error("Could not sync cooldown reset:", error));
-        else showShop();
+        if (!currentOnlineUser) {
+            asteroidsClaimed = balance - COOLDOWN_RESET_COST;
+            localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+            resettableSecretIndexes.forEach(({ level, index }) => {
+                if (level.secretId) localStorage.removeItem(`orbit-secret-cooldown-${level.secretId}`);
+                respawnSecretAsteroids(index);
+            });
+            showShop();
+            return;
+        }
+        cooldownBuy.disabled = true;
+        try {
+            const sent = getLocalAccountProgress();
+            const result = await apiRequest<{ progress: Record<string, string> }>("/shop/reset-secret-cooldowns", { method: "POST", body: "{}" });
+            applySyncedProgress(sent, result.progress);
+            lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+            rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+            resettableSecretIndexes.forEach(({ index }) => respawnSecretAsteroids(index));
+            showShop();
+        } catch (error) {
+            cooldownBuy.disabled = false;
+            cooldownDescription.textContent = error instanceof Error ? error.message : "Could not reset secret cooldowns.";
+        }
     });
     cooldownReset.append(cooldownTitle, cooldownDescription, cooldownBuy);
     menu.append(currency, grid, wheel, cooldownReset, createTextButton("Mission select", showLevelMenu), createTextButton("Main menu", showMenu), createPageCounter());
@@ -5934,9 +5987,41 @@ async function requestRunProof(levelName: string, sequence: number) {
         });
         if (sequence !== runProofSequence || levels[currentLevel]?.name !== levelName || typeof response.runId !== "string") return;
         activeRunProof = { runId: response.runId, levelName };
+        void flushPendingAsteroidRewards(levelName);
     } catch (error) {
         if (sequence === runProofSequence) console.warn("Online run verification is unavailable:", error);
     }
+}
+
+async function submitAsteroidReward(level: string, levelIndex: number, asteroidIndex: number) {
+    if (!currentOnlineUser) return;
+    const proofId = getRunProofId(level);
+    if (!proofId) return;
+    const key = `${level}\u0000${asteroidIndex}`;
+    const pending = pendingAsteroidRewards.get(key);
+    if (!pending) return;
+    try {
+        const sent = getLocalAccountProgress();
+        const result = await apiRequest<{ progress: Record<string, string> }>("/rewards/asteroid", {
+            method: "POST",
+            body: JSON.stringify({ level, levelIndex, asteroidIndex, proofId }),
+        });
+        if (pendingAsteroidRewards.get(key) !== pending) return;
+        pendingAsteroidRewards.delete(key);
+        applySyncedProgress(sent, result.progress);
+        lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+        rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+    } catch (error) {
+        // A proof can still be arriving or the API can be momentarily busy.
+        // Keep the event in memory and retry when the level is completed; no
+        // local balance is ever treated as an earned online reward.
+        if (!(error instanceof ApiError) || error.status !== 409) console.warn("Could not bank asteroid reward:", error);
+    }
+}
+
+async function flushPendingAsteroidRewards(level: string) {
+    const rewards = [...pendingAsteroidRewards.values()].filter((reward) => reward.level === level);
+    await Promise.all(rewards.map((reward) => submitAsteroidReward(reward.level, reward.levelIndex, reward.asteroidIndex)));
 }
 
 function getRunProofId(levelName: string) {
@@ -6029,6 +6114,7 @@ function showWinScreen() {
         return;
     }
     const level = levels[currentLevel];
+    if (currentOnlineUser) void flushPendingAsteroidRewards(level.name);
     localStorage.setItem(`orbit-level-claims-${currentLevel}`, String(levelAsteroids.length));
     localStorage.setItem(`orbit-level-complete-${currentLevel}`, "1");
     const previousBest = Number(localStorage.getItem(`orbit-best-${currentLevel}`) ?? "0");
@@ -7046,7 +7132,31 @@ if (portalTravelInProgress) return;
             else showGameOver("A Dark Knight slammed into your hull.");
         }
     });
-    levelAsteroids.forEach((asteroid, index) => { if (!asteroid.claimed && Math.abs(playerX + 24 - asteroid.x) < 42 && Math.abs(playerY + 28 - asteroid.y) < 58) { asteroid.claimed = true; const claimedAsteroids = getClaimedAsteroids(currentLevel); claimedAsteroids.add(index); saveClaimedAsteroids(currentLevel, claimedAsteroids); if (asteroid.present) { setChristmasPresents(getChristmasPresents() + 1); } else if (asteroid.special) { specialAsteroids++; localStorage.setItem("orbit-special-claims", String(specialAsteroids)); saveAccountProgressSoon(); } else { asteroidsClaimed++; localStorage.setItem("orbit-claims", String(asteroidsClaimed)); saveAccountProgressSoon(); } claimLabel.textContent = `${levelAsteroids.filter((item) => item.claimed).length} / ${levelAsteroids.length}`; statusLabel.textContent = asteroid.present ? "Present secured for the winter wheel." : asteroid.special ? "Special asteroid secured. Spend it in the roll wheel." : "Asteroid claimed. This one is secured permanently."; document.querySelectorAll(".asteroid")[index]?.classList.add("claimed"); } });
+    levelAsteroids.forEach((asteroid, index) => { if (!asteroid.claimed && Math.abs(playerX + 24 - asteroid.x) < 42 && Math.abs(playerY + 28 - asteroid.y) < 58) {
+        asteroid.claimed = true;
+        const claimedAsteroids = getClaimedAsteroids(currentLevel);
+        claimedAsteroids.add(index);
+        saveClaimedAsteroids(currentLevel, claimedAsteroids);
+        const levelName = levels[currentLevel].name;
+        if (currentOnlineUser) {
+            const rewardKey = `${levelName}\u0000${index}`;
+            pendingAsteroidRewards.set(rewardKey, { level: levelName, levelIndex: currentLevel, asteroidIndex: index });
+            void submitAsteroidReward(levelName, currentLevel, index);
+        } else if (asteroid.present) {
+            setChristmasPresents(getChristmasPresents() + 1);
+        } else if (asteroid.special) {
+            specialAsteroids++;
+            localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+        } else {
+            asteroidsClaimed++;
+            localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+        }
+        claimLabel.textContent = `${levelAsteroids.filter((item) => item.claimed).length} / ${levelAsteroids.length}`;
+        statusLabel.textContent = currentOnlineUser
+            ? "Asteroid secured. Banking the verified reward..."
+            : asteroid.present ? "Present secured for the winter wheel." : asteroid.special ? "Special asteroid secured. Spend it in the roll wheel." : "Asteroid claimed. This one is secured permanently.";
+        document.querySelectorAll(".asteroid")[index]?.classList.add("claimed");
+    } });
     if (boss && playerX > boss.x - 120 && !boss.defeated) {
         if (isStarContactDamageActive()) {
             while (boss && !boss.defeated) damageBoss();

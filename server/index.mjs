@@ -12,6 +12,7 @@ import argon2 from "argon2";
 import { getMongoDatabaseConfigurationError, getMongoDatabaseConnectionString } from "./database-config.mjs";
 import { dropLegacyRecoveryIndex } from "./database-setup.mjs";
 import { getSuspiciousPlayerMutation, hasCurrencyConflict, initializePlayerProgress, sanitizeInitialPlayerProgress } from "./player-progress.mjs";
+import { applyTrustedAsteroidReward, asteroidRewardEventId, validateAsteroidRewardRequest } from "./reward-events.mjs";
 import {
   ALLOWED_ABILITIES,
   isValidPassword,
@@ -354,7 +355,9 @@ function noStore(res) {
 
 async function recordSecurityEvent(db, event) {
   try {
-    await db.collection("security_events").insertOne({ ...event, createdAt: new Date() });
+    const collection = db.collection("security_events");
+    if (typeof collection?.insertOne !== "function") return;
+    await collection.insertOne({ ...event, createdAt: new Date() });
   } catch (error) {
     console.error("Could not record security event:", error);
   }
@@ -1460,7 +1463,19 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
     }
     const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress, false, undefined, req.user.role, moderationSettings.progressAntiCheatEnabled);
     if (result.suspiciousMutation) {
-      await recordSecurityEvent(db, { type: "suspicious-progress-mutation", userId: req.user.id, role: req.user.role, reason: result.suspiciousMutation });
+      const requestId = crypto.randomUUID();
+      const balance = (source, key) => typeof source?.[key] === "string" && /^\d{1,10}$/.test(source[key]) ? Number(source[key]) : null;
+      await recordSecurityEvent(db, {
+        type: "suspicious-progress-mutation",
+        userId: req.user.id,
+        role: req.user.role,
+        reason: result.suspiciousMutation,
+        endpoint: "/api/account/progress",
+        requestId,
+        validationResult: "blocked",
+        oldBalances: { claims: balance(baseProgress, "orbit-claims"), specialClaims: balance(baseProgress, "orbit-special-claims") },
+        proposedBalances: { claims: balance(progress, "orbit-claims"), specialClaims: balance(progress, "orbit-special-claims") },
+      });
       const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
       if (deletionReason) {
         return res.status(403).json({
@@ -1488,6 +1503,210 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
   } catch (error) {
     next(error);
   }
+});
+
+// A collectible is awarded from a server-issued run proof.  The client only
+// identifies the route and authored asteroid position; both are checked here
+// and the event id makes retries/replays harmless.
+app.post("/api/rewards/asteroid", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const levelName = typeof req.body?.level === "string" ? req.body.level.trim() : "";
+    const levelIndex = req.body?.levelIndex;
+    const asteroidIndex = req.body?.asteroidIndex;
+    const proofId = typeof req.body?.proofId === "string" && /^[A-Za-z0-9_-]{32,80}$/.test(req.body.proofId) ? req.body.proofId : "";
+    const definition = validateAsteroidRewardRequest({ levelName, levelIndex, asteroidIndex });
+    if (!definition || !proofId) {
+      return res.status(400).json({ error: "This collectible reward is invalid." });
+    }
+    const db = await getDatabase();
+    const now = new Date();
+    const proofs = db.collection("run_proofs");
+    const proof = await proofs.findOne({ _id: proofId, userId: req.user.id, levelName, consumedAt: null, expiresAt: { $gt: now } });
+    if (!proof || !(proof.startedAt instanceof Date)) {
+      await recordSecurityEvent(db, { type: "invalid-asteroid-reward-proof", userId: req.user.id, role: req.user.role, endpoint: "/api/rewards/asteroid", levelName });
+      return res.status(403).json({ error: "Start this route while online before collecting account rewards." });
+    }
+    // A short server-side minimum prevents a burst of claims immediately
+    // after a proof is created, while leaving legitimate movement tolerant.
+    const minimumElapsed = Math.max(1500, definition.asteroidCount * 300);
+    if (now.getTime() - proof.startedAt.getTime() < minimumElapsed) {
+      return res.status(409).json({ error: "The route is still being verified. Keep flying and try that collectible again." });
+    }
+    const eventId = asteroidRewardEventId(proofId, levelIndex, asteroidIndex);
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const events = db.collection("reward_events");
+        try {
+          await events.insertOne({ _id: eventId, userId: req.user.id, source: "asteroid", levelName, asteroidIndex, createdAt: now }, { session });
+        } catch (error) {
+          if (error?.code === 11000) throw Object.assign(new Error("This asteroid reward has already been claimed."), { statusCode: 409, duplicateReward: true });
+          throw error;
+        }
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const applied = applyTrustedAsteroidReward(progress, { levelName, levelIndex, asteroidIndex });
+        if (applied.status !== "awarded" || !applied.progress) throw Object.assign(new Error("This asteroid reward has already been claimed."), { statusCode: 409 });
+        const rewardKey = definition.currencyKey;
+        const current = typeof progress[rewardKey] === "string" && /^\d{1,10}$/.test(progress[rewardKey]) ? Number(progress[rewardKey]) : 0;
+        const saved = await writePlayerProgress(collection, req.user.id, applied.progress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not save this collectible reward. Try again."), { statusCode: 409 });
+        await recordSecurityEvent(db, { type: "reward-granted", userId: req.user.id, endpoint: "/api/rewards/asteroid", rewardEventId: eventId, validationResult: "accepted", oldBalances: { [rewardKey]: current }, proposedBalances: { [rewardKey]: current + 1 } });
+        return { progress: saved.progress, reward: definition.currency === "presents" ? "present" : definition.currency === "specialClaims" ? "special asteroid" : "asteroid" };
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message });
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+function chooseWeightedOption(options) {
+  const total = options.reduce((sum, option) => sum + option.weight, 0);
+  let roll = crypto.randomInt(Math.max(1, total));
+  for (const option of options) {
+    roll -= option.weight;
+    if (roll < 0) return option;
+  }
+  return options[options.length - 1];
+}
+
+function rouletteCandidates(progress, type, titles = []) {
+  if (type === "color") return [8, 9, 10, 11, 12].filter((index) => progress[`orbit-spin-color-${index}`] !== "1");
+  if (type === "trail") return Array.from({ length: 21 }, (_, index) => index).filter((index) => progress[`orbit-spin-trail-${index}`] !== "1");
+  if (type === "avatar") return Array.from({ length: 16 }, (_, index) => index).filter((index) => progress[`orbit-spin-avatar-${index}`] !== "1");
+  if (type === "title") return titles.filter((title) => (title.requirement?.type ?? "routes") === "roulette" && progress[`orbit-title-unlock-${title.id}`] !== "1");
+  return [];
+}
+
+// Normal roulette is resolved wholly on the server. The browser supplies a
+// spend amount only; the server checks the balance, chooses the category and
+// amount, deducts the buy-in, and grants the reward in one transaction.
+app.post("/api/shop/roulette", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const spend = req.body?.spend;
+    if (!Number.isSafeInteger(spend) || spend < 1 || spend > 100000) return res.status(400).json({ error: "Choose a valid special-asteroid spend." });
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const special = typeof progress["orbit-special-claims"] === "string" && /^\d{1,10}$/.test(progress["orbit-special-claims"])
+          ? Number(progress["orbit-special-claims"]) : 0;
+        if (special < spend) throw Object.assign(new Error("You do not have enough special asteroids."), { statusCode: 400 });
+        const setting = await db.collection("game_settings").findOne({ _id: "roulette_tiers" }, { session });
+        const tiers = includeRouletteTitleOdds(validateRouletteTiers(setting?.value) ?? defaultRouletteTiers);
+        const tier = [...tiers].sort((first, second) => second.buyIn - first.buyIn).find((candidate) => spend >= candidate.buyIn) ?? tiers[0];
+        const titles = await getProfileTitles(db);
+        const rewardTypes = ["claims", "specialClaims", "color", "trail", "avatar", "title"];
+        const options = rewardTypes
+          .filter((type) => (tier.chances[type] ?? 0) > 0 && (type === "claims" || type === "specialClaims" || rouletteCandidates(progress, type, titles).length > 0))
+          .map((type) => ({ type, weight: Math.max(1, Math.round((tier.chances[type] ?? 0) * (spend > tier.buyIn && ["color", "trail", "avatar", "title"].includes(type) ? Math.min(12, spend / tier.buyIn) : 1))) }));
+        if (!options.length) throw Object.assign(new Error("No roulette rewards are available right now."), { statusCode: 409 });
+        const selected = chooseWeightedOption(options);
+        const next = { ...progress, "orbit-special-claims": String(special - spend) };
+        let reward;
+        if (selected.type === "claims" || selected.type === "specialClaims") {
+          const range = tier.rewards[selected.type];
+          const amount = crypto.randomInt(range[0], range[1] + 1);
+          const key = selected.type === "claims" ? "orbit-claims" : "orbit-special-claims";
+          const current = typeof progress[key] === "string" && /^\d{1,10}$/.test(progress[key]) ? Number(progress[key]) : 0;
+          next[key] = String(Math.min(100000000, current + amount - (key === "orbit-special-claims" ? spend : 0)));
+          reward = { type: selected.type, title: `+${amount} ${selected.type === "claims" ? "asteroids" : "special asteroids"}`, description: "Server-verified roulette reward added to your account.", amount, currencyLabel: selected.type === "claims" ? "asteroids" : "special asteroids" };
+        } else if (selected.type === "title") {
+          const title = chooseWeightedOption(rouletteCandidates(progress, "title", titles).map((candidate) => ({ ...candidate, weight: 1 })));
+          next[`orbit-title-unlock-${title.id}`] = "1";
+          if (!next["orbit-title"]) next["orbit-title"] = title.id;
+          reward = { type: "title", title: `${title.name} title`, description: "New profile title unlocked. Equip it from Account settings.", rarity: "Rare" };
+        } else {
+          const index = chooseWeightedOption(rouletteCandidates(progress, selected.type).map((value) => ({ value, weight: 1 }))).value;
+          next[`orbit-spin-${selected.type}-${index}`] = "1";
+          reward = { type: selected.type, index, title: `New ${selected.type} unlocked`, description: "Server-verified cosmetic unlocked. Equip it from Customization.", rarity: "Rare" };
+        }
+        const saved = await writePlayerProgress(collection, req.user.id, next, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not save this roulette reward. Try again."), { statusCode: 409 });
+        const eventId = crypto.randomUUID();
+        await db.collection("reward_events").insertOne({ _id: eventId, userId: req.user.id, source: "roulette", spend, reward, createdAt: new Date() }, { session });
+        return { progress: saved.progress, reward };
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message });
+      throw error;
+    } finally { await session.endSession(); }
+  } catch (error) { next(error); }
+});
+
+const SHOP_POWERUP_PRICES = Object.freeze({ shield: 8, boost: 10, rapid: 12, cannon: 15 });
+const SECRET_REWARD_LEVELS = Object.freeze([
+  [12, "eclipse"], [16, "nebula"], [17, "archive"], [18, "prestige-gate"], [19, "stellar-sanctum"], [20, "quantum-depths"], [21, "infinity-spiral"],
+]);
+
+app.post("/api/shop/powerups", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const kind = typeof req.body?.kind === "string" ? req.body.kind : "";
+    const price = SHOP_POWERUP_PRICES[kind];
+    if (!price) return res.status(400).json({ error: "That power-up cannot be purchased." });
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const claims = typeof progress["orbit-claims"] === "string" && /^\d{1,10}$/.test(progress["orbit-claims"]) ? Number(progress["orbit-claims"]) : 0;
+        if (claims < price) throw Object.assign(new Error("You do not have enough asteroids."), { statusCode: 400 });
+        let inventory = {};
+        try { inventory = JSON.parse(progress["orbit-powerups"] ?? "{}"); } catch { inventory = {}; }
+        const current = Number.isSafeInteger(inventory?.[kind]) && inventory[kind] >= 0 ? inventory[kind] : 0;
+        const next = { ...progress, "orbit-claims": String(claims - price), "orbit-powerups": JSON.stringify({ ...inventory, [kind]: Math.min(100000, current + 1) }) };
+        const saved = await writePlayerProgress(collection, req.user.id, next, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not save this purchase. Try again."), { statusCode: 409 });
+        await db.collection("reward_events").insertOne({ _id: crypto.randomUUID(), userId: req.user.id, source: "shop-powerup", kind, cost: price, createdAt: new Date() }, { session });
+        return { progress: saved.progress, cost: price };
+      });
+      res.status(201).json(result);
+    } finally { await session.endSession(); }
+  } catch (error) { if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message }); next(error); }
+});
+
+app.post("/api/shop/reset-secret-cooldowns", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const claims = typeof progress["orbit-claims"] === "string" && /^\d{1,10}$/.test(progress["orbit-claims"]) ? Number(progress["orbit-claims"]) : 0;
+        if (claims < 1000) throw Object.assign(new Error("You need 1,000 asteroids to reset secret cooldowns."), { statusCode: 400 });
+        const next = { ...progress, "orbit-claims": String(claims - 1000) };
+        SECRET_REWARD_LEVELS.forEach(([index, secretId]) => {
+          delete next[`orbit-secret-cooldown-${secretId}`];
+          delete next[`orbit-asteroids-${index}`];
+          delete next[`orbit-level-claims-${index}`];
+        });
+        const saved = await writePlayerProgress(collection, req.user.id, next, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not reset secret cooldowns. Try again."), { statusCode: 409 });
+        await db.collection("reward_events").insertOne({ _id: crypto.randomUUID(), userId: req.user.id, source: "secret-cooldown-reset", cost: 1000, createdAt: new Date() }, { session });
+        return { progress: saved.progress };
+      });
+      res.status(201).json(result);
+    } finally { await session.endSession(); }
+  } catch (error) { if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message }); next(error); }
 });
 
 function christmasWheelOptions(progress) {
@@ -4278,6 +4497,7 @@ async function initializeDatabaseOnce() {
     entries.createIndex({ timeMs: 1, achievedAt: 1, _id: 1 }),
     runProofs.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     runProofs.createIndex({ userId: 1, consumedAt: 1 }),
+    db.collection("reward_events").createIndex({ userId: 1, createdAt: -1 }),
     recoveryAttempts.createIndex({ lockedUntil: 1 }),
     db.collection("profile_backups").createIndex({ userId: 1, createdAt: -1 }),
     db.collection("redemption_codes").createIndex({ codeHash: 1 }, { unique: true }),

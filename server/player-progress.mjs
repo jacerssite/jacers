@@ -14,6 +14,8 @@ const SECRET_ROUTE_BY_LEVEL_INDEX = new Map([
   [21, "infinity-spiral"],
 ]);
 const SECRET_ROUTE_COOLDOWN_MS = 30 * 60 * 1000;
+const CLIENT_MUTABLE_CURRENCY_KEYS = new Set(["orbit-claims", "orbit-special-claims", "orbit-christmas-presents"]);
+const CLIENT_MUTABLE_COLLECTION_KEY = /^orbit-(asteroids|level-claims)-\d+$/;
 
 function getExpiredSecretRespawnClaimCount(existing, progress) {
   let allowedClaims = 0;
@@ -59,7 +61,8 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   // tools. Moderators and level makers still use the normal anti-cheat path;
   // their roles must never become a way to mint currency or unlocks.
   if (["owner", "developer", "admin", "tester"].includes(role) || !existing) return null;
-  const changedKeys = Object.keys(progress).filter((key) => progress[key] !== existing[key]);
+  const changedKeys = [...new Set([...Object.keys(existing), ...Object.keys(progress)])]
+    .filter((key) => progress[key] !== existing[key]);
   const privileged = changedKeys.find((key) => /^(orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-|christmas-unlock-|christmas-title-unlock-))/.test(key));
   if (privileged) return `privileged progress key: ${privileged}`;
 
@@ -109,20 +112,17 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
     && nextCount("orbit-special-claims") === 0
     && progress["orbit-prestige-world-unlocked"] === "1";
   if (isValidatedPrestigeReset) return null;
+  // Currency and collection history are written only by a trusted server
+  // reward endpoint. A browser can edit both fields together, so matching a
+  // client-supplied balance to client-supplied collection JSON is not proof of
+  // an earned reward.
+  const clientCurrencyChange = changedKeys.find((key) => CLIENT_MUTABLE_CURRENCY_KEYS.has(key));
+  if (clientCurrencyChange) return `${clientCurrencyChange} is server-owned`;
+  const clientCollectionChange = changedKeys.find((key) => CLIENT_MUTABLE_COLLECTION_KEY.test(key));
+  if (clientCollectionChange) return `collection history is server-owned: ${clientCollectionChange}`;
   for (const key of ["orbit-claims", "orbit-special-claims"]) {
     if (nextCount(key) < readCount(key)) return `${key} cannot decrease in a player sync`;
   }
-  const currentAsteroidClaims = claimedAsteroids(existing);
-  const nextAsteroidClaims = claimedAsteroids(progress);
-  if (currentAsteroidClaims === null || nextAsteroidClaims === null) return "asteroid claim data is invalid";
-  const earnedAsteroids = (nextCount("orbit-claims") - readCount("orbit-claims"))
-    + (nextCount("orbit-special-claims") - readCount("orbit-special-claims"));
-  const newAsteroidClaims = nextAsteroidClaims - currentAsteroidClaims;
-  if (newAsteroidClaims < 0) {
-    const allowedRespawnClaims = getExpiredSecretRespawnClaimCount(existing, progress);
-    if (allowedRespawnClaims !== -newAsteroidClaims) return "asteroid claims cannot be removed in a player sync";
-  }
-  if (newAsteroidClaims >= 0 && earnedAsteroids > newAsteroidClaims) return "asteroid balance does not match collected asteroids";
   for (const [key, maximumJump] of [["orbit-enemies-killed", 5000], ["orbit-bosses-killed", 100]]) {
     const current = readCount(key);
     const next = nextCount(key);
@@ -147,7 +147,7 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
       const oldAmount = Number.isSafeInteger(before?.[kind]) && before[kind] >= 0 ? before[kind] : 0;
       const newAmount = Number.isSafeInteger(after?.[kind]) && after[kind] >= 0 && after[kind] <= 100000 ? after[kind] : -1;
       if (newAmount < 0) return "power-up inventory contains an invalid amount";
-      if (newAmount - oldAmount > 20) return "power-up inventory jumped too far";
+      if (newAmount > oldAmount) return "power-up inventory is server-owned";
     }
   }
   return null;
@@ -157,15 +157,15 @@ export function sanitizeInitialPlayerProgress(progress, role = "player") {
   if (["owner", "developer", "admin", "tester"].includes(role)) return progress;
   const sanitized = { ...progress };
   for (const key of Object.keys(sanitized)) {
-    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-|christmas-unlock-|christmas-title-unlock-)/.test(key)) delete sanitized[key];
+    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-|christmas-unlock-|christmas-title-unlock-|claims$|special-claims$|christmas-presents$|asteroids-\d+$|level-claims-\d+$)/.test(key)) delete sanitized[key];
   }
   const clampCount = (key, maximum) => {
     const value = sanitized[key];
     if (typeof value !== "string" || !/^\d{1,10}$/.test(value)) { if (value !== undefined) delete sanitized[key]; return; }
     sanitized[key] = String(Math.min(Number(value), maximum));
   };
-  clampCount("orbit-claims", 5000);
-  clampCount("orbit-special-claims", 100);
+  // Currency and per-asteroid records must never be imported from a browser
+  // during first account setup. They are created by server reward events.
   clampCount("orbit-enemies-killed", 5000);
   clampCount("orbit-bosses-killed", 100);
   clampCount("orbit-prestige", 1);
