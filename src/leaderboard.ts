@@ -1,4 +1,4 @@
-import type { OnlineLeaderboardEntry, OnlinePlayerPresence, OnlineSettings, OnlineUser, PublicPlayerProfile } from "./types";
+import type { OnlineLeaderboardEntry, OnlinePlayerPresence, OnlineSettings, OnlineUser, PlayerLevelPlacement, PublicPlayerProfile } from "./types";
 import { apiRequest } from "./api";
 import { levels } from "./levels";
 import { createTextButton, showActionDialog } from "./ui";
@@ -235,6 +235,20 @@ export function createLeaderboard(context: LeaderboardContext) {
                 trail: player.trail!,
             });
             character.classList.add("profile-character-card");
+            const placements = document.createElement("section");
+            placements.className = "profile-level-placements";
+            const placementLabel = document.createElement("label");
+            placementLabel.textContent = "Leaderboard placement by route";
+            const placementSelect = document.createElement("select");
+            placementSelect.disabled = true;
+            placementSelect.setAttribute("aria-label", "Leaderboard placement by route");
+            const loadingPlacement = document.createElement("option");
+            loadingPlacement.textContent = "Loading completed-route placements…";
+            placementSelect.append(loadingPlacement);
+            const placementNote = document.createElement("small");
+            placementNote.textContent = "Rankings only include public submitted runs.";
+            placementLabel.append(placementSelect);
+            placements.append(placementLabel, placementNote);
             const friendAction = document.createElement("div");
             friendAction.className = "profile-friend-action";
             if (!currentUserName()) {
@@ -255,8 +269,36 @@ export function createLeaderboard(context: LeaderboardContext) {
                     }).catch(() => undefined);
                 }
             }
-            dashboard.append(title, presence, friendAction, stats, character);
+            dashboard.append(title, presence, friendAction, stats, character, placements);
             menu.replaceChildren(menu.firstElementChild!, menu.children[1]!, dashboard, back);
+            void apiRequest<{ placements: PlayerLevelPlacement[] }>(`/players/${encodeURIComponent(playerId)}/placements`)
+                .then((result) => {
+                    if (!menu.isConnected) return;
+                    placementSelect.replaceChildren();
+                    if (!result.placements.length) {
+                        const option = document.createElement("option");
+                        option.textContent = "No public leaderboard placements yet";
+                        placementSelect.append(option);
+                        return;
+                    }
+                    result.placements
+                        .sort((first, second) => first.level.localeCompare(second.level))
+                        .forEach((placement) => {
+                            const option = document.createElement("option");
+                            option.value = placement.level;
+                            option.textContent = `${placement.level} — #${placement.rank} of ${placement.total} · ${formatTime(placement.timeMs)}`;
+                            placementSelect.append(option);
+                        });
+                    placementSelect.disabled = false;
+                })
+                .catch(() => {
+                    if (!menu.isConnected) return;
+                    placementSelect.replaceChildren();
+                    const option = document.createElement("option");
+                    option.textContent = "Placements are unavailable right now";
+                    placementSelect.append(option);
+                    placementNote.textContent = "Try opening the profile again when the online service is available.";
+                });
             const presenceTimer = globalThis.setInterval(() => {
                 if (!menu.isConnected) {
                     globalThis.clearInterval(presenceTimer);

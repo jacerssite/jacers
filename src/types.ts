@@ -101,6 +101,12 @@ export type PublicPlayerProfile = {
     isOnline: boolean;
     limited?: boolean;
 };
+export type PlayerLevelPlacement = {
+    level: string;
+    rank: number;
+    total: number;
+    timeMs: number;
+};
 export type FriendEntry = { userId: string; username: string; role: OnlineUser["role"]; title: string; isOnline: boolean; unread: number; createdAt?: string };
 export type FriendRequest = { id: string; userId: string; username: string; role: OnlineUser["role"]; title: string; createdAt: string; direction: "incoming" | "outgoing" };
 export type ChatAttachment = { kind: "image" | "gif" | "video"; url: string; contentType: string; bytes: number };
@@ -121,8 +127,14 @@ export type RouletteReward = { title: string; description: string; rarity?: Rari
 export type HolidayEventSettings = { christmasEnabled: boolean; christmasAutoStart?: boolean; christmasManualEnabled?: boolean; christmasSeasonStart?: string; christmasSeasonEnd?: string; adventStart?: string; adventEnd?: string };
 export type OnlineSettings = { goldenTimeLimitMs: number; rouletteTiers: RouletteTier[]; updateLog: UpdateLogEntry[]; profileTitles?: ProfileTitle[]; builtinLevelOverrides?: Record<string, Level>; portalAssignments?: Record<string, string>; holidayEvent?: HolidayEventSettings };
 export type WorldGameConfig = {
-    /** Downward acceleration and gravity-well pull for this world. */
+    /** Downward acceleration for this world. */
     gravityForce: number;
+    /** Independent black-hole attraction multiplier. */
+    gravityWellPull?: number;
+    /** Radius used by black-hole attraction calculations, in pixels. */
+    gravityWellRadius?: number;
+    /** Visual scale of the black-hole accretion ring. */
+    gravityWellVisualScale?: number;
     rainbowStarChance: number;
     portalSpawnChance: number;
     rarityOdds: Record<Rarity, number>;

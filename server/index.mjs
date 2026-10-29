@@ -1350,17 +1350,15 @@ async function deleteAbusiveNewAccount(db, user, progress) {
   const reason = asteroids > asteroidLimit
     ? `More than ${asteroidLimit.toLocaleString()} asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`
     : `More than ${specialAsteroidLimit.toLocaleString()} special asteroids were received during the first ${settings.newAccountWindowMinutes} minutes without a reward code.`;
+  // Keep the account and all progress for a staff review. An unusual legitimate
+  // reward must not cause automatic data loss or a permanent punishment.
   await Promise.all([
     db.collection("user_sessions").deleteMany({ userId: user.id }),
-    db.collection("player_progress").deleteOne({ _id: user.id }),
-    db.collection("leaderboard_entries").deleteMany({ userId: user.id }),
-    db.collection("code_redemptions").deleteMany({ userId: user.id }),
-    db.collection("code_redemption_logs").deleteMany({ userId: user.id }),
-    db.collection("users").deleteOne({ _id: user.id, role: "player" }),
+    db.collection("users").updateOne({ _id: user.id, role: "player" }, { $set: { loginLocked: true, securityReview: { reason, flaggedAt: new Date(), source: "new-account-protection" } } }),
   ]);
-  await recordSecurityEvent(db, { type: "automatic-new-account-deletion", userId: user.id, reason, asteroids, specialAsteroids });
+  await recordSecurityEvent(db, { type: "automatic-new-account-review", userId: user.id, reason, asteroids, specialAsteroids });
   await recordModerationLog(db, {
-    action: "Automatic account deletion",
+    action: "Automatic account review",
     reason,
     actorId: null,
     actorUsername: "Anti-cheat",
@@ -1414,12 +1412,12 @@ async function banLowProgressAbuse(db, user, progress) {
       ? `${specialAsteroids.toLocaleString()} special asteroids with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`
       : `${powerups.toLocaleString()} power-ups with only ${routes} completed route${routes === 1 ? "" : "s"} and no reward code.`;
   await Promise.all([
-    db.collection("users").updateOne({ _id: user.id, role: "player" }, { $set: { banned: true } }),
+    db.collection("users").updateOne({ _id: user.id, role: "player" }, { $set: { loginLocked: true, securityReview: { reason, flaggedAt: new Date(), source: "low-progress-protection" } } }),
     db.collection("user_sessions").deleteMany({ userId: user.id }),
   ]);
-  await recordSecurityEvent(db, { type: "automatic-low-progress-ban", userId: user.id, reason, asteroids, specialAsteroids, powerups, routes });
+  await recordSecurityEvent(db, { type: "automatic-low-progress-review", userId: user.id, reason, asteroids, specialAsteroids, powerups, routes });
   await recordModerationLog(db, {
-    action: "Automatic account ban",
+    action: "Automatic account review",
     reason,
     actorId: null,
     actorUsername: "Anti-cheat",
@@ -1446,12 +1444,12 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
       const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
       if (deletionReason) {
         return res.status(403).json({
-          error: `Your account is being deleted: ${deletionReason}`,
-          accountDeleted: true,
+          error: `Your account is under review: ${deletionReason}`,
+          accountUnderReview: true,
         });
       }
       const banReason = await banLowProgressAbuse(db, req.user, progress);
-      if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
+      if (banReason) return res.status(403).json({ error: `Your account is under review: ${banReason}`, accountUnderReview: true });
       const safeInitialProgress = moderationSettings.progressAntiCheatEnabled ? sanitizeInitialPlayerProgress(progress, req.user.role) : progress;
       if (moderationSettings.progressAntiCheatEnabled && req.user.role === "player" && JSON.stringify(safeInitialProgress) !== JSON.stringify(progress)) {
         await recordSecurityEvent(db, { type: "sanitized-initial-progress", userId: req.user.id, role: req.user.role });
@@ -1466,12 +1464,12 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
       const deletionReason = await deleteAbusiveNewAccount(db, req.user, progress);
       if (deletionReason) {
         return res.status(403).json({
-          error: `Your account is being deleted: ${deletionReason}`,
-          accountDeleted: true,
+          error: `Your account is under review: ${deletionReason}`,
+          accountUnderReview: true,
         });
       }
       const banReason = await banLowProgressAbuse(db, req.user, progress);
-      if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
+      if (banReason) return res.status(403).json({ error: `Your account is under review: ${banReason}`, accountUnderReview: true });
       return res.status(403).json({ error: "This progress update was blocked by server-side anti-cheat protection." });
     }
     if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
@@ -1480,12 +1478,12 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
     const deletionReason = await deleteAbusiveNewAccount(db, req.user, result.progress);
     if (deletionReason) {
       return res.status(403).json({
-        error: `Your account is being deleted: ${deletionReason}`,
-        accountDeleted: true,
+        error: `Your account is under review: ${deletionReason}`,
+        accountUnderReview: true,
       });
     }
     const banReason = await banLowProgressAbuse(db, req.user, result.progress);
-    if (banReason) return res.status(403).json({ error: `Your account has been automatically banned: ${banReason}`, accountBanned: true });
+    if (banReason) return res.status(403).json({ error: `Your account is under review: ${banReason}`, accountUnderReview: true });
     res.json({ progress: result.progress });
   } catch (error) {
     next(error);
@@ -1841,6 +1839,44 @@ app.get("/api/players/:id", async (req, res, next) => {
         isOnline: !blocked && activeUserIds.has(user._id.toHexString()),
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Rankings are derived from the same public entries used by the leaderboard.
+// Do this on the server so a profile never has to download every route's board.
+app.get("/api/players/:id/placements", async (req, res, next) => {
+  try {
+    noStore(res);
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid player id." });
+    const targetId = new ObjectId(req.params.id);
+    const db = await getDatabase();
+    const target = await db.collection("users").findOne(
+      { _id: targetId, role: { $in: USER_ROLES }, banned: { $ne: true } },
+      { projection: { _id: 1 } },
+    );
+    if (!target) return res.status(404).json({ error: "Player not found." });
+    const entries = await db.collection("leaderboard_entries").aggregate([
+      { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "profile" } },
+      { $unwind: "$profile" },
+      { $match: { "profile.banned": { $ne: true }, $or: [{ "profile.role": "player" }, { "profile.role": "owner", "profile.public": true }] } },
+      { $sort: { levelName: 1, timeMs: 1, achievedAt: 1, _id: 1 } },
+      { $project: { userId: 1, levelName: 1, timeMs: 1 } },
+    ]).toArray();
+    const targetKey = userIdString(targetId);
+    const totals = new Map();
+    const placements = [];
+    entries.forEach((entry) => {
+      const level = entry.levelName;
+      const rank = (totals.get(level) ?? 0) + 1;
+      totals.set(level, rank);
+      if (userIdString(entry.userId) === targetKey) {
+        placements.push({ level, rank, total: 0, timeMs: entry.timeMs });
+      }
+    });
+    placements.forEach((placement) => { placement.total = totals.get(placement.level) ?? 0; });
+    res.json({ placements });
   } catch (error) {
     next(error);
   }

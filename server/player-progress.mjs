@@ -60,7 +60,7 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   // their roles must never become a way to mint currency or unlocks.
   if (["owner", "developer", "admin", "tester"].includes(role) || !existing) return null;
   const changedKeys = Object.keys(progress).filter((key) => progress[key] !== existing[key]);
-  const privileged = changedKeys.find((key) => /^(orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-))/.test(key));
+  const privileged = changedKeys.find((key) => /^(orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-|christmas-unlock-|christmas-title-unlock-))/.test(key));
   if (privileged) return `privileged progress key: ${privileged}`;
 
   const readCount = (key) => {
@@ -100,8 +100,11 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   // the already-saved record, then allow that single, expected reset through.
   // Without this exception every prestige save is rejected as a currency drop.
   const savedNormalRoutes = Object.keys(existing).filter((key) => /^orbit-level-complete-\d+$/.test(key) && existing[key] === "1").length;
-  const isValidatedPrestigeReset = nextPrestige === currentPrestige + 1
+  const isPrestigeAttempt = nextPrestige === currentPrestige + 1;
+  if (isPrestigeAttempt && existing["orbit-level-complete-prestige-gate"] !== "1") return "prestige requires completing the Prestige Gate";
+  const isValidatedPrestigeReset = isPrestigeAttempt
     && savedNormalRoutes >= 20
+    && existing["orbit-level-complete-prestige-gate"] === "1"
     && nextCount("orbit-claims") === 0
     && nextCount("orbit-special-claims") === 0
     && progress["orbit-prestige-world-unlocked"] === "1";
@@ -154,7 +157,7 @@ export function sanitizeInitialPlayerProgress(progress, role = "player") {
   if (["owner", "developer", "admin", "tester"].includes(role)) return progress;
   const sanitized = { ...progress };
   for (const key of Object.keys(sanitized)) {
-    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-)/.test(key)) delete sanitized[key];
+    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-|christmas-unlock-|christmas-title-unlock-)/.test(key)) delete sanitized[key];
   }
   const clampCount = (key, maximum) => {
     const value = sanitized[key];

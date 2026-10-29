@@ -14,7 +14,7 @@ Install the MongoDB Database Tools so `mongodump` is available, then make sure t
 npm run backup
 ```
 
-The command creates an ignored `backups/<timestamp>/` folder containing a compressed database dump, a Git source bundle, and a small manifest. It never stores the database URI in the manifest. If Atlas is unavailable, a source-only backup is still useful:
+The command creates an ignored `backups/<timestamp>/` folder containing a compressed database dump, a Git source bundle, and a small manifest. When there are tracked, uncommitted edits it also saves them in `working-tree.patch`, so the backup contains the current work as well as committed history. It never stores the database URI in the manifest. If Atlas is unavailable, a source-only backup is still useful:
 
 ```powershell
 npm run backup -- --source-only

@@ -90,6 +90,8 @@ let trailElement: HTMLElement[] = [];
 let trailPositions: { x: number; y: number }[] = [];
 let trailDirection = 1;
 let trailActive = false;
+let snowfallTrailSettling = false;
+let snowfallTrailSettleTimer: number | null = null;
 let projectileTimer = 0;
 let trailTimer = 0;
 let trailMovementFrames = 0;
@@ -604,6 +606,32 @@ function getLocalAccountProgress() {
             .sort()
             .map((key) => [key, localStorage.getItem(key) ?? ""]),
     );
+}
+
+type DeviceProgressBackup = { format: 1; createdAt: string; progress: Record<string, string> };
+function createDeviceProgressBackup(): DeviceProgressBackup {
+    return { format: 1, createdAt: new Date().toISOString(), progress: getLocalAccountProgress() };
+}
+function downloadDeviceProgressBackup() {
+    const backup = createDeviceProgressBackup();
+    const blob = new Blob([`${JSON.stringify(backup, null, 2)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `jacer-device-backup-${backup.createdAt.replace(/[:.]/g, "-")}.json`;
+    link.click();
+    globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function readDeviceProgressBackup(text: string): Record<string, string> | null {
+    try {
+        const value: unknown = JSON.parse(text);
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        const backup = value as Partial<DeviceProgressBackup>;
+        if (backup.format !== 1 || !backup.progress || typeof backup.progress !== "object" || Array.isArray(backup.progress)) return null;
+        const entries = Object.entries(backup.progress);
+        if (entries.length > 500 || entries.some(([key, item]) => !/^orbit-[A-Za-z0-9_-]{1,120}$/.test(key) || typeof item !== "string" || item.length > 20000)) return null;
+        return Object.fromEntries(entries);
+    } catch { return null; }
 }
 
 function serializeAccountProgress(progress: Record<string, string>) {
@@ -3924,14 +3952,15 @@ function switchPlanet() {
         showLevelMenu();
         return;
     }
+    const departingPlanet = activePlanet;
     activePlanet = activePlanet === "normal" ? "prestige" : "normal";
     document.body.classList.toggle("prestige-theme", activePlanet === "prestige");
     showLevelMenu();
     const transition = document.createElement("div");
     transition.className = `planet-transition ${activePlanet}`;
-    transition.innerHTML = `<span>${activePlanet === "prestige" ? "ENTERING PRESTIGE ORBIT" : "RETURNING TO BLUE PLANET"}</span>`;
+    transition.innerHTML = `<div class="planet-transition-stars" aria-hidden="true"></div><div class="planet-transition-world departing ${departingPlanet}"><i></i></div><div class="planet-transition-flight" aria-hidden="true">✦</div><div class="planet-transition-world arriving ${activePlanet}"><i></i></div><div class="planet-transition-copy"><b>${activePlanet === "prestige" ? "WARPING TO PRESTIGE ORBIT" : "RETURNING TO BLUE PLANET"}</b><span>${activePlanet === "prestige" ? "Passing the rings" : "Descending through blue atmosphere"}</span></div>`;
     document.body.append(transition);
-    globalThis.setTimeout(() => transition.remove(), 1100);
+    globalThis.setTimeout(() => transition.remove(), 1500);
 }
 
 function createLoadoutPanel() {
@@ -4370,7 +4399,12 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             setChristmasPresents(getChristmasPresents() + amount);
             status.textContent = `${amount.toLocaleString()} presents added to this account.`;
         });
-        const tryWinterOrbit = createTextButton("Try Winter Orbit", enterChristmasEvent);
+        const tryWinterOrbit = createTextButton("Try Winter Orbit", () => {
+            // Previewing must work even while the public event is paused. It is
+            // device-local and never changes the setting players receive.
+            localStorage.setItem("orbit-tester-christmas-preview", "1");
+            enterChristmasEvent();
+        });
         testTools.append(presentAmount, grantPresents, tryWinterOrbit);
         holidayManagement.append(heading, description, toggle, autoStart, seasonStart.label, seasonEnd.label, adventStart.label, adventEnd.label, launch, status, rewards, testTools);
     };
@@ -4442,7 +4476,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     gravityHeading.textContent = "Advanced world physics";
     const gravityHelp = document.createElement("p");
     gravityHelp.className = "menu-copy";
-    gravityHelp.textContent = "Sets downward acceleration and the strength of gravity wells for this world. Prestige can use a separate force.";
+    gravityHelp.textContent = isOwner
+        ? "Tune normal and prestige physics separately. Downward gravity changes jumps; black-hole settings only control gravity wells."
+        : "Tester sandbox: tune normal and prestige physics for this browser only. Downward gravity changes jumps; black-hole settings only control gravity wells.";
     const gravityForceLabel = document.createElement("label");
     gravityForceLabel.innerHTML = `<span>Gravity force</span>`;
     const gravityForceInput = document.createElement("input");
@@ -4454,7 +4490,37 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     gravityForceInput.dataset.gravityForce = "true";
     bindTesterSetting(gravityForceInput, "gravityForce", () => selectedWorld);
     gravityForceLabel.append(gravityForceInput);
-    rewardSettings.append(gravityHeading, gravityHelp, gravityForceLabel);
+    const gravityWellPullLabel = document.createElement("label");
+    gravityWellPullLabel.innerHTML = `<span>Black-hole pull strength</span>`;
+    const gravityWellPullInput = document.createElement("input");
+    gravityWellPullInput.type = "number";
+    gravityWellPullInput.min = "0.1";
+    gravityWellPullInput.max = "3";
+    gravityWellPullInput.step = "0.05";
+    gravityWellPullInput.value = String(selectedConfig.gravityWellPull ?? 1);
+    bindTesterSetting(gravityWellPullInput, "gravityWellPull", () => selectedWorld);
+    gravityWellPullLabel.append(gravityWellPullInput);
+    const gravityWellRadiusLabel = document.createElement("label");
+    gravityWellRadiusLabel.innerHTML = `<span>Black-hole pull radius</span>`;
+    const gravityWellRadiusInput = document.createElement("input");
+    gravityWellRadiusInput.type = "number";
+    gravityWellRadiusInput.min = "80";
+    gravityWellRadiusInput.max = "420";
+    gravityWellRadiusInput.step = "1";
+    gravityWellRadiusInput.value = String(selectedConfig.gravityWellRadius ?? 220);
+    bindTesterSetting(gravityWellRadiusInput, "gravityWellRadius", () => selectedWorld);
+    gravityWellRadiusLabel.append(gravityWellRadiusInput);
+    const gravityWellVisualLabel = document.createElement("label");
+    gravityWellVisualLabel.innerHTML = `<span>Black-hole visual size</span>`;
+    const gravityWellVisualInput = document.createElement("input");
+    gravityWellVisualInput.type = "number";
+    gravityWellVisualInput.min = "0.5";
+    gravityWellVisualInput.max = "2";
+    gravityWellVisualInput.step = "0.05";
+    gravityWellVisualInput.value = String(selectedConfig.gravityWellVisualScale ?? 1);
+    bindTesterSetting(gravityWellVisualInput, "gravityWellVisualScale", () => selectedWorld);
+    gravityWellVisualLabel.append(gravityWellVisualInput);
+    rewardSettings.append(gravityHeading, gravityHelp, gravityForceLabel, gravityWellPullLabel, gravityWellRadiusLabel, gravityWellVisualLabel);
     // Keep the rarity values in the shared config without exposing the old
     // rarity editor in this world-settings section. Roulette owns that UI.
     const rarityCompatibility = document.createElement("div");
@@ -4513,6 +4579,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         starChanceInput.value = String(readTesterSetting("rainbowStarChance", config.rainbowStarChance, world));
         portalChanceInput.value = String(readTesterSetting("portalSpawnChance", config.portalSpawnChance, world));
         gravityForceInput.value = String(readTesterSetting("gravityForce", config.gravityForce ?? defaultGravityForce, world));
+        gravityWellPullInput.value = String(readTesterSetting("gravityWellPull", config.gravityWellPull ?? 1, world));
+        gravityWellRadiusInput.value = String(readTesterSetting("gravityWellRadius", config.gravityWellRadius ?? 220, world));
+        gravityWellVisualInput.value = String(readTesterSetting("gravityWellVisualScale", config.gravityWellVisualScale ?? 1, world));
         RARITY_ORDER.forEach((rarity) => {
             rewardSettings.querySelector<HTMLInputElement>(`input[data-roll-odds="${rarity}"]`)!.value = String(readTesterSetting(`rarityOdds.${rarity}`, config.rarityOdds[rarity], world));
             rewardSettings.querySelector<HTMLInputElement>(`input[data-reward-min="${rarity}"]`)!.value = String(readTesterSetting(`rewardMin.${rarity}`, config.rewardRanges[rarity][0], world));
@@ -4968,7 +5037,35 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     resetTitle.textContent = "Reset tester data";
     const resetPanel = document.createElement("div");
     resetPanel.className = "tester-reset-panel";
-    resetPanel.innerHTML = "<small>Clear this device's progress, unlocks, cached levels, and inventory. Shared settings and workshop levels are not deleted.</small>";
+    resetPanel.innerHTML = "<small>Export a full device save before resetting. It includes local progress, currencies, inventory, cosmetics, route clears, cooldowns, and settings stored by the game. It does not replace a server database backup.</small>";
+    const backupStatus = document.createElement("small");
+    backupStatus.setAttribute("role", "status");
+    const exportBackup = createTextButton("Download device backup", () => {
+        downloadDeviceProgressBackup();
+        backupStatus.textContent = "Device backup downloaded. Store the JSON file somewhere safe.";
+    });
+    const importBackupInput = document.createElement("input");
+    importBackupInput.type = "file";
+    importBackupInput.accept = "application/json,.json";
+    importBackupInput.hidden = true;
+    const importBackup = createTextButton("Restore device backup", () => importBackupInput.click());
+    importBackupInput.addEventListener("change", async () => {
+        const file = importBackupInput.files?.[0];
+        importBackupInput.value = "";
+        if (!file) return;
+        const progress = readDeviceProgressBackup(await file.text());
+        if (!progress) { backupStatus.textContent = "That file is not a valid Jacer device backup."; return; }
+        const dialog = await showActionDialog({ title: "Restore device backup?", description: "This replaces the game data saved in this browser. Online data is not changed until a later successful account sync.", confirmLabel: "Restore backup", danger: true });
+        if (!dialog.confirmed) return;
+        Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+            .filter((key): key is string => Boolean(key?.startsWith("orbit-") && !LOCAL_DEVICE_PREFERENCE_KEYS.has(key)))
+            .forEach((key) => localStorage.removeItem(key));
+        Object.entries(progress).forEach(([key, value]) => localStorage.setItem(key, value));
+        refreshProgressStateFromStorage();
+        reloadLocalCustomLevels();
+        backupStatus.textContent = "Device backup restored locally. Cloud saving will retry when the online service is available.";
+        saveAccountProgressSoon();
+    });
     const resetButton = document.createElement("button");
     resetButton.className = "tester-reset-button";
     resetButton.type = "button";
@@ -4979,7 +5076,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter((key): key is string => Boolean(key?.startsWith("orbit-"))).forEach((key) => localStorage.removeItem(key));
         globalThis.location.reload();
     });
-    resetPanel.append(resetButton);
+    resetPanel.append(exportBackup, importBackup, importBackupInput, backupStatus, resetButton);
     form.append(resetTitle, resetPanel);
     const apply = document.createElement("button");
     apply.className = "menu-button"; apply.type = "submit"; apply.textContent = "Save settings";
@@ -4991,7 +5088,10 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     form.append(saveFooter);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const invalidInput = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((input) => !input.closest(".roulette-settings-editor") && !input.checkValidity());
+        // World values are checked together below so the player gets a useful
+        // per-world error (for example, rarity odds totaling 101%) instead of
+        // the browser's generic number-field warning.
+        const invalidInput = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((input) => !input.closest(".roulette-settings-editor") && !input.closest(".tester-reward-settings") && !input.checkValidity());
         if (invalidInput) {
             const sectionId = invalidInput.closest<HTMLElement>("[data-control-section]")?.dataset.controlSection;
             if (sectionId) selectSection(sectionId);
@@ -5007,6 +5107,9 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             worldConfig.rainbowStarChance = readTesterSetting("rainbowStarChance", worldConfig.rainbowStarChance, world);
             worldConfig.portalSpawnChance = readTesterSetting("portalSpawnChance", worldConfig.portalSpawnChance, world);
             worldConfig.gravityForce = readTesterSetting("gravityForce", worldConfig.gravityForce ?? defaultGravityForce, world);
+            worldConfig.gravityWellPull = readTesterSetting("gravityWellPull", worldConfig.gravityWellPull ?? 1, world);
+            worldConfig.gravityWellRadius = readTesterSetting("gravityWellRadius", worldConfig.gravityWellRadius ?? 220, world);
+            worldConfig.gravityWellVisualScale = readTesterSetting("gravityWellVisualScale", worldConfig.gravityWellVisualScale ?? 1, world);
             worldConfig.powerupSpawnChances.star = worldConfig.rainbowStarChance;
             RARITY_ORDER.forEach((rarity) => {
                 worldConfig.rarityOdds[rarity] = readTesterSetting(`rarityOdds.${rarity}`, worldConfig.rarityOdds[rarity], world);
@@ -5021,7 +5124,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             });
             const oddsTotal = RARITY_ORDER.reduce((total, rarity) => total + worldConfig.rarityOdds[rarity], 0);
             const isPercentage = (value: number) => Number.isInteger(value) && value >= 0 && value <= 100;
-            if (oddsTotal !== 100 || !Number.isFinite(worldConfig.gravityForce) || worldConfig.gravityForce < 0.1 || worldConfig.gravityForce > 2.5 || !isPercentage(worldConfig.rainbowStarChance) || !isPercentage(worldConfig.portalSpawnChance)
+            if (oddsTotal !== 100 || !Number.isFinite(worldConfig.gravityForce) || worldConfig.gravityForce < 0.1 || worldConfig.gravityForce > 2.5 || !Number.isFinite(worldConfig.gravityWellPull) || worldConfig.gravityWellPull < 0.1 || worldConfig.gravityWellPull > 3 || !Number.isFinite(worldConfig.gravityWellRadius) || worldConfig.gravityWellRadius < 80 || worldConfig.gravityWellRadius > 420 || !Number.isFinite(worldConfig.gravityWellVisualScale) || worldConfig.gravityWellVisualScale < 0.5 || worldConfig.gravityWellVisualScale > 2 || !isPercentage(worldConfig.rainbowStarChance) || !isPercentage(worldConfig.portalSpawnChance)
                 || !Object.values(worldConfig.rarityOdds).every(isPercentage)
                 || !Object.values(worldConfig.skinChances).every(isPercentage)
                 || !Object.values(worldConfig.powerupSpawnChances).every(isPercentage)) invalidWorld = world;
@@ -5295,6 +5398,17 @@ function getGravityForce() {
     return typeof force === "number" && Number.isFinite(force) && force >= 0.1 && force <= 2.5 ? force : defaultGravityForce;
 }
 
+function getGravityWellSettings() {
+    const level = levels[currentLevel];
+    const config = gameConfig[level?.prestige ? "prestige" : "normal"];
+    const bounded = (value: unknown, fallback: number, minimum: number, maximum: number) => typeof value === "number" && Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
+    return {
+        pull: bounded(config?.gravityWellPull, 1, 0.1, 3),
+        radius: bounded(config?.gravityWellRadius, 220, 80, 420),
+        visualScale: bounded(config?.gravityWellVisualScale, 1, 0.5, 2),
+    };
+}
+
 function isUsableGameConfig(value: unknown): value is GameConfig {
     if (!value || typeof value !== "object") return false;
     const config = value as Partial<GameConfig>;
@@ -5305,6 +5419,9 @@ function isUsableGameConfig(value: unknown): value is GameConfig {
         if (!isRecord(settings) || !isRecord(settings.rarityOdds) || !isRecord(settings.rewardRanges)
             || !isRecord(settings.skinChances) || !isRecord(settings.powerupSpawnChances)) return false;
         if (settings.gravityForce !== undefined && (typeof settings.gravityForce !== "number" || !Number.isFinite(settings.gravityForce) || settings.gravityForce < 0.1 || settings.gravityForce > 2.5)) return false;
+        if (settings.gravityWellPull !== undefined && (typeof settings.gravityWellPull !== "number" || !Number.isFinite(settings.gravityWellPull) || settings.gravityWellPull < 0.1 || settings.gravityWellPull > 3)) return false;
+        if (settings.gravityWellRadius !== undefined && (typeof settings.gravityWellRadius !== "number" || !Number.isFinite(settings.gravityWellRadius) || settings.gravityWellRadius < 80 || settings.gravityWellRadius > 420)) return false;
+        if (settings.gravityWellVisualScale !== undefined && (typeof settings.gravityWellVisualScale !== "number" || !Number.isFinite(settings.gravityWellVisualScale) || settings.gravityWellVisualScale < 0.5 || settings.gravityWellVisualScale > 2)) return false;
         if (![settings.rainbowStarChance, ...RARITY_ORDER.map((rarity) => settings.rarityOdds[rarity]),
             ...RARITY_ORDER.flatMap((rarity) => settings.rewardRanges[rarity] ?? []),
             ...RARITY_ORDER.map((rarity) => settings.skinChances[rarity]),
@@ -5892,7 +6009,7 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; snowfallTrailSettling = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     activeRunProof = null;
     const proofSequence = ++runProofSequence;
     if (!isLevelMakerPreview && currentOnlineUser) void requestRunProof(level.name, proofSequence);
@@ -6142,7 +6259,7 @@ function createWorldObjects() {
         world.append(element);
     });
     levelAsteroids.forEach((asteroid) => { const element = document.createElement("div"); element.className = `asteroid ${asteroid.present ? "present" : ""} ${asteroid.special ? "special" : ""} ${asteroid.claimed ? "claimed" : ""}`; element.textContent = asteroid.present ? "🎁" : asteroid.special ? "✹" : "✦"; element.style.left = `${asteroid.x}px`; element.style.top = `${asteroid.y}px`; world.append(element); });
-    levelHazards.forEach((hazard) => { const element = document.createElement("div"); element.className = `hazard ${hazard.kind}`; element.style.left = `${hazard.x}px`; element.style.top = `${hazard.y}px`; element.style.width = `${hazard.width}px`; element.style.height = `${hazard.height}px`; element.setAttribute("aria-label", hazard.kind === "spikes" ? "Spike hazard" : "Gravity zone"); world.append(element); });
+    levelHazards.forEach((hazard) => { const element = document.createElement("div"); element.className = `hazard ${hazard.kind}`; element.style.left = `${hazard.x}px`; element.style.top = `${hazard.y}px`; element.style.width = `${hazard.width}px`; element.style.height = `${hazard.height}px`; if (hazard.kind === "gravity") element.style.setProperty("--gravity-well-scale", String(getGravityWellSettings().visualScale)); element.setAttribute("aria-label", hazard.kind === "spikes" ? "Spike hazard" : "Gravity zone"); world.append(element); });
     levelEnemies.forEach((enemy) => { const element = document.createElement("div"); element.className = `enemy${enemy.defeated ? " defeated" : ""}`; element.style.left = `${enemy.x}px`; element.style.top = `${enemy.y}px`; world.append(element); });
     levelMiniBosses.forEach((miniBoss) => { const element = document.createElement("div"); element.className = `mini-boss dark-knight${miniBoss.defeated ? " defeated" : ""}`; element.setAttribute("aria-label", "Dark Knight guardian"); element.style.left = `${miniBoss.x}px`; element.style.top = `${miniBoss.y}px`; world.append(element); });
     levelPowerups.forEach((powerup) => { const element = document.createElement("div"); element.className = `powerup ${powerup.kind}`; element.textContent = powerup.kind === "shield" ? "◇" : powerup.kind === "rapid" ? "ϟ" : powerup.kind === "cannon" ? "✦" : "»"; element.style.left = `${powerup.x}px`; element.style.top = `${powerup.y}px`; element.setAttribute("aria-label", `${powerup.kind} powerup`); world.append(element); });
@@ -6423,8 +6540,9 @@ function applyGravityPull(frameScale: number) {
     const offsetX = wellCenterX - shipCenterX;
     const offsetY = wellCenterY - shipCenterY;
     const distance = Math.max(1, Math.hypot(offsetX, offsetY));
-    const proximity = Math.max(0, Math.min(1, 1 - distance / 220));
-    const gravityMultiplier = getGravityForce() / defaultGravityForce;
+    const settings = getGravityWellSettings();
+    const proximity = Math.max(0, Math.min(1, 1 - distance / settings.radius));
+    const gravityMultiplier = (getGravityForce() / defaultGravityForce) * settings.pull;
     const horizontalStrength = (0.003 + proximity * 0.005) * gravityMultiplier;
     const verticalStrength = (0.0015 + proximity * 0.0025) * gravityMultiplier;
     // The pull is deliberately gentle and only exists while inside the zone,
@@ -6637,7 +6755,8 @@ function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) ret
 function createTrail(visible = true) {
     const trail = trails[selectedTrail] ?? trails[0];
     if (trailElement.length === 0) {
-        trailElement = Array.from({ length: 5 }, (_, index) => {
+        const particleCount = trail.name === "Snowfall Wake" ? 9 : 5;
+        trailElement = Array.from({ length: particleCount }, (_, index) => {
             const element = document.createElement("i");
             element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""} ${index === 0 ? "trail-head" : ""}`;
             element.style.setProperty("--trail-delay", `${index * 60}ms`);
@@ -6651,7 +6770,10 @@ function createTrail(visible = true) {
         if (trail.secondaryColor) element.style.setProperty("--trail-secondary-color", trail.secondaryColor);
         else element.style.removeProperty("--trail-secondary-color");
     });
-    if (visible) { trailActive = true; trailTimer = 0; }
+    if (visible) {
+        if (snowfallTrailSettleTimer !== null) { globalThis.clearTimeout(snowfallTrailSettleTimer); snowfallTrailSettleTimer = null; }
+        trailActive = true; snowfallTrailSettling = false; trailTimer = 0;
+    }
     else { trailActive = false; trailPositions = []; }
     updateTrail(visible);
 }
@@ -6659,9 +6781,24 @@ function createTrail(visible = true) {
 function updateTrail(visible = trailActive) {
     if (!visible) {
         trailActive = false;
+        const selectedTrailStyle = trails[selectedTrail] ?? trails[0];
+        if (selectedTrailStyle.name === "Snowfall Wake" && !snowfallTrailSettling && trailElement.length) {
+            snowfallTrailSettling = true;
+            trailElement.forEach((element, index) => {
+                element.classList.remove("trail-active");
+                if (index === 0) { element.style.opacity = "0"; return; }
+                element.classList.add("snowfall-settling");
+            });
+            snowfallTrailSettleTimer = globalThis.setTimeout(() => {
+                trailElement.forEach((element) => { element.classList.remove("snowfall-settling"); element.style.opacity = "0"; });
+                snowfallTrailSettleTimer = null;
+            }, 900);
+            return;
+        }
         trailElement.forEach((element) => { element.classList.remove("trail-active"); element.style.opacity = "0"; });
         return;
     }
+    snowfallTrailSettling = false;
     // Keep the lead particle tethered to the ship's core. The rest of the trail uses
     // prior core positions, so it follows movement like a tail instead of falling off
     // the top or bottom of the ship.
@@ -6671,6 +6808,7 @@ function updateTrail(visible = trailActive) {
     if (!last || last.x !== anchor.x || last.y !== anchor.y) trailPositions.unshift(anchor);
     trailPositions = trailPositions.slice(0, 24);
     drawTrailParticles(trailElement, trailPositions, anchor, trailDirection, shipFlipped);
+    trailElement.forEach((element) => element.classList.remove("snowfall-settling"));
 }
 
 function updateProjectiles() {
@@ -7016,6 +7154,7 @@ function getPrestigeGateAccessError() {
     const normalComplete = getNormalRouteCompletionCount();
     if (prestigeLevel >= prestigeMax) return "You have reached the configured prestige limit.";
     if (normalComplete < getNormalRouteCount()) return `Clear every normal route (${normalComplete}/${getNormalRouteCount()} complete).`;
+    if (!hasClearedPrestigeGate()) return "Clear the Prestige Gate in Secret Space before claiming prestige.";
     return "";
 }
 function canClaimPrestige() { return !hasOwnerAccess() && !getPrestigeGateAccessError(); }
@@ -7026,7 +7165,12 @@ function getNextRouteIndex(currentIndex: number) {
     if (!current || current.holiday || current.localOnly || current.customId) return -1;
     const routeType = getLevelType(current);
     if (routeType === "secret") return -1;
+    // Seasonal routes are a separate event playlist. They must never be used
+    // as the next normal/prestige sector merely because they sit later in the
+    // shared level array.
     return levels.findIndex((level, index) => index > currentIndex
+        && !level.holiday
+        && !level.secret
         && !level.localOnly
         && !level.customId
         && getLevelType(level) === routeType

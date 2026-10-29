@@ -28,10 +28,15 @@ function main() {
 
   fs.mkdirSync(output, { recursive: true });
   const status = run("git", ["status", "--porcelain"]);
-  if (status) console.warn("Warning: the working tree has uncommitted changes; the bundle still includes all commits.");
+  if (status) console.warn("Warning: the working tree has uncommitted changes; a binary-safe patch will be included beside the source bundle.");
 
   const sourceBundle = path.join(output, "source.bundle");
   run("git", ["bundle", "create", sourceBundle, "--all"]);
+  // A Git bundle only includes commits. Preserve tracked edits as well, so a
+  // source-only emergency backup includes the current work in progress.
+  const workingTreePatch = run("git", ["diff", "--binary"]);
+  const workingTreePatchName = workingTreePatch ? "working-tree.patch" : null;
+  if (workingTreePatchName) fs.writeFileSync(path.join(output, workingTreePatchName), `${workingTreePatch}\n`);
 
   let databaseBackedUp = false;
   if (!sourceOnly) {
@@ -50,6 +55,7 @@ function main() {
     createdAt: new Date().toISOString(),
     commit: run("git", ["rev-parse", "HEAD"]),
     sourceBundle: path.basename(sourceBundle),
+    workingTreePatch: workingTreePatchName,
     databaseBackedUp,
     checksum: crypto.createHash("sha256").update(fs.readFileSync(sourceBundle)).digest("hex"),
   };

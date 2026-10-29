@@ -99,6 +99,9 @@ const defaultSpawnChances = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 3 
 export const DEFAULT_GAME_CONFIG = {
   normal: {
     gravityForce: 0.7,
+    gravityWellPull: 1,
+    gravityWellRadius: 220,
+    gravityWellVisualScale: 1,
     rainbowStarChance: 3,
     portalSpawnChance: 100,
     rarityOdds: defaultRarityOdds,
@@ -108,6 +111,9 @@ export const DEFAULT_GAME_CONFIG = {
   },
   prestige: {
     gravityForce: 0.84,
+    gravityWellPull: 1.18,
+    gravityWellRadius: 220,
+    gravityWellVisualScale: 1.12,
     rainbowStarChance: 3,
     portalSpawnChance: 100,
     rarityOdds: defaultRarityOdds,
@@ -162,6 +168,9 @@ function isWorldConfig(value) {
   const skinChances = value.skinChances;
   const spawnChances = value.powerupSpawnChances;
   return (value.gravityForce === undefined || (Number.isFinite(value.gravityForce) && value.gravityForce >= 0.1 && value.gravityForce <= 2.5))
+    && (value.gravityWellPull === undefined || (Number.isFinite(value.gravityWellPull) && value.gravityWellPull >= 0.1 && value.gravityWellPull <= 3))
+    && (value.gravityWellRadius === undefined || (Number.isFinite(value.gravityWellRadius) && value.gravityWellRadius >= 80 && value.gravityWellRadius <= 420))
+    && (value.gravityWellVisualScale === undefined || (Number.isFinite(value.gravityWellVisualScale) && value.gravityWellVisualScale >= 0.5 && value.gravityWellVisualScale <= 2))
     && isPercent(value.rainbowStarChance)
     && isPercent(value.portalSpawnChance)
     && rarityOdds && RARITIES.every((rarity) => isPercent(rarityOdds[rarity]))

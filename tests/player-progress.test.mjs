@@ -22,6 +22,10 @@ test("player progress anti-cheat blocks forged unlocks, balance decreases, and u
     /privileged progress key/i,
   );
   assert.match(
+    getSuspiciousPlayerMutation({}, { "orbit-christmas-unlock-skin-26": "1" }),
+    /privileged progress key/i,
+  );
+  assert.match(
     getSuspiciousPlayerMutation({ "orbit-claims": "100" }, { "orbit-claims": "101" }),
     /does not match collected asteroids/i,
   );
@@ -36,6 +40,13 @@ test("player progress anti-cheat blocks forged unlocks, balance decreases, and u
     ),
     /does not match collected asteroids/i,
   );
+});
+
+test("prestige resets require a completed Prestige Gate", () => {
+  const completedNormalRoutes = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`orbit-level-complete-${index}`, "1"]));
+  const attemptedReset = { ...completedNormalRoutes, "orbit-claims": "0", "orbit-special-claims": "0", "orbit-prestige": "1", "orbit-prestige-world-unlocked": "1" };
+  assert.match(getSuspiciousPlayerMutation({ ...completedNormalRoutes, "orbit-claims": "50", "orbit-special-claims": "4" }, attemptedReset), /Prestige Gate/i);
+  assert.equal(getSuspiciousPlayerMutation({ ...completedNormalRoutes, "orbit-level-complete-prestige-gate": "1", "orbit-claims": "50", "orbit-special-claims": "4" }, attemptedReset), null);
 });
 
 test("an expired secret route may respawn its special asteroids without allowing normal claim deletion", () => {
