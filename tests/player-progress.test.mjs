@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getSuspiciousPlayerMutation, hasCurrencyConflict, initializePlayerProgress, sanitizeInitialPlayerProgress } from "../server/player-progress.mjs";
+import { getSuspiciousPlayerMutation, hasCurrencyConflict, hasProgressConflict, initializePlayerProgress, isClientMutableProgressKey, sanitizeInitialPlayerProgress } from "../server/player-progress.mjs";
 
 test("simultaneous currency changes are detected without blocking unrelated changes", () => {
   const baseline = { "orbit-claims": "100", "orbit-special-claims": "3" };
@@ -10,6 +10,13 @@ test("simultaneous currency changes are detected without blocking unrelated chan
   assert.equal(hasCurrencyConflict({ ...baseline, "orbit-claims": "150" }, { ...baseline, "orbit-skin": "2" }, baseline), false);
   assert.equal(hasCurrencyConflict({ ...baseline, "orbit-claims": "150" }, { ...baseline, "orbit-special-claims": "4" }, baseline), false);
   assert.equal(hasCurrencyConflict(null, baseline, baseline), false);
+});
+
+test("a server-side profile edit cannot be overwritten by an older device save", () => {
+  const baseline = { "orbit-skin": "1", "orbit-level-complete-0": "1" };
+  assert.equal(hasProgressConflict({ ...baseline, "orbit-skin": "4" }, { ...baseline, "orbit-level-complete-1": "1" }, baseline), false);
+  assert.equal(hasProgressConflict({ ...baseline, "orbit-skin": "4" }, { ...baseline, "orbit-skin": "2" }, baseline), true);
+  assert.equal(hasProgressConflict(null, baseline, baseline), false);
 });
 
 test("player progress anti-cheat blocks forged unlocks, balance decreases, and unearned asteroids", () => {
@@ -47,6 +54,23 @@ test("player progress anti-cheat blocks forged unlocks, balance decreases, and u
     ),
     /server-owned/i,
   );
+});
+
+test("normal player syncs use an explicit allowlist and cannot import inventory", () => {
+  assert.equal(isClientMutableProgressKey("orbit-skin"), true);
+  assert.equal(isClientMutableProgressKey("orbit-level-complete-3"), true);
+  assert.equal(isClientMutableProgressKey("orbit-christmas-unlock-trail-21"), false);
+  assert.equal(isClientMutableProgressKey("orbit-future-unlock-thing"), false);
+  assert.match(
+    getSuspiciousPlayerMutation({ "orbit-skin": "1" }, { "orbit-skin": "1", "orbit-future-unlock-thing": "1" }),
+    /server-owned/i,
+  );
+  const initial = sanitizeInitialPlayerProgress({
+    "orbit-skin": "1",
+    "orbit-powerups": JSON.stringify({ shield: 99 }),
+    "orbit-christmas-unlock-trail-21": "1",
+  });
+  assert.deepEqual(initial, { "orbit-skin": "1" });
 });
 
 test("prestige resets require a completed Prestige Gate", () => {

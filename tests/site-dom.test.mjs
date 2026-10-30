@@ -698,7 +698,10 @@ test("control center keeps sections separate and preserves drafts while switchin
     assert.equal(star.value, "11");
     assert.equal(claims.value, "17");
     clickButton(document, "Save settings");
-    await waitFor(() => window.localStorage.getItem("orbit-claims") === "17", "Settings did not finish saving");
+    // The full test suite runs other server/browser fixtures concurrently on
+    // slower Windows machines. This is an async UI save, not a short polling
+    // assertion, so give it enough time without weakening the condition.
+    await waitFor(() => window.localStorage.getItem("orbit-claims") === "17", "Settings did not finish saving", 6000);
     assert.equal(savedConfig.normal.rainbowStarChance, 11);
     assert.equal(savedConfig.prestige.rainbowStarChance, 27);
     assert.equal(window.localStorage.getItem("orbit-claims"), "17");

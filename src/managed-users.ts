@@ -617,7 +617,10 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     response.backups.forEach((backup) => {
                         const option = document.createElement("option");
                         option.value = backup.id;
-                        option.textContent = `${new Date(backup.createdAt).toLocaleString()} / ${backup.categories.join(", ")}`;
+                        const categoryLabel = backup.categories
+                            .map((category) => category === "automaticProgress" ? "automatic progress checkpoint" : category)
+                            .join(", ");
+                        option.textContent = `${new Date(backup.createdAt).toLocaleString()} / ${categoryLabel}`;
                         backupSelect.append(option);
                     });
                     if (!response.backups.length) {

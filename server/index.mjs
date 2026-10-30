@@ -11,8 +11,8 @@ import { put } from "@vercel/blob";
 import argon2 from "argon2";
 import { getMongoDatabaseConfigurationError, getMongoDatabaseConnectionString } from "./database-config.mjs";
 import { dropLegacyRecoveryIndex } from "./database-setup.mjs";
-import { getSuspiciousPlayerMutation, hasCurrencyConflict, initializePlayerProgress, sanitizeInitialPlayerProgress } from "./player-progress.mjs";
-import { applyTrustedAsteroidReward, asteroidRewardEventId, validateAsteroidRewardRequest } from "./reward-events.mjs";
+import { getSuspiciousPlayerMutation, hasCurrencyConflict, hasProgressConflict, initializePlayerProgress, sanitizeInitialPlayerProgress } from "./player-progress.mjs";
+import { applyTrustedAsteroidReward, asteroidRewardEventId, getTrustedLevelReward, validateAsteroidRewardRequest } from "./reward-events.mjs";
 import {
   ALLOWED_ABILITIES,
   isValidPassword,
@@ -373,6 +373,35 @@ async function recordModerationLog(db, entry) {
   }
 }
 
+// Recovery checkpoints retain the last known-good complete progress document.
+// They are intentionally separate from manual wipe backups so an owner can
+// restore a player after a bad save or staff edit without guessing which
+// individual keys were affected.
+async function createProgressRecoveryCheckpoint(db, userId, progress, source, checkpointKey, session = undefined) {
+  try {
+    const safeProgress = validatePlayerProgress(progress);
+    if (!safeProgress) return;
+    await db.collection("profile_backups").updateOne(
+      { userId, checkpointKey },
+      {
+        $setOnInsert: {
+          userId,
+          checkpointKey,
+          categories: ["automaticProgress"],
+          affectedProgress: safeProgress,
+          fullProgress: true,
+          source,
+          automatic: true,
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true, ...(session ? { session } : {}) },
+    );
+  } catch (error) {
+    console.error("Could not create player recovery checkpoint:", error);
+  }
+}
+
 function moderationReason(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, 300) : fallback;
 }
@@ -539,7 +568,7 @@ async function getDatabase() {
 async function writePlayerProgress(collection, userId, progress, baseProgress = null, replace = false, session = undefined, actorRole = "owner", progressAntiCheatEnabled = true) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const existing = await collection.findOne({ _id: userId }, session ? { session } : undefined);
-    if (!replace && hasCurrencyConflict(existing?.data, progress, baseProgress)) return { progress: null, conflict: true };
+    if (!replace && (hasCurrencyConflict(existing?.data, progress, baseProgress) || hasProgressConflict(existing?.data, progress, baseProgress))) return { progress: null, conflict: true };
     const mergedProgress = replace ? { ...progress } : { ...(existing?.data ?? {}) };
     if (!replace) {
       const baseline = baseProgress ?? {};
@@ -1461,6 +1490,7 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
       if (!initialized) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
       return res.json({ progress: initialized });
     }
+    const beforeSave = await collection.findOne({ _id: req.user.id }, { projection: { data: 1, revision: 1 } });
     const result = await writePlayerProgress(collection, req.user.id, progress, baseProgress, false, undefined, req.user.role, moderationSettings.progressAntiCheatEnabled);
     if (result.suspiciousMutation) {
       const requestId = crypto.randomUUID();
@@ -1499,6 +1529,10 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
     }
     const banReason = await banLowProgressAbuse(db, req.user, result.progress);
     if (banReason) return res.status(403).json({ error: `Your account is under review: ${banReason}`, accountUnderReview: true });
+    if (beforeSave?.data && JSON.stringify(beforeSave.data) !== JSON.stringify(result.progress)) {
+      const checkpointKey = `autosave:${req.user.id.toString()}:${Math.floor(Date.now() / 60000)}`;
+      await createProgressRecoveryCheckpoint(db, req.user.id, beforeSave.data, "player-progress-save", checkpointKey);
+    }
     res.json({ progress: result.progress });
   } catch (error) {
     next(error);
@@ -1551,6 +1585,9 @@ app.post("/api/rewards/asteroid", requireSameOrigin, requireUser, async (req, re
         if (applied.status !== "awarded" || !applied.progress) throw Object.assign(new Error("This asteroid reward has already been claimed."), { statusCode: 409 });
         const rewardKey = definition.currencyKey;
         const current = typeof progress[rewardKey] === "string" && /^\d{1,10}$/.test(progress[rewardKey]) ? Number(progress[rewardKey]) : 0;
+        // One checkpoint per verified run preserves the state from before the
+        // first collectible, without creating a backup document per asteroid.
+        await createProgressRecoveryCheckpoint(db, req.user.id, progress, "verified-level-run", `run:${proofId}`, session);
         const saved = await writePlayerProgress(collection, req.user.id, applied.progress, null, true, session);
         if (!saved.progress) throw Object.assign(new Error("Could not save this collectible reward. Try again."), { statusCode: 409 });
         await recordSecurityEvent(db, { type: "reward-granted", userId: req.user.id, endpoint: "/api/rewards/asteroid", rewardEventId: eventId, validationResult: "accepted", oldBalances: { [rewardKey]: current }, proposedBalances: { [rewardKey]: current + 1 } });
@@ -1566,6 +1603,81 @@ app.post("/api/rewards/asteroid", requireSameOrigin, requireUser, async (req, re
   } catch (error) {
     next(error);
   }
+});
+
+const CHRISTMAS_ROUTE_COOLDOWN_MS = 15 * 60 * 1000;
+
+function christmasRouteForIndex(levelIndex) {
+  const names = ["Tinsel Trail", "Candy Cane Crossing", "Evergreen Escape", "Frostlight Station", "Sleighbelt Run", "Star atop the Tree"];
+  const name = names[levelIndex - 22];
+  return typeof name === "string" ? getTrustedLevelReward(name, levelIndex) : null;
+}
+
+function hasEveryTrustedCollectible(progress, route) {
+  try {
+    const claimed = JSON.parse(progress[`orbit-asteroids-${route.index}`] ?? "[]");
+    return Array.isArray(claimed)
+      && claimed.length === route.asteroidCount
+      && new Set(claimed).size === route.asteroidCount
+      && claimed.every((index) => Number.isSafeInteger(index) && index >= 0 && index < route.asteroidCount);
+  } catch {
+    return false;
+  }
+}
+
+function christmasRouteCooldownKey(levelIndex) {
+  return `orbit-christmas-server-cooldown-${levelIndex}`;
+}
+
+// The server starts and clears each repeatable Christmas route cooldown.
+// This lets presents respawn safely after 15 minutes without trusting the
+// browser to erase its own already-collected reward history.
+app.post("/api/holiday/christmas-routes/:levelIndex/complete", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const route = christmasRouteForIndex(Number(req.params.levelIndex));
+    if (!route) return res.status(400).json({ error: "That is not a Winter Orbit route." });
+    const db = await getDatabase();
+    const collection = db.collection("player_progress");
+    const record = await collection.findOne({ _id: req.user.id });
+    const progress = validatePlayerProgress(record?.data ?? {});
+    if (!progress || !hasEveryTrustedCollectible(progress, route)) return res.status(409).json({ error: "Secure every present in this route before its cooldown can begin." });
+    const key = christmasRouteCooldownKey(route.index);
+    const existingExpiry = Number(progress[key] ?? 0);
+    const expiresAt = Number.isSafeInteger(existingExpiry) && existingExpiry > Date.now()
+      ? existingExpiry
+      : Date.now() + CHRISTMAS_ROUTE_COOLDOWN_MS;
+    const nextProgress = { ...progress, [key]: String(expiresAt) };
+    // Retire the old client-only marker so the server's timestamp is the
+    // single source of truth for the next respawn.
+    delete nextProgress[`orbit-christmas-cooldown-${route.index}`];
+    const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
+    if (!saved.progress) return res.status(409).json({ error: "Could not start this route cooldown. Try again." });
+    res.json({ progress: saved.progress, expiresAt });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/holiday/christmas-routes/:levelIndex/respawn", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const route = christmasRouteForIndex(Number(req.params.levelIndex));
+    if (!route) return res.status(400).json({ error: "That is not a Winter Orbit route." });
+    const db = await getDatabase();
+    const collection = db.collection("player_progress");
+    const record = await collection.findOne({ _id: req.user.id });
+    const progress = validatePlayerProgress(record?.data ?? {});
+    if (!progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
+    const key = christmasRouteCooldownKey(route.index);
+    const expiresAt = Number(progress[key] ?? 0);
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) return res.status(409).json({ error: "This Winter Orbit route is not waiting for a respawn." });
+    if (expiresAt > Date.now()) return res.status(409).json({ error: "This Winter Orbit route is still cooling down.", expiresAt });
+    const nextProgress = { ...progress };
+    delete nextProgress[`orbit-asteroids-${route.index}`];
+    delete nextProgress[`orbit-level-claims-${route.index}`];
+    delete nextProgress[key];
+    delete nextProgress[`orbit-christmas-cooldown-${route.index}`];
+    const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
+    if (!saved.progress) return res.status(409).json({ error: "Could not respawn this route's presents. Try again." });
+    res.json({ progress: saved.progress });
+  } catch (error) { next(error); }
 });
 
 function chooseWeightedOption(options) {
@@ -1759,32 +1871,48 @@ app.get("/api/holiday/christmas-wheel", requireUser, async (req, res, next) => {
 // safely. The returned selected index always refers to the displayed wheel.
 app.post("/api/holiday/christmas-spin", requireSameOrigin, requireUser, async (req, res, next) => {
   try {
-    const { collection, progress } = await readChristmasWheelProgress(req);
-    const presents = Number(progress["orbit-christmas-presents"] ?? 0);
-    if (!Number.isSafeInteger(presents) || presents < 10) return res.status(400).json({ error: "You need 10 presents to open the wheel." });
-    const options = christmasWheelOptions(progress);
-    const selectedIndex = chooseChristmasWheelOption(options);
-    const { kind, value, name } = options[selectedIndex];
-    const nextProgress = { ...progress, "orbit-christmas-presents": String(presents - 10) };
-    let description;
-    if (kind === "claims") {
-      const amount = crypto.randomInt(1, 1001);
-      nextProgress["orbit-claims"] = String(Math.min(100000000, Number(progress["orbit-claims"] ?? 0) + amount));
-      description = `+${amount.toLocaleString()} normal asteroids`;
-    } else if (kind === "specialClaims") {
-      const amount = crypto.randomInt(1, 51);
-      nextProgress["orbit-special-claims"] = String(Math.min(100000000, Number(progress["orbit-special-claims"] ?? 0) + amount));
-      description = `+${amount} special asteroids`;
-    } else if (kind === "title") {
-      nextProgress[`orbit-christmas-title-unlock-${value}`] = "1";
-      description = `Limited ${name} title unlocked.`;
-    } else {
-      nextProgress[`orbit-christmas-unlock-${kind}-${value}`] = "1";
-      description = `Limited ${name} unlocked.`;
-    }
-    const result = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
-    if (!result.progress) return res.status(409).json({ error: "Could not save this holiday reward. Try again." });
-    res.json({ progress: result.progress, options, selectedIndex, reward: { name, description } });
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" }, { session });
+        const eventEnabled = resolveHolidayEventSettings(holiday?.value).christmasEnabled;
+        if (!eventEnabled && !["owner", "developer", "tester"].includes(req.user.role)) throw Object.assign(new Error("The Christmas event is not active."), { statusCode: 403 });
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const presents = Number(progress["orbit-christmas-presents"] ?? 0);
+        if (!Number.isSafeInteger(presents) || presents < 10) throw Object.assign(new Error("You need 10 presents to open the wheel."), { statusCode: 400 });
+        const options = christmasWheelOptions(progress);
+        const selectedIndex = chooseChristmasWheelOption(options);
+        const { kind, value, name } = options[selectedIndex];
+        const nextProgress = { ...progress, "orbit-christmas-presents": String(presents - 10) };
+        let description;
+        if (kind === "claims") {
+          const amount = crypto.randomInt(1, 1001);
+          nextProgress["orbit-claims"] = String(Math.min(100000000, Number(progress["orbit-claims"] ?? 0) + amount));
+          description = `+${amount.toLocaleString()} normal asteroids`;
+        } else if (kind === "specialClaims") {
+          const amount = crypto.randomInt(1, 51);
+          nextProgress["orbit-special-claims"] = String(Math.min(100000000, Number(progress["orbit-special-claims"] ?? 0) + amount));
+          description = `+${amount} special asteroids`;
+        } else if (kind === "title") {
+          nextProgress[`orbit-christmas-title-unlock-${value}`] = "1";
+          description = `Limited ${name} title unlocked.`;
+        } else {
+          nextProgress[`orbit-christmas-unlock-${kind}-${value}`] = "1";
+          description = `Limited ${name} unlocked.`;
+        }
+        const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not save this holiday reward. Try again."), { statusCode: 409 });
+        const rewardEventId = crypto.randomUUID();
+        await db.collection("reward_events").insertOne({ _id: rewardEventId, userId: req.user.id, source: "christmas-wheel", spentPresents: 10, reward: { kind, value, name, description }, createdAt: new Date() }, { session });
+        return { progress: saved.progress, options, selectedIndex, reward: { name, description }, rewardEventId };
+      });
+      await recordSecurityEvent(db, { type: "reward-granted", userId: req.user.id, endpoint: "/api/holiday/christmas-spin", rewardEventId: result.rewardEventId, validationResult: "accepted" });
+      res.json(result);
+    } finally { await session.endSession(); }
   } catch (error) { if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message }); next(error); }
 });
 
@@ -1852,15 +1980,29 @@ app.post("/api/holiday/christmas-advent/:day", requireSameOrigin, requireUser, a
     const currentDay = christmasAdventDay(settings);
     if (!currentDay || day > currentDay) return res.status(400).json({ error: "That Advent calendar day is not available yet." });
     if (!settings.christmasEnabled) return res.status(403).json({ error: "The Christmas event is not active." });
-    const collection = db.collection("player_progress");
-    const record = await collection.findOne({ _id: req.user.id });
-    const progress = validatePlayerProgress(record?.data ?? {});
-    if (!progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
-    if (progress[`orbit-christmas-advent-${day}`] === "1") return res.status(409).json({ error: "You already opened this Advent calendar day." });
-    const reward = applyChristmasAdventReward(progress, day);
-    const result = await writePlayerProgress(collection, req.user.id, reward.progress, null, true);
-    if (!result.progress) return res.status(409).json({ error: "Could not save this Advent reward. Try again." });
-    res.json({ progress: result.progress, reward: reward.reward });
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        if (progress[`orbit-christmas-advent-${day}`] === "1") throw Object.assign(new Error("You already opened this Advent calendar day."), { statusCode: 409 });
+        const reward = applyChristmasAdventReward(progress, day);
+        const rewardEventId = `christmas-advent:${req.user.id.toString()}:${day}`;
+        try {
+          await db.collection("reward_events").insertOne({ _id: rewardEventId, userId: req.user.id, source: "christmas-advent", day, createdAt: new Date() }, { session });
+        } catch (error) {
+          if (error?.code === 11000) throw Object.assign(new Error("You already opened this Advent calendar day."), { statusCode: 409 });
+          throw error;
+        }
+        const saved = await writePlayerProgress(collection, req.user.id, reward.progress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not save this Advent reward. Try again."), { statusCode: 409 });
+        return { progress: saved.progress, reward: reward.reward, rewardEventId };
+      });
+      await recordSecurityEvent(db, { type: "reward-granted", userId: req.user.id, endpoint: `/api/holiday/christmas-advent/${day}`, rewardEventId: result.rewardEventId, validationResult: "accepted" });
+      res.json(result);
+    } finally { await session.endSession(); }
   } catch (error) { next(error); }
 });
 
@@ -3243,7 +3385,7 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderati
     if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid account." });
     const db = await getDatabase();
     const userId = new ObjectId(req.params.id);
-    const target = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1, emailHash: 1, emailMasked: 1 } });
+    const target = await db.collection("users").findOne({ _id: userId }, { projection: { role: 1, username: 1, emailHash: 1, emailMasked: 1 } });
     if (!target) return res.status(404).json({ error: "Account not found." });
     if (target.role === "owner") return res.status(403).json({ error: "Owner accounts cannot be changed from player management." });
     if (req.user.role === "moderator" && ["admin", "moderator", "level-maker"].includes(target.role)) {
@@ -3296,9 +3438,11 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderati
       }
     }
     let progress;
+    let priorProgress = null;
     if (req.body?.progress !== undefined) {
       progress = validatePlayerProgress(req.body.progress);
       if (!progress) return res.status(400).json({ error: "Player progress is invalid or exceeds the allowed size." });
+      priorProgress = await db.collection("player_progress").findOne({ _id: userId }, { projection: { data: 1 } });
     }
     if (Object.keys(updates).length || Object.keys(unsets).length) {
       try {
@@ -3313,9 +3457,12 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderati
     }
     if (progress !== undefined) {
       const progressCollection = db.collection("player_progress");
-      const existingProgress = await progressCollection.findOne({ _id: userId }, { projection: { "data.orbit-last-level": 1 } });
+      const existingProgress = priorProgress ?? await progressCollection.findOne({ _id: userId }, { projection: { "data.orbit-last-level": 1 } });
       if (typeof existingProgress?.data?.["orbit-last-level"] === "string") {
         progress["orbit-last-level"] = existingProgress.data["orbit-last-level"];
+      }
+      if (existingProgress?.data) {
+        await createProgressRecoveryCheckpoint(db, userId, existingProgress.data, "staff-profile-edit", `staff-edit:${userId.toString()}:${crypto.randomUUID()}`);
       }
       const result = await writePlayerProgress(progressCollection, userId, progress, null, true);
       if (!result.progress) return res.status(409).json({ error: "Player data changed concurrently. Retry saving the profile." });
@@ -3324,6 +3471,22 @@ app.patch("/api/admin/users/:id", requireSameOrigin, requirePermission("moderati
     if (updates.role) await db.collection("user_sessions").deleteMany({ userId });
     if (updates.role && updates.role !== "player") {
       await db.collection("leaderboard_entries").deleteMany({ userId });
+    }
+    const changedFields = [
+      ...Object.keys(updates),
+      ...Object.keys(unsets).map((key) => `cleared ${key}`),
+      ...(progress !== undefined ? ["saved progress"] : []),
+    ];
+    if (changedFields.length) {
+      await recordModerationLog(db, {
+        action: "Player profile edited",
+        reason: `Changed: ${changedFields.join(", ")}. A recovery checkpoint was kept before saved-progress changes.`,
+        actorId: req.user.id,
+        actorUsername: req.user.username,
+        targetUserId: userId,
+        targetUsername: target.username,
+      });
+      await recordSecurityEvent(db, { type: "staff-profile-edit", actorId: req.user.id, targetUserId: userId, fields: changedFields });
     }
     res.json({ ok: true, emailMasked, emailSet: Boolean(emailMasked) });
   } catch (error) {
@@ -3512,8 +3675,10 @@ app.post("/api/admin/users/:id/restore", requireSameOrigin, requireOwner, async 
     if (backup.affectedProgress && typeof backup.affectedProgress === "object" && !Array.isArray(backup.affectedProgress)) {
       const progressCollection = db.collection("player_progress");
       const current = await progressCollection.findOne({ _id: userId });
-      const merged = { ...(current?.data ?? {}), ...backup.affectedProgress };
-      const result = await writePlayerProgress(progressCollection, userId, merged, null, true);
+      const restoredProgress = backup.fullProgress === true
+        ? backup.affectedProgress
+        : { ...(current?.data ?? {}), ...backup.affectedProgress };
+      const result = await writePlayerProgress(progressCollection, userId, restoredProgress, null, true);
       if (!result.progress) return res.status(409).json({ error: "Player progress changed concurrently. Retry restoring the profile." });
     }
     if (backup.categories.includes("leaderboard")) {
@@ -4500,6 +4665,7 @@ async function initializeDatabaseOnce() {
     db.collection("reward_events").createIndex({ userId: 1, createdAt: -1 }),
     recoveryAttempts.createIndex({ lockedUntil: 1 }),
     db.collection("profile_backups").createIndex({ userId: 1, createdAt: -1 }),
+    db.collection("profile_backups").createIndex({ userId: 1, checkpointKey: 1 }, { unique: true, sparse: true }),
     db.collection("redemption_codes").createIndex({ codeHash: 1 }, { unique: true }),
     db.collection("code_redemptions").createIndex({ codeId: 1, userId: 1 }, { unique: true }),
     db.collection("code_redemption_logs").createIndex({ codeId: 1, redeemedAt: -1 }),

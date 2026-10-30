@@ -772,6 +772,20 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .ship-flame { background: #f6c46e; }
 .game-frame .asteroid { position: absolute; z-index: 4; display: grid; place-items: center; width: 48px; height: 48px; border: 2px solid #f6c46e; border-radius: 43% 57% 60% 40%; color: #f6c46e; background: #76564b; box-shadow: 0 0 20px #f6c46e99, inset 7px -5px #b8755699; font-size: 1.4rem; animation: tumble 3s linear infinite; }
 .game-frame .asteroid.special { border-color: #fff; color: #fff; background: #f58bff; box-shadow: 0 0 0 5px #f58bff44, 0 0 28px #fff, inset 7px -5px #b991ff; }
+.game-frame .asteroid.present { overflow: visible; width: 42px; height: 38px; border: 2px solid #fff0a1; border-radius: 3px; color: transparent; background: linear-gradient(135deg, #e33b4d 0 48%, #bd1f35 49% 100%); box-shadow: 0 0 0 3px #c91f3755, 0 0 19px #f6c46e99, inset -5px -6px #8d162a88; animation: present-float 1.35s ease-in-out infinite; }
+.game-frame .asteroid.present::before { position: absolute; z-index: -1; right: -8px; bottom: -10px; width: 55px; height: 19px; content: ""; border-radius: 50%; background: radial-gradient(ellipse, #f6c46e88 0 18%, #e6394644 42%, transparent 70%); filter: blur(2px); animation: present-glow 1.35s ease-in-out infinite; }
+.game-frame .asteroid.present .present-lid { position: absolute; top: -6px; left: -3px; width: 44px; height: 10px; border: 2px solid #fff0a1; border-radius: 4px 4px 2px 2px; background: linear-gradient(135deg, #f24a5e, #c91f37); box-shadow: 0 -2px 8px #f6c46e77; }
+.game-frame .asteroid.present .present-ribbon { position: absolute; z-index: 2; background: linear-gradient(90deg, #fff7bd, #f6c46e 48%, #c98d2b); box-shadow: 0 0 5px #fff0a1; }
+.game-frame .asteroid.present .present-ribbon.vertical { top: -6px; bottom: 0; left: 17px; width: 7px; }
+.game-frame .asteroid.present .present-ribbon.horizontal { top: 13px; right: 0; left: 0; height: 7px; }
+.game-frame .asteroid.present .present-bow { position: absolute; z-index: 3; top: -14px; width: 16px; height: 11px; border: 3px solid #fff0a1; background: #e63946; box-shadow: 0 0 8px #f6c46e; }
+.game-frame .asteroid.present .present-bow.left { left: 5px; border-radius: 80% 26% 75% 24%; transform: rotate(-20deg); }
+.game-frame .asteroid.present .present-bow.right { right: 5px; border-radius: 26% 80% 24% 75%; transform: rotate(20deg); }
+.game-frame .asteroid.present .present-sparkle { position: absolute; z-index: 4; width: 5px; height: 5px; border-radius: 50%; background: #fffbe1; box-shadow: 0 0 8px 3px #fff0a1; animation: present-sparkle 1.1s ease-in-out infinite alternate; }
+.game-frame .asteroid.present .present-sparkle.one { top: -18px; right: -10px; }.game-frame .asteroid.present .present-sparkle.two { bottom: -9px; left: -10px; animation-delay: -.55s; }
+@keyframes present-float { 0%, 100% { transform: translateY(0) rotate(-3deg) scale(1); } 50% { transform: translateY(-11px) rotate(4deg) scale(1.08); } }
+@keyframes present-glow { 0%, 100% { opacity: .55; transform: scale(.85); } 50% { opacity: 1; transform: scale(1.2); } }
+@keyframes present-sparkle { from { transform: scale(.4); opacity: .35; } to { transform: scale(1.3); opacity: 1; } }
 .game-frame .asteroid.reclaimable { opacity: .52; filter: saturate(.55); }
 .game-frame .asteroid.claimed { opacity: 0; transform: scale(1.8) rotate(180deg); transition: .3s; }
 .hazard { position: absolute; z-index: 3; pointer-events: none; }
@@ -1258,6 +1272,11 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .tester-console-header h1 { font-size: clamp(2.6rem, 6vw, 4.7rem); line-height: 1; }
 .tester-console-header .menu-copy { max-width: none; margin: 12px 0 0; font-size: .9rem; }
 .tester-scope-badge { flex: none; padding: 8px 11px; border: 1px solid #f6c46e77; border-radius: 3px; color: #f6c46e; background: #101b2ba8; font: .62rem 'DM Mono', monospace; letter-spacing: 1px; }
+.owner-change-scope { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(210px, 280px); align-items: center; gap: 12px; width: min(520px, 100%); padding: 10px 12px; border: 1px solid #547185; background: #102838cc; }
+.owner-change-scope span { display: grid; gap: 3px; }
+.owner-change-scope b { color: #f6c46e; font: .68rem 'DM Mono', monospace; letter-spacing: .8px; text-transform: uppercase; }
+.owner-change-scope small { color: #a9c1b9; font: .6rem/1.4 'DM Mono', monospace; }
+.owner-change-scope select { min-width: 0; }
 .tester-console { display: grid; grid-template-columns: minmax(190px, 235px) minmax(0, 1fr); width: min(1120px, 100%); min-height: 540px; border: 1px solid #486375; background: #101b2bdb; box-shadow: 0 18px 55px #08121f66; text-align: left; }
 .tester-sidebar { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 20px 12px; border-right: 1px solid #385267; background: #0d1c2caa; }
 .tester-sidebar-heading { margin: 18px 9px 7px; color: #86a6a8; font: .6rem 'DM Mono', monospace; letter-spacing: 1.4px; text-transform: uppercase; }
@@ -1319,6 +1338,7 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @media (max-width: 720px) {
   .tester-screen { padding: 35px 16px 50px; }
   .tester-console-header { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .owner-change-scope { grid-template-columns: 1fr; }
   .tester-console { grid-template-columns: minmax(0, 1fr); min-height: 0; }
   .account-settings-dashboard { grid-template-columns: minmax(0, 1fr); }
   .account-settings-dashboard .tester-sidebar { min-height: 0; }

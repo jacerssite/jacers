@@ -68,6 +68,7 @@ let playerX = 120;
 let playerY = 300;
 let verticalSpeed = 0;
 let jumpCount = 0;
+let lastJumpInputAt = 0;
 let asteroidsClaimed = Number(localStorage.getItem("orbit-claims") ?? "0");
 let specialAsteroids = Number(localStorage.getItem("orbit-special-claims") ?? "0");
 let prestigeLevel = Number(localStorage.getItem("orbit-prestige") ?? "0");
@@ -133,6 +134,7 @@ let portalTransitTimer = 0;
 let lastDownPressAt = 0;
 let spinInProgress = false;
 let activePlanet: "normal" | "prestige" = "normal";
+let planetTransitionInProgress = false;
 let secretBossRoomActive = false;
 let secretBoss: Boss | null = null;
 let currentSecretPortalTarget: string | null = null;
@@ -258,9 +260,13 @@ function goToPreviousAppPage() {
 const gameAppPage: AppPage = () => startGame(currentLevel);
 
 const OWNER_TEST_INVENTORY_AMOUNT = 100000;
+const OWNER_CHANGE_SCOPE_KEY = "orbit-owner-change-scope";
 // These helpers only decide which controls to show. The server repeats the
 // same checks, so editing the browser cannot grant a staff permission.
 function hasOwnerAccess() { return currentOnlineUser?.role === "owner" || currentOnlineUser?.role === "developer"; }
+function ownerChangesAreLocal() {
+    return hasOwnerAccess() && (offlineOwnerMode || localStorage.getItem(OWNER_CHANGE_SCOPE_KEY) === "local");
+}
 function hasTesterTools() { return hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester"; }
 function hasModerationTools() { return hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "moderator"; }
 function hasWorkshopTools() { return hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "level-maker"; }
@@ -687,6 +693,7 @@ const LOCAL_DEVICE_PREFERENCE_KEYS = new Set([
     "orbit-music-track",
     "orbit-reduced-effects",
     "orbit-global-level-cache",
+    OWNER_CHANGE_SCOPE_KEY,
 ]);
 
 function clearLocalAccountData() {
@@ -767,6 +774,11 @@ function showAccountSyncConflict(message: string) {
 
 async function syncAccountProgress(direction: "load" | "save", force = false) {
     if (!currentOnlineUser) return;
+    // Owners and developers can deliberately keep control-center experiments
+    // on this browser. Normal players never use this mode, so their entire
+    // orbit progress (currency, presents, inventory, levels, and cosmetics)
+    // continues to sync as usual.
+    if (direction === "save" && ownerChangesAreLocal()) return;
     while (accountRedemptionInFlight || accountProgressSyncing) {
         if (direction === "save" && !force) return;
         await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 20));
@@ -898,6 +910,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
 }
 
 let accountSaveQueued = false;
+let remoteProgressRefreshInFlight = false;
 function saveAccountProgressSoon() {
     if (accountSaveQueued || !currentOnlineUser || loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) return;
     accountSaveQueued = true;
@@ -908,6 +921,35 @@ function saveAccountProgressSoon() {
         accountSaveQueued = false;
         void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save account progress:", error));
     }, 150);
+}
+
+// Staff edits occur on the server and should arrive on a player's other
+// signed-in devices without asking them to refresh or risking an older local
+// snapshot overwriting the edit.
+async function refreshRemoteProgressIfChanged() {
+    if (remoteProgressRefreshInFlight || !currentOnlineUser || loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) return;
+    remoteProgressRefreshInFlight = true;
+    const identity = accountIdentity(currentOnlineUser);
+    try {
+        const { progress } = await apiRequest<{ progress: Record<string, string> | null }>("/account/progress");
+        if (!progress || accountIdentity(currentOnlineUser) !== identity) return;
+        const remote = serializeAccountProgress(progress);
+        if (!lastSyncedAccountProgress || remote === lastSyncedAccountProgress) return;
+        const local = getLocalAccountProgress();
+        // Do not discard a just-finished local level. Its explicit save will
+        // either succeed or report a safe conflict instead of losing data.
+        if (serializeAccountProgress(local) !== lastSyncedAccountProgress) {
+            saveAccountProgressSoon();
+            return;
+        }
+        applySyncedProgress(local, progress);
+        lastSyncedAccountProgress = remote;
+        rememberProgressSnapshot(identity, progress);
+    } catch (error) {
+        console.error("Could not refresh server-edited player progress:", error);
+    } finally {
+        remoteProgressRefreshInFlight = false;
+    }
 }
 
 async function restoreOnlineSession() {
@@ -967,7 +1009,7 @@ async function refreshOnlineState(includeSession = true) {
     results.forEach((result) => {
         if (result.status === "rejected") console.error("Could not load part of the online service:", result.reason);
     });
-    if (currentOnlineUser?.role === "tester" || currentOnlineUser?.role === "admin") {
+    if (currentOnlineUser?.role === "tester" || currentOnlineUser?.role === "admin" || ownerChangesAreLocal()) {
         const storedOverride = localStorage.getItem("orbit-tester-game-config");
         if (storedOverride) {
             try {
@@ -988,6 +1030,28 @@ async function refreshOnlineState(includeSession = true) {
             } catch (error) {
                 localStorage.removeItem("orbit-tester-roulette-tiers");
                 console.error("Discarded invalid tester-only roulette settings:", error);
+            }
+        }
+        const storedTitleOverride = localStorage.getItem("orbit-tester-profile-titles");
+        if (storedTitleOverride) {
+            try {
+                const parsed: unknown = JSON.parse(storedTitleOverride);
+                if (isUsableProfileTitles(parsed)) profileTitles = parsed;
+                else throw new Error("Stored tester titles are malformed.");
+            } catch (error) {
+                localStorage.removeItem("orbit-tester-profile-titles");
+                console.error("Discarded invalid tester-only titles:", error);
+            }
+        }
+        const storedPortalOverride = localStorage.getItem("orbit-tester-portal-assignments");
+        if (storedPortalOverride) {
+            try {
+                const parsed: unknown = JSON.parse(storedPortalOverride);
+                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.values(parsed).some((value) => typeof value !== "string")) throw new Error("Stored portal assignments are malformed.");
+                portalAssignments = parsed as Record<string, string>;
+            } catch (error) {
+                localStorage.removeItem("orbit-tester-portal-assignments");
+                console.error("Discarded invalid tester-only portal assignments:", error);
             }
         }
     }
@@ -1125,7 +1189,10 @@ export function startApp() {
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
     });
     if (!accountProgressTimer) accountProgressTimer = globalThis.setInterval(() => {
-        if (!offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
+        if (!offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) {
+            void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
+            void refreshRemoteProgressIfChanged();
+        }
     }, 1000);
     if (!accountNoticeTimer) accountNoticeTimer = globalThis.setInterval(() => void refreshAccountNotices(), 7000);
 }
@@ -1278,13 +1345,17 @@ function unlockMusic() {
 }
 
 const MUSIC_STEP_MS = 390;
+const CHRISTMAS_MUSIC_STEP_MS = 330;
 const MUSIC_PATTERNS: Record<MusicScene, readonly number[]> = {
     menu: [0, 2, 4, 7, 9, 7, 4, 2, 0, 4, 7, 9, 12, 9, 7, 4],
     normal: [0, 4, 7, 9, 12, 9, 7, 4, 0, 4, 7, 12, 9, 7, 4, 2],
     prestige: [2, 4, 7, 9, 12, 9, 7, 4, 2, 7, 9, 12, 14, 12, 9, 7],
     secret: [0, 2, 4, 7, 9, 12, 9, 7, 0, 4, 7, 9, 12, 14, 12, 9],
     boss: [0, 2, 4, 7, 9, 7, 4, 2, 0, 2, 7, 9, 7, 4, 2, 0],
-    christmas: [0, 4, 7, 4, 2, 5, 9, 5, 0, 4, 7, 11, 9, 7, 5, 2],
+    // A bright, original winter progression rather than a copy of a named
+    // Christmas song. The bell layer below makes the holiday setting obvious
+    // even at low volume.
+    christmas: [0, 4, 7, 12, 7, 4, 2, 5, 0, 4, 9, 12, 11, 7, 5, 2],
 };
 
 function musicSceneRoot(scene: MusicScene) {
@@ -1298,7 +1369,7 @@ function stopMusicSequence() {
     }
 }
 
-function scheduleMusicStep(delay = MUSIC_STEP_MS) {
+function scheduleMusicStep(delay = musicScene === "christmas" ? CHRISTMAS_MUSIC_STEP_MS : MUSIC_STEP_MS) {
     if (selectedMusicTrackId !== "original" || !musicUnlocked || musicMuted || !musicContext || musicSequenceTimer !== null) return;
     musicSequenceTimer = globalThis.setTimeout(() => {
         musicSequenceTimer = null;
@@ -1329,6 +1400,23 @@ function playMusicStep() {
     voice.connect(filter);
     oscillator.start(now);
     oscillator.stop(now + duration + 0.03);
+    if (musicScene === "christmas") {
+        // Two short, high sine voices act like a small handbell / sleigh-bell
+        // sparkle without requiring a downloaded music asset or a license.
+        [4, 6.02].forEach((partial, index) => {
+            const bell = context.createOscillator();
+            const bellGain = context.createGain();
+            bell.type = "sine";
+            bell.frequency.setValueAtTime(frequency * partial, now + index * 0.025);
+            bellGain.gain.setValueAtTime(0.0001, now + index * 0.025);
+            bellGain.gain.exponentialRampToValueAtTime(index === 0 ? 0.055 : 0.024, now + 0.045 + index * 0.025);
+            bellGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.52 + index * 0.04);
+            bell.connect(bellGain);
+            bellGain.connect(filter);
+            bell.start(now + index * 0.025);
+            bell.stop(now + 0.57 + index * 0.04);
+        });
+    }
     // A soft low pulse gives the melody a beat without turning the calm
     // soundtrack into a harsh drum loop.
     const pulse = context.createOscillator();
@@ -1444,26 +1532,26 @@ function setMusicScene(scene: MusicScene) {
     scheduleMusicStep(120);
 }
 
-function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "roulette" | "reward" | "lose" | "message") {
+function playSound(kind: "shoot" | "enemy" | "explode" | "ability" | "ui" | "roulette" | "reward" | "lose" | "message" | "warp") {
     if (!musicContext || musicMuted) return;
     try {
         const frequencies: Record<typeof kind, number> = {
             shoot: 420, enemy: 180, explode: 90, ability: 620, ui: 300,
-            roulette: 260, reward: 880, lose: 70, message: 540,
+            roulette: 260, reward: 880, lose: 70, message: 540, warp: 150,
         };
         const oscillator = musicContext.createOscillator();
         const gain = musicContext.createGain();
         const now = musicContext.currentTime;
-        oscillator.type = kind === "explode" || kind === "lose" ? "sawtooth" : kind === "reward" || kind === "roulette" || kind === "message" ? "triangle" : "square";
+        oscillator.type = kind === "explode" || kind === "lose" ? "sawtooth" : kind === "reward" || kind === "roulette" || kind === "message" || kind === "warp" ? "triangle" : "square";
         oscillator.frequency.setValueAtTime(frequencies[kind], now);
-        oscillator.frequency.exponentialRampToValueAtTime(Math.max(35, frequencies[kind] * (kind === "reward" ? 1.5 : kind === "message" ? 1.15 : 0.55)), now + (kind === "ui" ? 0.07 : 0.18));
+        oscillator.frequency.exponentialRampToValueAtTime(Math.max(35, frequencies[kind] * (kind === "warp" ? 5.4 : kind === "reward" ? 1.5 : kind === "message" ? 1.15 : 0.55)), now + (kind === "warp" ? 0.48 : kind === "ui" ? 0.07 : 0.18));
         gain.gain.setValueAtTime(0.0001, now);
         gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, musicVolume * 0.12), now + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + (kind === "explode" || kind === "lose" ? 0.38 : kind === "message" ? 0.24 : 0.16));
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + (kind === "warp" ? 0.52 : kind === "explode" || kind === "lose" ? 0.38 : kind === "message" ? 0.24 : 0.16));
         oscillator.connect(gain);
         gain.connect(musicContext.destination);
         oscillator.start(now);
-        oscillator.stop(now + 0.4);
+        oscillator.stop(now + (kind === "warp" ? 0.56 : 0.4));
     } catch (error) {
         console.error("Could not play game sound:", error);
     }
@@ -1804,6 +1892,42 @@ function setChristmasPresents(value: number) {
     saveAccountProgressSoon();
 }
 function isChristmasLevel(level: Level | undefined) { return level?.holiday === "christmas"; }
+function christmasServerCooldownKey(levelIndex: number) { return `orbit-christmas-server-cooldown-${levelIndex}`; }
+function getChristmasCooldownUntil(levelIndex: number) {
+    const serverCooldown = Number(localStorage.getItem(christmasServerCooldownKey(levelIndex)) ?? "0");
+    if (Number.isSafeInteger(serverCooldown) && serverCooldown > 0) return serverCooldown;
+    // Keeps already-started guest/offline routes readable while moving signed
+    // in players to server-owned cooldowns.
+    const legacyCooldown = Number(localStorage.getItem(`orbit-christmas-cooldown-${levelIndex}`) ?? "0");
+    return Number.isSafeInteger(legacyCooldown) && legacyCooldown > 0 ? legacyCooldown : 0;
+}
+function respawnChristmasPresents(levelIndex: number) {
+    respawnSecretAsteroids(levelIndex);
+    localStorage.removeItem(christmasServerCooldownKey(levelIndex));
+    localStorage.removeItem(`orbit-christmas-cooldown-${levelIndex}`);
+}
+async function completeChristmasRoute(levelIndex: number) {
+    if (!currentOnlineUser) return;
+    await flushPendingAsteroidRewards(levels[levelIndex]?.name ?? "");
+    // Persist the ordinary completion, best-time, and next-route unlock
+    // before the server adds its cooldown marker. This prevents the cooldown
+    // response from ever replacing a just-finished route with an older cloud
+    // snapshot.
+    await syncAccountProgress("save", true);
+    const sent = getLocalAccountProgress();
+    const result = await apiRequest<{ progress: Record<string, string>; expiresAt: number }>(`/holiday/christmas-routes/${levelIndex}/complete`, { method: "POST", body: "{}" });
+    applySyncedProgress(sent, result.progress);
+    lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+    rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+}
+async function refreshChristmasRoutePresents(levelIndex: number) {
+    if (!currentOnlineUser) { respawnChristmasPresents(levelIndex); return; }
+    const sent = getLocalAccountProgress();
+    const result = await apiRequest<{ progress: Record<string, string> }>(`/holiday/christmas-routes/${levelIndex}/respawn`, { method: "POST", body: "{}" });
+    applySyncedProgress(sent, result.progress);
+    lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+    rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+}
 
 function enterChristmasEvent() {
     if (!canAccessChristmasEvent()) return showMenu();
@@ -1830,7 +1954,7 @@ function showChristmasEvent() {
     levelsList.className = "level-list christmas-level-list";
     levels.forEach((level, index) => {
         if (!isChristmasLevel(level)) return;
-        const until = Number(localStorage.getItem(`orbit-christmas-cooldown-${index}`) ?? "0");
+        const until = getChristmasCooldownUntil(index);
         const remaining = Math.max(0, until - Date.now());
         const button = document.createElement("button");
         button.type = "button";
@@ -3362,7 +3486,7 @@ function controlKeysFor(action: ControlAction) {
 }
 
 function getInventory(): Record<PowerupKind, number> {
-    if (hasOwnerAccess() || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester") return { shield: OWNER_TEST_INVENTORY_AMOUNT, boost: OWNER_TEST_INVENTORY_AMOUNT, rapid: OWNER_TEST_INVENTORY_AMOUNT, cannon: OWNER_TEST_INVENTORY_AMOUNT, star: OWNER_TEST_INVENTORY_AMOUNT };
+    if ((hasOwnerAccess() && ownerChangesAreLocal()) || currentOnlineUser?.role === "admin" || currentOnlineUser?.role === "tester") return { shield: OWNER_TEST_INVENTORY_AMOUNT, boost: OWNER_TEST_INVENTORY_AMOUNT, rapid: OWNER_TEST_INVENTORY_AMOUNT, cannon: OWNER_TEST_INVENTORY_AMOUNT, star: OWNER_TEST_INVENTORY_AMOUNT };
     try { return { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0, ...JSON.parse(localStorage.getItem("orbit-powerups") ?? "{}") }; }
     catch { return { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; }
 }
@@ -4006,19 +4130,22 @@ function showDropRates() {
 function canVisitPrestigePlanet() { return prestigeLevel >= 1 || hasOwnerAccess(); }
 
 function switchPlanet() {
+    if (planetTransitionInProgress || gameActive) return;
     if (activePlanet === "normal" && !canVisitPrestigePlanet()) {
         showLevelMenu();
         return;
     }
+    planetTransitionInProgress = true;
     const departingPlanet = activePlanet;
     activePlanet = activePlanet === "normal" ? "prestige" : "normal";
+    playSound("warp");
     document.body.classList.toggle("prestige-theme", activePlanet === "prestige");
     showLevelMenu();
     const transition = document.createElement("div");
     transition.className = `planet-transition ${activePlanet}`;
     transition.innerHTML = `<div class="planet-transition-stars" aria-hidden="true"></div><div class="planet-transition-world departing ${departingPlanet}"><i></i></div><div class="planet-transition-flight" aria-hidden="true">✦</div><div class="planet-transition-world arriving ${activePlanet}"><i></i></div><div class="planet-transition-copy"><b>${activePlanet === "prestige" ? "WARPING TO PRESTIGE ORBIT" : "RETURNING TO BLUE PLANET"}</b><span>${activePlanet === "prestige" ? "Passing the rings" : "Descending through blue atmosphere"}</span></div>`;
     document.body.append(transition);
-    globalThis.setTimeout(() => transition.remove(), 1500);
+    globalThis.setTimeout(() => { transition.remove(); planetTransitionInProgress = false; }, 1500);
 }
 
 function createLoadoutPanel() {
@@ -4166,6 +4293,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const isModerator = user.role === "moderator";
     const isLevelMaker = user.role === "level-maker";
     const isOfflineOwner = offlineOwnerMode && isOwner;
+    let ownerChangeScope: "local" | "public" = isOfflineOwner || localStorage.getItem(OWNER_CHANGE_SCOPE_KEY) === "local" ? "local" : "public";
+    const publishesOwnerChanges = () => isOwner && !isOfflineOwner && ownerChangeScope === "public";
     const canTest = isOwner || isAdmin || user.role === "tester";
     const canModerate = isOwner || isAdmin || isModerator;
     const canWorkshop = isOwner || isAdmin || isLevelMaker;
@@ -4174,6 +4303,28 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const pageHeader = document.createElement("div");
     pageHeader.className = "tester-console-header";
     pageHeader.innerHTML = `<div><p class="eyebrow">FLIGHT SYSTEMS / ${roleLabel(user.role)}</p><h1>Control <em>center</em></h1><p class="menu-copy">${isOfflineOwner ? "Offline owner mode is local-only. Changes stay on this device until you reconnect." : isOwner ? "Manage your game and pilots from one place." : isAdmin ? "Manage approved content, levels, messages, and local test tools." : isModerator ? "Review accounts and enforce bans without access to player rewards." : isLevelMaker ? "Build and playtest workshop levels." : "Test game settings and progression on this device."}</p></div><span class="tester-scope-badge">${isOfflineOwner ? "OFFLINE / LOCAL ONLY" : isOwner ? "OWNER ACCESS" : user.role === "tester" ? "LOCAL TEST MODE" : `${roleLabel(user.role)} ACCESS`}</span>`;
+    if (isOwner) {
+        const scopeControl = document.createElement("label");
+        scopeControl.className = "owner-change-scope";
+        const scopeCopy = document.createElement("span");
+        scopeCopy.innerHTML = `<b>Change scope</b><small>Choose whether Control Center saves affect this device only or the live game.</small>`;
+        const scopeSelect = document.createElement("select");
+        scopeSelect.setAttribute("aria-label", "Owner change scope");
+        [["public", "Public — save for all players"], ["local", "Local — this device only"]].forEach(([value, label]) => {
+            const option = document.createElement("option"); option.value = value; option.textContent = label; scopeSelect.append(option);
+        });
+        scopeSelect.value = ownerChangeScope;
+        scopeSelect.disabled = isOfflineOwner;
+        scopeSelect.addEventListener("change", () => {
+            ownerChangeScope = scopeSelect.value === "local" ? "local" : "public";
+            localStorage.setItem(OWNER_CHANGE_SCOPE_KEY, ownerChangeScope);
+            scopeCopy.querySelector("small")!.textContent = ownerChangeScope === "local"
+                ? "Local mode keeps Control Center tests and profile changes on this browser."
+                : "Public mode publishes your saved settings and profile changes to the live game.";
+        });
+        scopeControl.append(scopeCopy, scopeSelect);
+        pageHeader.append(scopeControl);
+    }
     const worldTabs = document.createElement("nav");
     worldTabs.className = "tester-world-tabs";
     worldTabs.setAttribute("aria-label", "World settings");
@@ -4332,17 +4483,24 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             profileTitles = [{ id: `title-${draft.length + 1}`, name: "New title", routes: 1, requirement: { type: "routes", amount: 1 } }, ...draft];
             drawTitleManagement();
         });
-        const save = createTextButton("Save titles for everyone", async () => {
+        const save = createTextButton(publishesOwnerChanges() ? "Save titles for everyone" : "Save titles locally", async () => {
             const nextTitles: ProfileTitle[] = readDraftTitles();
             save.disabled = true;
-            status.textContent = "Saving titles for every player...";
+            const publishChanges = publishesOwnerChanges();
+            status.textContent = publishChanges ? "Saving titles for every player..." : "Saving titles on this device...";
             try {
-                const response = await apiRequest<{ profileTitles: ProfileTitle[] }>("/settings/profile-titles", {
-                    method: "PUT",
-                    body: JSON.stringify({ profileTitles: nextTitles }),
-                });
-                profileTitles = response.profileTitles;
-                status.textContent = "Profile titles saved for every player.";
+                if (publishChanges) {
+                    const response = await apiRequest<{ profileTitles: ProfileTitle[] }>("/settings/profile-titles", {
+                        method: "PUT",
+                        body: JSON.stringify({ profileTitles: nextTitles }),
+                    });
+                    profileTitles = response.profileTitles;
+                    status.textContent = "Profile titles saved for every player.";
+                } else {
+                    profileTitles = nextTitles;
+                    localStorage.setItem("orbit-tester-profile-titles", JSON.stringify(profileTitles));
+                    status.textContent = "Profile titles saved on this device only.";
+                }
                 drawTitleManagement();
             } catch (error) {
                 status.textContent = error instanceof Error ? error.message : "Could not save profile titles.";
@@ -4390,7 +4548,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const heading = document.createElement("h2");
         heading.textContent = "Holiday updates";
         const description = document.createElement("p");
-        description.textContent = isOwner
+        description.textContent = publishesOwnerChanges()
             ? "Launch or pause the Christmas event for everyone. It adds a decorated holiday area, six 15-minute-cooldown routes, presents, the present wheel, and limited rewards."
             : "Tester preview only. You can open and test the Christmas event on this device without changing the live game.";
         const toggle = document.createElement("label");
@@ -4427,12 +4585,13 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         const seasonEnd = annualDateInput("Christmas season ends", holidayEvent.christmasSeasonEnd ?? "12-31", "Christmas season end date");
         const adventStart = annualDateInput("Advent calendar starts", holidayEvent.adventStart ?? "12-01", "Advent calendar start date");
         const adventEnd = annualDateInput("Advent calendar ends", holidayEvent.adventEnd ?? "12-25", "Advent calendar end date");
-        const launch = createTextButton(isOwner ? "Save Christmas event" : "Save local preview", async () => {
+        const launch = createTextButton(publishesOwnerChanges() ? "Save Christmas event" : "Save local preview", async () => {
             launch.disabled = true;
-            status.textContent = isOwner ? "Publishing Christmas event..." : "Saving local Christmas preview...";
+            const publishChanges = publishesOwnerChanges();
+            status.textContent = publishChanges ? "Publishing Christmas event..." : "Saving local Christmas preview...";
             try {
                 mergeChristmasTitles();
-                if (isOwner) {
+                if (publishChanges) {
                     const titleResponse = await apiRequest<{ profileTitles: ProfileTitle[] }>("/settings/profile-titles", { method: "PUT", body: JSON.stringify({ profileTitles }) });
                     profileTitles = titleResponse.profileTitles;
                     const annualValue = (input: HTMLInputElement) => input.value.slice(5);
@@ -4440,6 +4599,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                     holidayEvent = response.holidayEvent;
                 } else {
                     localStorage.setItem("orbit-tester-christmas-preview", checkbox.checked ? "1" : "0");
+                    localStorage.setItem("orbit-tester-profile-titles", JSON.stringify(profileTitles));
                 }
                 status.textContent = checkbox.checked ? "Christmas event is ready. Open the main menu to see the tree." : "Christmas event is paused.";
             } catch (error) {
@@ -4684,7 +4844,8 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         }
         saveRoulette.disabled = true;
         try {
-            if (isOwner) {
+            const publishChanges = publishesOwnerChanges();
+            if (publishChanges) {
                 const response = await apiRequest<{ rouletteTiers: RouletteTier[] }>("/settings/roulette-tiers", {
                     method: "PUT",
                     body: JSON.stringify({ tiers: parsed }),
@@ -4695,7 +4856,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 localStorage.setItem("orbit-tester-roulette-tiers", JSON.stringify(rouletteTiers));
             }
             rouletteEditor.draw(rouletteTiers);
-            rouletteStatus.textContent = isOwner ? "Roulette tiers saved for all players." : "Tester-only roulette tiers saved on this device.";
+            rouletteStatus.textContent = publishChanges ? "Roulette tiers saved for all players." : "Roulette tiers saved on this device only.";
         } catch (error) {
             rouletteStatus.textContent = error instanceof Error ? error.message : "Could not save roulette tiers.";
         } finally {
@@ -5013,16 +5174,22 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 if (select.value) assignments[select.dataset.portalAssignment!] = select.value;
             });
             savePortalAssignments.disabled = true;
-            portalStatus.textContent = "Saving portal placement for every player...";
+            const publishChanges = publishesOwnerChanges();
+            portalStatus.textContent = publishChanges ? "Saving portal placement for every player..." : "Saving portal placement on this device...";
             try {
                 const previousAssignments = { ...portalAssignments };
-                const response = await apiRequest<{ portalAssignments: Record<string, string> }>("/settings/portal-assignments", {
-                    method: "PUT",
-                    body: JSON.stringify({ assignments }),
-                });
-                portalAssignments = response.portalAssignments;
+                if (publishChanges) {
+                    const response = await apiRequest<{ portalAssignments: Record<string, string> }>("/settings/portal-assignments", {
+                        method: "PUT",
+                        body: JSON.stringify({ assignments }),
+                    });
+                    portalAssignments = response.portalAssignments;
+                } else {
+                    portalAssignments = assignments;
+                    localStorage.setItem("orbit-tester-portal-assignments", JSON.stringify(portalAssignments));
+                }
                 ["eclipse", "nebula", "archive", "stellar-sanctum", "quantum-depths", "infinity-spiral"].forEach((secretId) => {
-                    if (previousAssignments[secretId] !== response.portalAssignments[secretId]) localStorage.removeItem(`orbit-portal-location-${secretId}`);
+                    if (previousAssignments[secretId] !== portalAssignments[secretId]) localStorage.removeItem(`orbit-portal-location-${secretId}`);
                 });
                 configurePortalDistribution();
                 renderPortalObjects();
@@ -5031,7 +5198,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                     const metadata = input.parentElement?.querySelector<HTMLElement>(".tester-level-meta");
                     if (level && metadata) metadata.textContent = `${getPortalPlacementLabel(level)} / RAINBOW STAR ${getConfiguredRainbowStarChance(Boolean(level.prestige))}%`;
                 });
-                portalStatus.textContent = "Portal placement saved for every player.";
+                portalStatus.textContent = publishChanges ? "Portal placement saved for every player." : "Portal placement saved on this device only.";
             } catch (error) {
                 portalStatus.textContent = error instanceof Error ? error.message : "Could not save portal placement.";
             } finally {
@@ -5149,7 +5316,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
     const saveFooter = document.createElement("div");
     saveFooter.className = "tester-save-footer";
     const saveExplanation = document.createElement("small");
-    saveExplanation.textContent = isOwner ? "Saves shared game rules and this device's test progress." : "Saves tester settings and progress on this device only.";
+    saveExplanation.textContent = isOwner ? "Use Change scope above: Public publishes saved rules and your profile changes; Local keeps the test on this device." : "Saves tester settings and progress on this device only.";
     saveFooter.append(saveExplanation, apply, rewardSettingsError);
     form.append(saveFooter);
     form.addEventListener("submit", async (event) => {
@@ -5157,15 +5324,21 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         // World values are checked together below so the player gets a useful
         // per-world error (for example, rarity odds totaling 101%) instead of
         // the browser's generic number-field warning.
-        const invalidInput = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((input) => !input.closest(".roulette-settings-editor") && !input.closest(".tester-reward-settings") && !input.checkValidity());
-        if (invalidInput) {
-            const sectionId = invalidInput.closest<HTMLElement>("[data-control-section]")?.dataset.controlSection;
-            if (sectionId) selectSection(sectionId);
-            setSaveStatus("Check the highlighted value before saving.", true);
-            invalidInput.focus();
-            invalidInput.reportValidity();
-            return;
-        }
+        // Every world value is validated together below. This deliberately
+        // avoids native form validation across mounted-but-hidden panels:
+        // stale hidden drafts must never prevent the visible panel from being
+        // saved.
+        // Resource fields are account data, not world-rule drafts. Commit
+        // them first so an invalid odds draft in another section can never
+        // make currency or prestige look like it did not save.
+        asteroidsClaimed = Math.max(0, Number(claimsInput.value) || 0);
+        specialAsteroids = Math.max(0, Number(specialInput.value) || 0);
+        prestigeLevel = Math.max(0, Number(prestigeInput.value) || 0);
+        prestigeMax = Math.max(1, Number(prestigeMaxInput.value) || 1);
+        localStorage.setItem("orbit-claims", String(asteroidsClaimed));
+        localStorage.setItem("orbit-special-claims", String(specialAsteroids));
+        localStorage.setItem("orbit-prestige", String(prestigeLevel));
+        localStorage.setItem("orbit-prestige-max", String(prestigeMax));
         const nextConfig = structuredClone(gameConfig);
         let invalidWorld = "";
         (["normal", "prestige"] as const).forEach((world) => {
@@ -5255,10 +5428,11 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             setSaveStatus("Enemy behavior values are invalid. Check the allowed ranges and try again.", true);
             return;
         }
-        setSaveStatus(isOwner ? "Saving shared settings..." : "Saving tester settings...");
+        const publishChanges = publishesOwnerChanges();
+        setSaveStatus(publishChanges ? "Saving public settings..." : "Saving local test settings...");
         apply.disabled = true;
         try {
-            if (isOwner) {
+            if (publishChanges) {
                 const response = await apiRequest<{ config: GameConfig }>("/game-config", {
                     method: "PUT",
                     body: JSON.stringify({ config: nextConfig }),
@@ -5275,7 +5449,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             apply.disabled = false;
             return;
         }
-        setSaveStatus(isOwner ? "Shared game settings saved for all players." : "Tester-only settings saved on this device.");
+        setSaveStatus(publishChanges ? "Public game settings saved for all players." : "Local test settings saved on this device.");
         asteroidsClaimed = Math.max(0, Number(claimsInput.value) || 0);
         specialAsteroids = Math.max(0, Number(specialInput.value) || 0);
         prestigeLevel = Math.max(0, Number(prestigeInput.value) || 0);
@@ -5300,6 +5474,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         });
         form.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => { const level = levels[Number(input.dataset.level)]; if (level.secret && level.secretId) { if (input.checked) localStorage.setItem(`orbit-key-${level.secretId}`, "1"); else localStorage.removeItem(`orbit-key-${level.secretId}`); } else if (input.checked) localStorage.setItem(`orbit-level-${input.dataset.level}`, "1"); else localStorage.removeItem(`orbit-level-${input.dataset.level}`); });
         if (prestigeGateInput.checked) localStorage.setItem("orbit-key-prestige-gate", "1"); else localStorage.removeItem("orbit-key-prestige-gate");
+        if (publishChanges) saveAccountProgressSoon();
     });
     const settingPanel = (id: string, elements: HTMLElement[]) => {
         const panel = document.createElement("section");
@@ -6055,8 +6230,19 @@ function startGame(levelIndex = currentLevel) {
     const level = levels[levelIndex];
     if (!level) return;
     if (isChristmasLevel(level)) {
-        const cooldownUntil = Number(localStorage.getItem(`orbit-christmas-cooldown-${levelIndex}`) ?? "0");
+        const cooldownUntil = getChristmasCooldownUntil(levelIndex);
         if (cooldownUntil > Date.now()) { showChristmasEvent(); return; }
+        if (cooldownUntil > 0) {
+            // The old run is over: clear the server-verified collection record
+            // first, then build a fresh route full of presents.
+            void refreshChristmasRoutePresents(levelIndex)
+                .then(() => startGame(levelIndex))
+                .catch((error: unknown) => {
+                    console.error("Could not respawn Winter Orbit presents:", error);
+                    showChristmasEvent();
+                });
+            return;
+        }
     }
     if (isPrestigeRouteLocked(level)) {
         const required = Math.min(level.prestigeRequirement ?? 1, prestigeMax);
@@ -6107,7 +6293,7 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; snowfallTrailSettling = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; lastJumpInputAt = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; snowfallTrailSettling = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     activeRunProof = null;
     const proofSequence = ++runProofSequence;
     if (!isLevelMakerPreview && currentOnlineUser) void requestRunProof(level.name, proofSequence);
@@ -6128,21 +6314,35 @@ function showWinScreen() {
     }
     const level = levels[currentLevel];
     if (currentOnlineUser) void flushPendingAsteroidRewards(level.name);
-    localStorage.setItem(`orbit-level-claims-${currentLevel}`, String(levelAsteroids.length));
+    // Account rewards store their own verified collection history on the
+    // server. This old local completion counter caused the whole level save
+    // to be rejected by anti-cheat for signed-in players.
+    if (!currentOnlineUser) localStorage.setItem(`orbit-level-claims-${currentLevel}`, String(levelAsteroids.length));
     localStorage.setItem(`orbit-level-complete-${currentLevel}`, "1");
     const previousBest = Number(localStorage.getItem(`orbit-best-${currentLevel}`) ?? "0");
     if (!previousBest || elapsedMilliseconds < previousBest) localStorage.setItem(`orbit-best-${currentLevel}`, String(elapsedMilliseconds));
     if (!level.secret && !level.prestige && !level.holiday && elapsedMilliseconds <= goldenTimeLimitMs) localStorage.setItem(`orbit-golden-level-${currentLevel}`, "1");
     if (isChristmasLevel(level)) {
-        const presents = getChristmasLevelPresentReward(currentLevel);
-        setChristmasPresents(getChristmasPresents() + presents);
-        localStorage.setItem(`orbit-christmas-cooldown-${currentLevel}`, String(Date.now() + 15 * 60 * 1000));
+        // Signed-in players receive one present per verified collectible from
+        // the server, then the server starts the 15-minute route cooldown.
+        // Guests keep the offline reward and local cooldown behavior.
+        if (currentOnlineUser) {
+            void completeChristmasRoute(currentLevel).catch((error: unknown) => console.error("Could not start Winter Orbit cooldown:", error));
+        } else {
+            const presents = getChristmasLevelPresentReward(currentLevel);
+            setChristmasPresents(getChristmasPresents() + presents);
+            localStorage.setItem(`orbit-christmas-cooldown-${currentLevel}`, String(Date.now() + 15 * 60 * 1000));
+        }
     }
     if (usesSecretRouteCooldown(level)) localStorage.setItem(`orbit-secret-cooldown-${level.secretId}`, String(Date.now()));
     const nextLevel = getNextRouteIndex(currentLevel);
     if (nextLevel >= 0) localStorage.setItem(`orbit-level-${nextLevel}`, "1");
     if (levels[currentLevel].boss) localStorage.setItem("orbit-boss-defeated", "1");
     if (levels[currentLevel].secretId === "prestige-gate") localStorage.setItem("orbit-level-complete-prestige-gate", "1");
+    // Queue an explicit cloud save for every finished route. Waiting only for
+    // the background timer meant a player could leave or refresh before their
+    // completion, best time, unlock and cooldown reached their account.
+    if (currentOnlineUser) saveAccountProgressSoon();
     const screen = document.createElement("main");
         screen.className = "win-screen win-screen-animation";
     const prestigeGateCleared = levels[currentLevel].secretId === "prestige-gate";
@@ -6357,7 +6557,19 @@ function createWorldObjects() {
         else if (obstacle.boundary) element.setAttribute("aria-label", "Map boundary");
         world.append(element);
     });
-    levelAsteroids.forEach((asteroid) => { const element = document.createElement("div"); element.className = `asteroid ${asteroid.present ? "present" : ""} ${asteroid.special ? "special" : ""} ${asteroid.claimed ? "claimed" : ""}`; element.textContent = asteroid.present ? "🎁" : asteroid.special ? "✹" : "✦"; element.style.left = `${asteroid.x}px`; element.style.top = `${asteroid.y}px`; world.append(element); });
+    levelAsteroids.forEach((asteroid) => {
+        const element = document.createElement("div");
+        element.className = `asteroid ${asteroid.present ? "present" : ""} ${asteroid.special ? "special" : ""} ${asteroid.claimed ? "claimed" : ""}`;
+        if (asteroid.present) {
+            element.setAttribute("aria-label", "Winter present collectible");
+            element.innerHTML = '<i class="present-lid"></i><i class="present-ribbon vertical"></i><i class="present-ribbon horizontal"></i><i class="present-bow left"></i><i class="present-bow right"></i><i class="present-sparkle one"></i><i class="present-sparkle two"></i>';
+        } else {
+            element.textContent = asteroid.special ? "✹" : "✦";
+        }
+        element.style.left = `${asteroid.x}px`;
+        element.style.top = `${asteroid.y}px`;
+        world.append(element);
+    });
     levelHazards.forEach((hazard) => { const element = document.createElement("div"); element.className = `hazard ${hazard.kind}`; element.style.left = `${hazard.x}px`; element.style.top = `${hazard.y}px`; element.style.width = `${hazard.width}px`; element.style.height = `${hazard.height}px`; if (hazard.kind === "gravity") element.style.setProperty("--gravity-well-scale", String(getGravityWellSettings().visualScale)); element.setAttribute("aria-label", hazard.kind === "spikes" ? "Spike hazard" : "Gravity zone"); world.append(element); });
     levelEnemies.forEach((enemy) => { const element = document.createElement("div"); element.className = `enemy${enemy.defeated ? " defeated" : ""}`; element.style.left = `${enemy.x}px`; element.style.top = `${enemy.y}px`; world.append(element); });
     levelMiniBosses.forEach((miniBoss) => { const element = document.createElement("div"); element.className = `mini-boss dark-knight${miniBoss.defeated ? " defeated" : ""}`; element.setAttribute("aria-label", "Dark Knight guardian"); element.style.left = `${miniBoss.x}px`; element.style.top = `${miniBoss.y}px`; world.append(element); });
@@ -6664,6 +6876,11 @@ function moveDown(distance = 36) {
     playerY = Math.min(FLOOR_Y + 60, playerY + distance); verticalSpeed = 0; gameStarted = true; updatePlayerPosition();
 }
 function jump() {
+    const now = performance.now();
+    // Touch buttons and quick key down/up sequences can otherwise spend both
+    // jumps in one frame and repeatedly exploit side collisions for lift.
+    if (now - lastJumpInputAt < 110) return;
+    lastJumpInputAt = now;
     if (portalTravelInProgress) {
         if (secretBossRoomActive && jumpCount < 2) { jumpCount++; verticalSpeed = jumpPower; trailActive = true; trailPositions = []; }
         return;
@@ -7010,9 +7227,12 @@ function checkCollisions() {
         const vertical = hitbox.y + hitbox.height > obstacle.y && hitbox.y < obstacle.y + obstacle.height;
         const wasAbove = previousHitboxBottom <= obstacle.y;
         const wasBelow = previousHitboxTop >= obstacle.y + obstacle.height;
+        // Only reset the jump allowance when the ship lands on the surface it
+        // is facing. Hitting an underside or ceiling must not restore jumps,
+        // otherwise jump-spam plus horizontal movement can create flight.
         const landed = shipFlipped
-            ? (verticalSpeed >= 0 && wasAbove) || (verticalSpeed < 0 && wasBelow)
-            : (verticalSpeed >= 0 && wasAbove) || (verticalSpeed < 0 && wasBelow);
+            ? verticalSpeed < 0 && wasBelow
+            : verticalSpeed >= 0 && wasAbove;
         if (horizontal && vertical && landed) {
             if (verticalSpeed >= 0 && wasAbove) playerY = obstacle.y - playerHitboxInsetY - playerHitboxHeight;
             else if (verticalSpeed < 0 && wasBelow) playerY = obstacle.y + obstacle.height - playerHitboxInsetY;

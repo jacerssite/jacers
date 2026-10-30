@@ -16,6 +16,15 @@ const SECRET_ROUTE_BY_LEVEL_INDEX = new Map([
 const SECRET_ROUTE_COOLDOWN_MS = 30 * 60 * 1000;
 const CLIENT_MUTABLE_CURRENCY_KEYS = new Set(["orbit-claims", "orbit-special-claims", "orbit-christmas-presents"]);
 const CLIENT_MUTABLE_COLLECTION_KEY = /^orbit-(asteroids|level-claims)-\d+$/;
+// The browser only gets to synchronize presentation choices and ordinary run
+// state. Everything with economic or privileged value is issued by a server
+// endpoint. Keeping this an allowlist is important: adding a future local
+// storage key cannot silently make it cloud-writable.
+const CLIENT_MUTABLE_PROGRESS_KEY = /^(?:orbit-(?:ship-color|avatar|skin|trail|title|last-level|roulette-color-preference|claimed-secret-portals|powerups|enemies-killed|bosses-killed|prestige|prestige-world-unlocked|boss-defeated|secret-unlocked|level-complete-prestige-gate)|orbit-(?:level|level-complete|best|golden-level)-\d+|orbit-key-(?:eclipse|nebula|archive|prestige-gate|stellar-sanctum|quantum-depths|infinity-spiral)|orbit-secret-cooldown-(?:eclipse|nebula|archive|stellar-sanctum|quantum-depths|infinity-spiral)|orbit-christmas-cooldown-\d+)$/;
+
+export function isClientMutableProgressKey(key) {
+  return typeof key === "string" && CLIENT_MUTABLE_PROGRESS_KEY.test(key);
+}
 
 function getExpiredSecretRespawnClaimCount(existing, progress) {
   let allowedClaims = 0;
@@ -49,6 +58,19 @@ export function hasCurrencyConflict(existing, progress, baseline) {
     const localChanged = (progress[key] ?? "0") !== (baseline[key] ?? "0");
     const remoteChanged = (existing[key] ?? "0") !== (baseline[key] ?? "0");
     return localChanged && (remoteChanged || prestigeChanged);
+  });
+}
+
+// A staff edit should never be silently overwritten by an older browser save.
+// The caller already has a revision retry loop; this detects the meaningful
+// case where both sides changed the *same* key from the same base snapshot.
+export function hasProgressConflict(existing, progress, baseline) {
+  if (!existing || !baseline) return false;
+  const keys = new Set([...Object.keys(progress), ...Object.keys(baseline)]);
+  return [...keys].some((key) => {
+    const localChanged = (progress[key] ?? undefined) !== (baseline[key] ?? undefined);
+    const remoteChanged = (existing[key] ?? undefined) !== (baseline[key] ?? undefined);
+    return localChanged && remoteChanged;
   });
 }
 
@@ -120,6 +142,8 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   if (clientCurrencyChange) return `${clientCurrencyChange} is server-owned`;
   const clientCollectionChange = changedKeys.find((key) => CLIENT_MUTABLE_COLLECTION_KEY.test(key));
   if (clientCollectionChange) return `collection history is server-owned: ${clientCollectionChange}`;
+  const unsupportedChange = changedKeys.find((key) => !isClientMutableProgressKey(key));
+  if (unsupportedChange) return `progress key is server-owned: ${unsupportedChange}`;
   for (const key of ["orbit-claims", "orbit-special-claims"]) {
     if (nextCount(key) < readCount(key)) return `${key} cannot decrease in a player sync`;
   }
@@ -157,7 +181,7 @@ export function sanitizeInitialPlayerProgress(progress, role = "player") {
   if (["owner", "developer", "admin", "tester"].includes(role)) return progress;
   const sanitized = { ...progress };
   for (const key of Object.keys(sanitized)) {
-    if (/^orbit-(all-titles|unlock-|spin-|title-unlock-|jackpot-avatar|prestige-max|tester-|christmas-unlock-|christmas-title-unlock-|claims$|special-claims$|christmas-presents$|asteroids-\d+$|level-claims-\d+$)/.test(key)) delete sanitized[key];
+    if (!isClientMutableProgressKey(key)) delete sanitized[key];
   }
   const clampCount = (key, maximum) => {
     const value = sanitized[key];
@@ -169,16 +193,10 @@ export function sanitizeInitialPlayerProgress(progress, role = "player") {
   clampCount("orbit-enemies-killed", 5000);
   clampCount("orbit-bosses-killed", 100);
   clampCount("orbit-prestige", 1);
-  if (sanitized["orbit-powerups"] !== undefined) {
-    try {
-      const inventory = JSON.parse(sanitized["orbit-powerups"]);
-      const safeInventory = Object.fromEntries(["shield", "boost", "rapid", "cannon", "star"]
-        .map((kind) => [kind, Number.isSafeInteger(inventory?.[kind]) && inventory[kind] >= 0 ? Math.min(inventory[kind], 20) : 0]));
-      sanitized["orbit-powerups"] = JSON.stringify(safeInventory);
-    } catch {
-      delete sanitized["orbit-powerups"];
-    }
-  }
+  // Inventory is bought or granted only by trusted server operations. A new
+  // account may keep its harmless route/display data, but cannot import an
+  // arbitrary guest inventory into cloud progress.
+  delete sanitized["orbit-powerups"];
   return sanitized;
 }
 
