@@ -11,3 +11,9 @@ The selectable downloaded tracks are CC0 works sourced from OpenGameArt:
 - `spacelife-14.ogg` — “Spacelife #14” by yd: https://opengameart.org/content/spacelife-14
 
 Each source page identifies the corresponding work as CC0. This file is kept with the assets so the source and license history remains easy to audit.
+
+## Winter Orbit music
+
+- `pulsebox-christmas-music.mp3` — "Christmas Music" by PulseBox, sourced from [Free Music Archive](https://freemusicarchive.org/music/pulsebox/contact), licensed **CC BY-ND**.
+
+Attribution for this track: **"Christmas Music" — PulseBox — Free Music Archive — CC BY-ND.** The unmodified supplied MP3 is used only as Winter Orbit's in-game music. Per the supplied license notice, it is not for video, YouTube, Instagram, Facebook, podcast, or derivative works.

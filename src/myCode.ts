@@ -69,6 +69,7 @@ let playerY = 300;
 let verticalSpeed = 0;
 let jumpCount = 0;
 let lastJumpInputAt = 0;
+let lastManualMovementAt = 0;
 let asteroidsClaimed = Number(localStorage.getItem("orbit-claims") ?? "0");
 let specialAsteroids = Number(localStorage.getItem("orbit-special-claims") ?? "0");
 let prestigeLevel = Number(localStorage.getItem("orbit-prestige") ?? "0");
@@ -156,7 +157,7 @@ let gameChatNoticeTimer = 0;
 let accountNoticeOpen = false;
 let goldenTimeLimitMs = 60000;
 type MusicScene = "menu" | "normal" | "prestige" | "secret" | "boss" | "christmas";
-type MusicTrackId = "original" | "out-in-space" | "space-adventure" | "out-there" | "crazy-space" | "spacelife-14";
+type MusicTrackId = "original" | "out-in-space" | "space-adventure" | "out-there" | "crazy-space" | "spacelife-14" | "pulsebox-christmas";
 type MusicTrack = { id: MusicTrackId; name: string; source?: string; credit: string };
 const MUSIC_TRACKS: readonly MusicTrack[] = [
     { id: "original", name: "Original", credit: "Procedural Space Ambience — generated in-browser by Jacer" },
@@ -165,6 +166,7 @@ const MUSIC_TRACKS: readonly MusicTrack[] = [
     { id: "out-there", name: "Out There", source: "/music/out-there.ogg", credit: "Space Music: Out There by yd — CC0 / OpenGameArt" },
     { id: "crazy-space", name: "Crazy Space", source: "/music/crazy-space.ogg", credit: "Crazy Space by rubberduck — CC0 / OpenGameArt" },
     { id: "spacelife-14", name: "Spacelife 14", source: "/music/spacelife-14.ogg", credit: "Spacelife #14 by yd — CC0 / OpenGameArt" },
+    { id: "pulsebox-christmas", name: "Christmas Music", source: "/music/pulsebox-christmas-music.mp3", credit: "Christmas Music by PulseBox — Free Music Archive — CC BY-ND" },
 ];
 const storedMusicTrack = localStorage.getItem("orbit-music-track") as MusicTrackId | null;
 let selectedMusicTrackId: MusicTrackId = MUSIC_TRACKS.some((track) => track.id === storedMusicTrack) ? storedMusicTrack! : "original";
@@ -1488,19 +1490,16 @@ function setMusicMuted(muted: boolean) {
 }
 
 function useChristmasMusic() {
-    if (musicMuted) return;
     if (christmasMusicPreviousTrack === null) christmasMusicPreviousTrack = selectedMusicTrackId;
-    if (selectedMusicTrackId !== "original") {
-        selectedMusicTrackId = "original";
+    if (selectedMusicTrackId !== "pulsebox-christmas") {
+        selectedMusicTrackId = "pulsebox-christmas";
         stopMusicSequence();
         stopProceduralMusic();
         stopExternalMusic();
     }
+    if (musicMuted) return;
     unlockMusic();
-    if (musicUnlocked) {
-        startProceduralMusic();
-        scheduleMusicStep(40);
-    }
+    if (musicUnlocked) startExternalMusic();
 }
 
 function restorePreferredMusic() {
@@ -2485,7 +2484,7 @@ function showCredits() {
     enterAppPage(showCredits);
     const menu = document.createElement("main"); menu.className = "menu-screen credits-screen";
     // Keep the original crew visible on a dedicated Credits page.
-    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Choose a soundtrack in Settings.</p>`;
+    menu.innerHTML = `<p class="eyebrow">ORBIT RUN / CREDITS</p><h1>Made by <em>the crew</em></h1><p class="menu-copy">A small flight team built every route, ship, and secret.</p><section class="credits-list"><b>vslxped</b><b>Mr. Cline</b><b>riverwth (#1 sql hater)</b></section><p class="music-credit">Music: Original procedural ambience by Jacer, plus CC0 space tracks from OpenGameArt. Winter Orbit music: &ldquo;Christmas Music&rdquo; by PulseBox, Free Music Archive, CC BY-ND. Choose a soundtrack in Settings.</p>`;
     menu.append(createTextButton("Back", showMenu));
     document.body.replaceChildren(menu);
 }
@@ -6293,7 +6292,7 @@ function startGame(levelIndex = currentLevel) {
         void syncAccountProgress("save").catch((error: unknown) => console.error("Could not save the last started level:", error));
     }
     buildLevel(currentLevel);
-    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; lastJumpInputAt = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; snowfallTrailSettling = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
+    playerX = 120; playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; lastJumpInputAt = 0; lastManualMovementAt = 0; projectiles = []; trailElement = []; trailPositions = []; trailDirection = 1; trailActive = false; snowfallTrailSettling = false; projectileTimer = 0; trailTimer = 0; playerShotTimer = 0; shieldCharges = 0; boostTimer = 0; rapidTimer = 0; rapidUntil = 0; rapidCannonUntil = 0; cannonTimer = 0; gameStarted = false; gameActive = true; previousPlayerY = playerY; levelStartedAt = performance.now(); elapsedMilliseconds = 0; usedAbilities = new Set<string>(); powerupUsesThisLevel = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 }; starPowerupActive = false; starPowerupTimer = 0; starPowerupElement = null; resetFlippedVisualState(); portalCooldownUntil = 0; lastFrameTimestamp = 0; currentFrameScale = 1; hudUpdateFrames = 0;
     activeRunProof = null;
     const proofSequence = ++runProofSequence;
     if (!isLevelMakerPreview && currentOnlineUser) void requestRunProof(level.name, proofSequence);
@@ -6822,22 +6821,71 @@ function handleKeyUp(event: KeyboardEvent) {
     pressedKeys.delete(key);
     if (controlKeysFor("shoot").includes(key)) shootingHeld = false;
 }
-function updateHeldMovement() {
-    const direction = Number(controlKeysFor("right").some((key) => pressedKeys.has(key))) - Number(controlKeysFor("left").some((key) => pressedKeys.has(key)));
-    if (!direction) return;
-    playerX = Math.max(20, Math.min(levels[currentLevel].length * TILE_WIDTH, playerX + direction * 4 * currentFrameScale * getMovementMultiplier()));
-    trailMovementFrames = 8;
-    gameStarted = true;
-}
-function moveLeft(distance = 38) { if (portalTravelInProgress) return; playerX = Math.max(20, playerX - distance * getMovementMultiplier()); trailMovementFrames = 8; gameStarted = true; updatePlayerPosition(); }
-function moveRight(distance = 38) { if (portalTravelInProgress) return; playerX = Math.min(levels[currentLevel].length * TILE_WIDTH, playerX + distance * getMovementMultiplier()); trailMovementFrames = 8; gameStarted = true; updatePlayerPosition(); }
-function playerBox(): Box {
+function playerBoxAt(x: number, y = playerY): Box {
     return {
-        x: playerX + playerHitboxInsetX,
-        y: playerY + playerHitboxInsetY,
+        x: x + playerHitboxInsetX,
+        y: y + playerHitboxInsetY,
         width: playerHitboxWidth,
         height: playerHitboxHeight,
     };
+}
+
+// Every horizontal input travels through the route in small collision-checked
+// steps. This prevents a burst of inputs or a delayed frame from skipping a
+// wall, a locked ending, or the beacon.
+function movePlayerHorizontally(distance: number) {
+    if (!gameActive || portalTravelInProgress || !Number.isFinite(distance) || distance === 0) return false;
+    const direction = Math.sign(distance);
+    const levelRightEdge = levels[currentLevel].length * TILE_WIDTH;
+    let remaining = Math.min(Math.abs(distance), 96);
+    let moved = false;
+    while (remaining > 0.001) {
+        const step = Math.min(4, remaining) * direction;
+        const nextX = Math.max(20, Math.min(levelRightEdge, playerX + step));
+        if (nextX === playerX) break;
+        const blocking = levelObstacles.find((obstacle) => intersects(playerBoxAt(nextX), obstacle));
+        if (blocking) {
+            // Stop at the near edge only. Do not push through to the far side,
+            // which was the source of the apparent teleport glitch.
+            const edge = direction > 0
+                ? blocking.x - playerHitboxInsetX - playerHitboxWidth
+                : blocking.x + blocking.width - playerHitboxInsetX;
+            playerX = Math.max(20, Math.min(levelRightEdge, edge));
+            if (blocking.goalLock) statusLabel.textContent = "ENDING LOCKED — enter a portal chamber to recover the required key.";
+            return moved;
+        }
+        playerX = nextX;
+        moved = true;
+        remaining -= Math.abs(step);
+    }
+    if (moved) {
+        trailMovementFrames = 8;
+        gameStarted = true;
+    }
+    return moved;
+}
+
+function updateHeldMovement() {
+    const direction = Number(controlKeysFor("right").some((key) => pressedKeys.has(key))) - Number(controlKeysFor("left").some((key) => pressedKeys.has(key)));
+    if (!direction) return;
+    movePlayerHorizontally(direction * 4 * currentFrameScale * getMovementMultiplier());
+}
+function moveLeft(distance = 38) {
+    const now = performance.now();
+    if (now - lastManualMovementAt < 55) return;
+    lastManualMovementAt = now;
+    movePlayerHorizontally(-Math.min(distance, 16) * getMovementMultiplier());
+    updatePlayerPosition();
+}
+function moveRight(distance = 38) {
+    const now = performance.now();
+    if (now - lastManualMovementAt < 55) return;
+    lastManualMovementAt = now;
+    movePlayerHorizontally(Math.min(distance, 16) * getMovementMultiplier());
+    updatePlayerPosition();
+}
+function playerBox(): Box {
+    return playerBoxAt(playerX, playerY);
 }
 function isInGravityZone() { return levelHazards.some((hazard) => hazard.kind === "gravity" && intersects(playerBox(), hazard)); }
 function applyGravityPull(frameScale: number) {
@@ -7400,10 +7448,18 @@ if (portalTravelInProgress) return;
             updatePlayerPosition();
         }
     }
-    // Check win condition: for prestige levels, require flipped route key; for others, just need key/unlocked
+    // The ship must physically overlap the beacon. Reaching a broad x-range
+    // was enough for rapid right-inputs to finish a route before its end.
+    const beaconBox = {
+        x: (levels[currentLevel].length - 1) * TILE_WIDTH + 140,
+        y: 150,
+        width: 20,
+        height: 250,
+    };
+    // Check win condition: for prestige levels, require flipped route key; for others, just need key/unlocked.
     const isPrestigeLevel = levels[currentLevel].prestige === true;
     const hasWinKey = isPrestigeLevel ? flippedRouteKeyCollected : (!endGoalLocked);
-    if (!inFlippedRoute && playerX > levels[currentLevel].length * TILE_WIDTH - 100 && gameStarted && (!boss || boss.defeated) && hasWinKey) showWinScreen();
+    if (!inFlippedRoute && intersects(playerBox(), beaconBox) && gameStarted && (!boss || boss.defeated) && hasWinKey) showWinScreen();
 }
 
 function activatePowerup(kind: PowerupKind) {
