@@ -1,52 +1,35 @@
 import type { Level } from "./types";
 
 export const levels: Level[] = [
-    { name: "Quiet Orbit", briefing: "Learn the drift. Claim every asteroid and reach the beacon.", length: 12, asteroids: [2, 5, 8], walls: [4], enemies: [], spikes: [], gravity: [] },
-    { name: "Redline Pass", briefing: "The rocks are tighter here. Watch the sentry fire.", length: 15, asteroids: [2, 5, 8, 12], walls: [4, 7], enemies: [9], spikes: [6], gravity: [] },
-    { name: "Gravity Well", briefing: "Gravity wells pull you down. Use a double jump to escape.", length: 17, asteroids: [2, 5, 9, 13, 15], walls: [4, 8, 12], enemies: [7, 14], spikes: [6, 11], gravity: [10] },
-    { name: "Shatter Belt", briefing: "Spikes, sentries, and a long drift. Keep your hull steady.", length: 20, asteroids: [2, 5, 8, 11, 15, 18], walls: [4, 7, 10, 14, 17], enemies: [6, 13, 16], spikes: [5, 12, 16], gravity: [9, 18] },
-    { name: "Last Light", briefing: "The final claim. Bring seven asteroids home through the storm.", length: 23, asteroids: [2, 5, 8, 11, 14, 17, 20], walls: [4, 7, 10, 13, 16, 19], enemies: [6, 12, 15, 21], spikes: [5, 9, 14, 18], gravity: [8, 11, 17, 20], secretPortals: [{ index: 3, secretId: "eclipse" }] },
-    { name: "Ion Cathedral", briefing: "The cathedral hums with static. Break through its sentry choir.", length: 24, asteroids: [2, 5, 8, 12, 15, 19, 22], walls: [4, 7, 11, 14, 18, 21], enemies: [6, 13, 20], spikes: [5, 10, 16, 22], gravity: [9, 17], powerups: [{ index: 3, kind: "shield" }, { index: 16, kind: "cannon" }], miniBosses: [11] },
-    { name: "Neon Graveyard", briefing: "Old ships drift here. Their guardians do not want you leaving.", length: 27, asteroids: [2, 5, 9, 12, 16, 20, 24], walls: [4, 8, 11, 15, 19, 23], enemies: [6, 14, 21], spikes: [5, 10, 17, 22], gravity: [7, 18], powerups: [{ index: 7, kind: "boost" }, { index: 18, kind: "shield" }, { index: 23, kind: "cannon" }], miniBosses: [9, 20] },
-    { name: "Crystal Run", briefing: "Thread the crystal storm, clear the sentries, and hold the lane to the beacon.", length: 30, asteroids: [3, 6, 10, 13, 17, 21, 25, 28], walls: [5, 9, 12, 16, 20, 24, 27], enemies: [7, 15, 23], spikes: [6, 11, 18, 26], gravity: [8, 14, 22], secretPortals: [{ index: 2, secretId: "nebula" }], powerups: [{ index: 5, kind: "rapid" }, { index: 14, kind: "boost" }, { index: 25, kind: "shield" }], miniBosses: [10, 22] },
-    { name: "Titan's Wake", briefing: "The titan is waiting. Every asteroid you claim tears through its armor.", length: 33, asteroids: [3, 6, 9, 12, 15, 18, 21, 24, 28, 30], walls: [5, 8, 11, 14, 17, 20, 23, 26, 29], enemies: [7, 16, 25], spikes: [6, 13, 19, 27], gravity: [10, 18, 24], powerups: [{ index: 4, kind: "shield" }, { index: 15, kind: "rapid" }, { index: 25, kind: "boost" }], miniBosses: [12, 24], boss: true },
-    { name: "Solar Foundry", briefing: "The foundry burns hot. Ride the safe gaps between its moving sentries.", length: 28, asteroids: [2, 6, 10, 14, 18, 22, 26], walls: [4, 8, 12, 16, 20, 24], enemies: [7, 15, 23], spikes: [5, 11, 17, 25], gravity: [9, 19], powerups: [{ index: 3, kind: "shield" }, { index: 13, kind: "boost" }, { index: 21, kind: "cannon" }], miniBosses: [14], boss: true },
-    { name: "Moonlit Ruins", briefing: "Cross the moonlit ruins, break through the guardians, and secure the route beacon.", length: 31, asteroids: [3, 7, 11, 15, 19, 23, 27], walls: [5, 9, 13, 17, 21, 25], enemies: [6, 14, 22, 28], spikes: [8, 12, 20, 26], gravity: [10, 18, 24], powerups: [{ index: 6, kind: "cannon" }, { index: 16, kind: "shield" }, { index: 26, kind: "boost" }], miniBosses: [11, 24] },
-    { name: "Event Horizon", briefing: "One last crossing before the vault. Nothing escapes the horizon unchanged.", length: 36, asteroids: [3, 7, 11, 15, 19, 23, 27, 31, 34], walls: [5, 9, 13, 17, 21, 25, 29, 33], enemies: [6, 14, 22, 30], spikes: [8, 12, 20, 28, 34], gravity: [10, 18, 26, 32], secretPortals: [{ index: 4, secretId: "eclipse" }], powerups: [{ index: 4, kind: "boost" }, { index: 16, kind: "shield" }, { index: 28, kind: "rapid" }], miniBosses: [12, 26] },
-    { name: "Eclipse Vault", briefing: "A hidden route beyond the fourth asteroid. Find the vault and claim its impossible light.", length: 19, asteroids: [2, 4, 7, 10, 13, 16], walls: [3, 6, 9, 12, 15], enemies: [5, 11, 17], spikes: [4, 8, 14], gravity: [7, 16], powerups: [{ index: 6, kind: "shield" }, { index: 14, kind: "boost" }], specialAsteroids: [2, 4, 7, 10, 13, 16], secret: true, secretId: "eclipse", secretPortals: [{ index: 2, secretId: "eclipse" }] },
-    { name: "Comet Nursery", briefing: "Young comets cut across the route. Claim their bright cores and keep your aim ready.", length: 26, asteroids: [2, 6, 10, 14, 18, 22], walls: [4, 8, 12, 16, 20], enemies: [7, 13, 19, 24], spikes: [5, 11, 17, 23], gravity: [9, 21], powerups: [{ index: 3, kind: "cannon" }, { index: 15, kind: "shield" }], miniBosses: [18], prestige: true, prestigeRequirement: 1 },
-    { name: "Prism Citadel", briefing: "The citadel's walls fold light around its guardians. Break the second titan before the beacon.", length: 32, asteroids: [3, 7, 11, 15, 19, 23, 27, 30], walls: [5, 9, 13, 17, 21, 25, 29], enemies: [6, 14, 22, 28], spikes: [8, 12, 20, 26], gravity: [10, 18, 24], powerups: [{ index: 4, kind: "shield" }, { index: 16, kind: "cannon" }, { index: 26, kind: "boost" }], miniBosses: [12, 24], boss: true, prestige: true, prestigeRequirement: 2 },
-    { name: "Afterglow Station", briefing: "Navigate the station's flipped lanes, recover the exit key, and defeat the final guardian.", length: 35, asteroids: [3, 7, 11, 15, 19, 23, 27, 31, 33], walls: [5, 9, 13, 17, 21, 25, 29], enemies: [6, 14, 22, 30], spikes: [8, 12, 20, 28, 33], gravity: [10, 18, 26, 32], powerups: [{ index: 4, kind: "cannon" }, { index: 16, kind: "shield" }, { index: 28, kind: "boost" }], miniBosses: [12, 26], boss: true, prestige: true, prestigeRequirement: 3 },
-    { name: "Nebula Hollow", briefing: "A moonlit route opens this silent passage. Drift through the dark and find the hidden beacon.", length: 25, asteroids: [3, 7, 11, 15, 19, 22], walls: [5, 9, 13, 17, 21], enemies: [6, 14, 20], spikes: [8, 12, 18], gravity: [10, 16, 22], powerups: [{ index: 4, kind: "shield" }, { index: 14, kind: "cannon" }], specialAsteroids: [3, 7, 11, 15, 19, 22], secret: true, secretId: "nebula", secretPortals: [{ index: 2, secretId: "nebula" }] },
-    { name: "Black Hole Archive", briefing: "The archive route spirals into darkness. Survive it and face the keeper.", length: 30, asteroids: [3, 7, 11, 15, 19, 23, 27], walls: [5, 9, 13, 17, 21, 25], enemies: [6, 14, 22, 28], spikes: [8, 12, 20, 26], gravity: [10, 18, 24], powerups: [{ index: 4, kind: "cannon" }, { index: 16, kind: "shield" }, { index: 25, kind: "boost" }], miniBosses: [12, 24], boss: true, secret: true, secretId: "archive", specialAsteroids: [3, 7, 11, 15, 19, 23, 27], secretPortals: [{ index: 2, secretId: "archive" }] },
-    { name: "Prestige Gate", briefing: "The gatekeeper tests every route. Defeat it before claiming your next prestige.", length: 28, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21], enemies: [6, 14, 22], spikes: [8, 12, 20], gravity: [10, 18], powerups: [{ index: 4, kind: "shield" }, { index: 16, kind: "cannon" }], miniBosses: [12], boss: true, secret: true, secretId: "prestige-gate", secretPortals: [{ index: 2, secretId: "prestige-gate" }] },
-    // Prestige-exclusive secret levels with prestige-only keys
-    { name: "Stellar Sanctum", briefing: "A sanctuary hidden in the ringed planet's deep orbit. Only the worthy can claim its stellar core.", length: 28, asteroids: [3, 7, 11, 15, 19, 23, 26], walls: [5, 9, 13, 17, 21], enemies: [6, 14, 22], spikes: [8, 12, 20, 25], gravity: [10, 18], powerups: [{ index: 5, kind: "shield" }, { index: 17, kind: "cannon" }], secretId: "stellar-sanctum", specialAsteroids: [3, 7, 11, 15, 19, 23, 26], secret: true, prestige: true, miniBosses: [14], secretPortals: [{ index: 2, secretId: "stellar-sanctum" }] },
-    { name: "Quantum Depths", briefing: "Reality bends in the quantum realm. Claim the fragments before the tunnel collapses.", length: 32, asteroids: [3, 8, 12, 16, 20, 24, 28, 31], walls: [5, 10, 14, 18, 22, 26, 30], enemies: [7, 17, 25], spikes: [6, 13, 21, 29], gravity: [11, 19, 27], powerups: [{ index: 6, kind: "rapid" }, { index: 18, kind: "boost" }, { index: 28, kind: "shield" }], secretId: "quantum-depths", specialAsteroids: [3, 8, 12, 16, 20, 24, 28, 31], secret: true, prestige: true, miniBosses: [13, 26], secretPortals: [{ index: 2, secretId: "quantum-depths" }] },
-    { name: "Infinity Spiral", briefing: "The spiral stretches beyond infinity. Navigate the impossible geometry and find the Infinity Key.", length: 35, asteroids: [4, 9, 13, 17, 21, 25, 29, 32, 34], walls: [6, 10, 14, 18, 22, 26, 30, 33], enemies: [8, 18, 28], spikes: [7, 14, 22, 30, 34], gravity: [12, 20, 28], powerups: [{ index: 7, kind: "cannon" }, { index: 19, kind: "shield" }, { index: 30, kind: "boost" }], secretId: "infinity-spiral", specialAsteroids: [4, 9, 13, 17, 21, 25, 29, 32, 34], secret: true, prestige: true, miniBosses: [15, 28], boss: true, secretPortals: [{ index: 2, secretId: "infinity-spiral" }] },
+    { name: "Nebula Dawn", briefing: "Slip through the quiet nebula.", length: 13, asteroids: [2, 5, 9, 11], walls: [4, 7], enemies: [6], spikes: [8], gravity: [] },
+    { name: "Crimson Torrent", briefing: "Rocks are closing in.", length: 16, asteroids: [2, 6, 9, 13], walls: [4, 8, 11], enemies: [7, 12], spikes: [5, 10], gravity: [] },
+    { name: "Abyssal Vortex", briefing: "Gravity wells drag you down.", length: 18, asteroids: [2, 6, 10, 14, 16], walls: [4, 9, 12], enemies: [8, 15], spikes: [7, 11, 14], gravity: [12] },
+    { name: "Shattered Expanse", briefing: "Stay precise.", length: 21, asteroids: [2, 6, 9, 13, 16, 19], walls: [4, 8, 11, 15, 18], enemies: [7, 14, 17], spikes: [6, 12, 16, 19], gravity: [10, 17] },
+    { name: "Eternal Twilight", briefing: "Push through the storm.", length: 24, asteroids: [2, 6, 9, 13, 16, 19, 21], walls: [4, 8, 12, 15, 18, 21], enemies: [7, 14, 17, 22], spikes: [6, 11, 16, 20], gravity: [9, 14, 19], secretPortals: [{ index: 3, secretId: "eclipse" }] },
+    { name: "Ion Sanctum", briefing: "Break through its elite choir.", length: 25, asteroids: [2, 6, 9, 13, 16, 20, 23], walls: [4, 8, 12, 15, 19, 22], enemies: [7, 14, 21], spikes: [6, 11, 17, 23], gravity: [10, 18], powerups: [{ index: 4, kind: "shield" }, { index: 17, kind: "cannon" }], miniBosses: [12] },
+    { name: "Starlight Mausoleum", briefing: "Guardians won't surrender.", length: 28, asteroids: [2, 6, 10, 13, 17, 21, 25], walls: [4, 9, 12, 16, 20, 24], enemies: [8, 15, 22], spikes: [7, 11, 18, 23], gravity: [9, 19], powerups: [{ index: 8, kind: "boost" }, { index: 19, kind: "shield" }, { index: 24, kind: "cannon" }], miniBosses: [11, 21] },
+    { name: "Prismatic Gauntlet", briefing: "Survive the barrage.", length: 31, asteroids: [3, 7, 11, 14, 18, 22, 26, 29], walls: [6, 10, 13, 17, 21, 25, 28], enemies: [8, 16, 24], spikes: [7, 12, 19, 27], gravity: [9, 15, 23], secretPortals: [{ index: 2, secretId: "nebula" }], powerups: [{ index: 6, kind: "rapid" }, { index: 15, kind: "boost" }, { index: 26, kind: "shield" }], miniBosses: [12, 23] },
+    { name: "Titan's Crucible", briefing: "Face the colossus.", length: 34, asteroids: [3, 7, 10, 14, 17, 20, 23, 26, 29, 31], walls: [6, 9, 13, 16, 19, 22, 25, 28, 30], enemies: [8, 18, 27], spikes: [7, 15, 21, 29], gravity: [11, 19, 25], powerups: [{ index: 5, kind: "shield" }, { index: 16, kind: "rapid" }, { index: 26, kind: "boost" }], miniBosses: [14, 26], boss: true },
+    { name: "Solar Inferno", briefing: "Ride the narrow gaps.", length: 29, asteroids: [2, 7, 11, 15, 19, 23, 27], walls: [5, 9, 13, 17, 21, 25], enemies: [8, 16, 24], spikes: [6, 12, 18, 26], gravity: [10, 20], powerups: [{ index: 4, kind: "shield" }, { index: 14, kind: "boost" }, { index: 22, kind: "cannon" }], miniBosses: [16], boss: true },
+    { name: "Lunar Catacombs", briefing: "Descend and clear the elite.", length: 32, asteroids: [3, 8, 12, 16, 20, 24, 28], walls: [6, 10, 14, 18, 22, 26], enemies: [7, 15, 23, 29], spikes: [9, 13, 21, 27], gravity: [11, 19, 25], powerups: [{ index: 7, kind: "cannon" }, { index: 17, kind: "shield" }, { index: 27, kind: "boost" }], miniBosses: [13, 25] },
+    { name: "Void Threshold", briefing: "Beyond lies the unknown.", length: 37, asteroids: [3, 8, 12, 16, 20, 24, 28, 32, 35], walls: [6, 10, 14, 18, 22, 26, 30, 34], enemies: [7, 15, 23, 31], spikes: [9, 13, 21, 29, 35], gravity: [11, 19, 27, 33], secretPortals: [{ index: 4, secretId: "eclipse" }], powerups: [{ index: 5, kind: "boost" }, { index: 17, kind: "shield" }, { index: 29, kind: "rapid" }], miniBosses: [14, 28] },
+    { name: "Eclipse Obsidian", briefing: "Claim the obsidian cores.", length: 20, asteroids: [2, 5, 8, 11, 14, 17], walls: [4, 7, 10, 13, 16], enemies: [6, 12, 18], spikes: [5, 9, 15], gravity: [8, 17], powerups: [{ index: 7, kind: "shield" }, { index: 15, kind: "boost" }], specialAsteroids: [2, 5, 8, 11, 14, 17], secret: true, secretId: "eclipse", secretPortals: [{ index: 2, secretId: "eclipse" }] },
+    { name: "Comet Forge", briefing: "Seize incandescent cores.", length: 27, asteroids: [2, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21], enemies: [8, 14, 20, 25], spikes: [6, 12, 18, 24], gravity: [10, 22], powerups: [{ index: 4, kind: "cannon" }, { index: 16, kind: "shield" }], miniBosses: [19], prestige: true, prestigeRequirement: 1 },
+    { name: "Amethyst Citadel", briefing: "Crush the second titan.", length: 33, asteroids: [3, 8, 12, 16, 20, 24, 28, 31], walls: [6, 10, 14, 18, 22, 26, 30], enemies: [7, 15, 23, 29], spikes: [9, 13, 21, 27], gravity: [11, 19, 25], powerups: [{ index: 5, kind: "shield" }, { index: 17, kind: "cannon" }, { index: 27, kind: "boost" }], miniBosses: [14, 26], boss: true, prestige: true, prestigeRequirement: 2 },
+    { name: "Starfall Bastion", briefing: "Defeat the bastion guardian.", length: 36, asteroids: [3, 8, 12, 16, 20, 24, 28, 32, 34], walls: [6, 10, 14, 18, 22, 26, 30], enemies: [7, 15, 23, 31], spikes: [9, 13, 21, 29, 34], gravity: [11, 19, 27, 33], powerups: [{ index: 5, kind: "cannon" }, { index: 17, kind: "shield" }, { index: 29, kind: "boost" }], miniBosses: [14, 28], boss: true, prestige: true, prestigeRequirement: 3 },
+    { name: "Nebula Depths", briefing: "Find the beacon.", length: 26, asteroids: [3, 8, 12, 16, 20, 23], walls: [6, 10, 14, 18, 22], enemies: [7, 15, 21], spikes: [9, 13, 19], gravity: [11, 17, 23], powerups: [{ index: 5, kind: "shield" }, { index: 15, kind: "cannon" }], specialAsteroids: [3, 8, 12, 16, 20, 23], secret: true, secretId: "nebula", secretPortals: [{ index: 2, secretId: "nebula" }] },
+    { name: "Singularity Archive", briefing: "Survive the keeper.", length: 31, asteroids: [3, 8, 12, 16, 20, 24, 28], walls: [6, 10, 14, 18, 22, 26], enemies: [7, 15, 23, 29], spikes: [9, 13, 21, 27], gravity: [11, 19, 25], powerups: [{ index: 5, kind: "cannon" }, { index: 17, kind: "shield" }, { index: 26, kind: "boost" }], miniBosses: [14, 26], boss: true, secret: true, secretId: "archive", specialAsteroids: [3, 8, 12, 16, 20, 24, 28], secretPortals: [{ index: 2, secretId: "archive" }] },
+    { name: "Apex Gate", briefing: "Defeat the gatekeeper.", length: 29, asteroids: [3, 8, 12, 16, 20, 24], walls: [6, 10, 14, 18, 22], enemies: [7, 15, 23], spikes: [9, 13, 21], gravity: [11, 19], powerups: [{ index: 5, kind: "shield" }, { index: 17, kind: "cannon" }], miniBosses: [14], boss: true, secret: true, secretId: "prestige-gate", secretPortals: [{ index: 2, secretId: "prestige-gate" }] },
+    { name: "Celestial Sanctum", briefing: "Prove your ascension.", length: 29, asteroids: [3, 8, 12, 16, 20, 24, 27], walls: [6, 10, 14, 18, 22], enemies: [7, 15, 23], spikes: [9, 13, 21, 26], gravity: [11, 19], powerups: [{ index: 6, kind: "shield" }, { index: 18, kind: "cannon" }], secretId: "stellar-sanctum", specialAsteroids: [3, 8, 12, 16, 20, 24, 27], secret: true, prestige: true, miniBosses: [15], secretPortals: [{ index: 2, secretId: "stellar-sanctum" }] },
+    { name: "Quantum Abyss", briefing: "Gather quantum shards.", length: 33, asteroids: [3, 9, 13, 17, 21, 25, 29, 32], walls: [6, 11, 15, 19, 23, 27, 31], enemies: [8, 18, 26], spikes: [7, 14, 22, 30], gravity: [12, 20, 28], powerups: [{ index: 7, kind: "rapid" }, { index: 19, kind: "boost" }, { index: 29, kind: "shield" }], secretId: "quantum-depths", specialAsteroids: [3, 9, 13, 17, 21, 25, 29, 32], secret: true, prestige: true, miniBosses: [15, 28], secretPortals: [{ index: 2, secretId: "quantum-depths" }] },
+    { name: "Infinity Nexus", briefing: "Claim Infinity.", length: 36, asteroids: [4, 10, 14, 18, 22, 26, 30, 33, 35], walls: [7, 11, 15, 19, 23, 27, 31, 34], enemies: [9, 19, 29], spikes: [8, 15, 23, 31, 35], gravity: [13, 21, 29], powerups: [{ index: 8, kind: "cannon" }, { index: 20, kind: "shield" }, { index: 31, kind: "boost" }], secretId: "infinity-spiral", specialAsteroids: [4, 10, 14, 18, 22, 26, 30, 33, 35], secret: true, prestige: true, miniBosses: [17, 30], boss: true, secretPortals: [{ index: 2, secretId: "infinity-spiral" }] },
 ];
 
-/**
- * Keep the original and secret-normal routes playable after loading old
- * saves, cached built-in data, or owner overrides. Older data could contain a
- * long empty lane or an in-level key gate; normal routes should always be
- * immediately playable and have hazards to navigate. Workshop routes are
- * intentionally left alone so a creator can publish a blank base plate.
- * Prestige routes are also left alone because their flipped-route/key rules
- * are part of the prestige progression.
- */
 export function normalizeNonPrestigeLevels(levelList: Level[]) {
     levelList.forEach((level) => {
         if (level.prestige || level.customId || level.localOnly) return;
-
-        // Normal and secret-normal routes do not use collectible end-goal
-        // keys.  Secret portals still control whether a secret route appears
-        // in the level menu, but finishing the route never waits on a key.
         delete level.secretKey;
-        // Paired transport portals belonged to the retired portal mechanic.
-        // Secret portals use their own placement system and remain intact.
         delete level.portals;
-
         const routeTiles = Array.from({ length: Math.max(0, level.length - 3) }, (_, index) => index + 2);
         const occupied = new Set<number>([
             ...level.asteroids,
@@ -60,7 +43,6 @@ export function normalizeNonPrestigeLevels(levelList: Level[]) {
             ...level.gravity,
             ...(level.secretPortals ?? []).map((portal) => portal.index),
         ]);
-
         const addTiles = (target: number[], count: number) => {
             for (const index of routeTiles) {
                 if (target.length >= count || occupied.has(index)) continue;
@@ -69,28 +51,15 @@ export function normalizeNonPrestigeLevels(levelList: Level[]) {
             }
             target.sort((first, second) => first - second);
         };
-
-        // A route with no sentries is just a long walk. Keep at least two
-        // encounters, spaced across the available route tiles.
         addTiles(level.enemies, 2);
-
-        // Ensure there is visible cover even when an old route only stored
-        // asteroids. Spikes add a second kind of collision to the route.
         if (level.walls.length + (level.blocks?.length ?? 0) < 2) addTiles(level.walls, 2);
         addTiles(level.spikes, 1);
-
         level.enemies = [...new Set(level.enemies)].filter((index) => index > 0 && index < level.length).sort((a, b) => a - b);
         level.walls = [...new Set(level.walls)].filter((index) => index > 0 && index < level.length).sort((a, b) => a - b);
         level.spikes = [...new Set(level.spikes)].filter((index) => index > 0 && index < level.length).sort((a, b) => a - b);
     });
 }
 
-/**
- * Prestige routes have a matching upside-down route. Keep both halves active
- * across the full distance, including routes created before flipped areas were
- * saved as part of a level. Each five-tile section gets an obstacle, enemy, or
- * hazard so there are no long empty stretches.
- */
 export function normalizePrestigeLevels(levelList: Level[]) {
     const isUsableTile = (index: number, length: number) => Number.isInteger(index) && index >= 2 && index <= length - 3;
     const normalizeTiles = (tiles: number[], length: number) => [...new Set(tiles.filter((index) => isUsableTile(index, length)))].sort((a, b) => a - b);
@@ -99,14 +68,14 @@ export function normalizePrestigeLevels(levelList: Level[]) {
         route.enemies = normalizeTiles(route.enemies, level.length);
         route.spikes = normalizeTiles(route.spikes, level.length);
         route.gravity = normalizeTiles(route.gravity, level.length);
-        const protectedTiles = new Set([
+        const protectedTiles = new Set<number>([
             ...level.asteroids,
             ...(level.portals ?? []),
             ...(level.secretPortals ?? []).map((portal) => portal.index),
             ...(level.miniBosses ?? []),
             ...(route.powerups ?? []).map((powerup) => powerup.index),
         ]);
-        const challengeTiles = () => new Set([...route.walls, ...route.enemies, ...route.spikes, ...route.gravity]);
+        const challengeTiles = () => new Set<number>([...route.walls, ...route.enemies, ...route.spikes, ...route.gravity]);
         const targets = [route.walls, route.enemies, route.spikes, route.gravity];
         const lastTile = level.length - 3;
         for (let start = 2; start <= lastTile; start += 5) {
@@ -129,8 +98,6 @@ export function normalizePrestigeLevels(levelList: Level[]) {
     levelList.forEach((level) => {
         if (!level.prestige) return;
         if (!level.customId && !level.localOnly) {
-            // Built-in prestige routes now use only gravity flip fields and
-            // the upper-lane exit key, never the legacy paired portals.
             delete level.portals;
             delete level.secretKey;
         }
@@ -149,8 +116,6 @@ export function normalizePrestigeLevels(levelList: Level[]) {
     });
 }
 
-/** Refresh player-facing text for every built-in route while leaving workshop
- * and published custom routes exactly as their creators wrote them. */
 export function refreshBuiltInLevelBriefings(levelList: Level[]) {
     levelList.forEach((level) => {
         if (level.customId || level.localOnly) return;
@@ -167,9 +132,6 @@ export function refreshBuiltInLevelBriefings(levelList: Level[]) {
     });
 }
 
-// Normalize the built-ins immediately for modules that consume `levels`
-// before the application bootstrap finishes (for example the level picker).
 normalizeNonPrestigeLevels(levels);
 normalizePrestigeLevels(levels);
 refreshBuiltInLevelBriefings(levels);
-

@@ -914,7 +914,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
 let accountSaveQueued = false;
 let remoteProgressRefreshInFlight = false;
 function saveAccountProgressSoon() {
-    if (accountSaveQueued || !currentOnlineUser || loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) return;
+    if (!currentOnlineUser || loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) return;
+    if (accountSaveQueued) return;
     accountSaveQueued = true;
     // Group one gameplay action (currency, inventory, unlocks, and route
     // flags) into a single snapshot.  A microtask ran in the middle of some
@@ -922,7 +923,13 @@ function saveAccountProgressSoon() {
     globalThis.setTimeout(() => {
         accountSaveQueued = false;
         void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save account progress:", error));
-    }, 150);
+    }, 100);
+}
+
+function forceSaveAccountProgress() {
+    if (!currentOnlineUser || loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) return;
+    accountSaveQueued = false;
+    void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save account progress:", error));
 }
 
 // Staff edits occur on the server and should arrive on a player's other
@@ -1184,6 +1191,7 @@ export function startApp() {
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden && currentOnlineUser && !offlineOwnerMode) void sendPresenceHeartbeat();
         if (document.hidden && !offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) {
+            forceSaveAccountProgress();
             void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save account progress while leaving the page:", error));
         }
         if (!musicContext) return;
@@ -3573,17 +3581,48 @@ function showChristmasWheel() {
             lastSyncedAccountProgress = serializeAccountProgress(result.progress);
             rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
             renderWheel(result.options);
-            const rotation = 1080 + (result.options.length - result.selectedIndex) * 360 / result.options.length;
+            playSound("roulette");
+            const rotation = 1440 + (result.options.length - result.selectedIndex) * 360 / result.options.length;
             requestAnimationFrame(() => {
-                wheel.style.transition = "transform .9s cubic-bezier(.2,.7,.15,1)";
+                wheel.style.transition = "transform 2.4s cubic-bezier(.05,.4,.15,1)";
                 wheel.style.transform = `rotate(${rotation}deg)`;
             });
+            let lastTick = performance.now();
+            const tickInterval = setInterval(() => {
+                const now = performance.now();
+                if (now - lastTick >= 160) {
+                    playSound("roulette");
+                    lastTick = now;
+                }
+            }, 80);
             globalThis.setTimeout(() => {
+                clearInterval(tickInterval);
                 renderWheel(result.options, result.selectedIndex);
-                status.textContent = `${result.reward.name} — ${result.reward.description}`;
+                playSound("reward");
                 balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
                 spin.disabled = getChristmasPresents() < 10;
-            }, 900);
+                const resultPopup = document.createElement("div");
+                resultPopup.className = "spin-result";
+                resultPopup.setAttribute("role", "dialog");
+                resultPopup.setAttribute("aria-modal", "true");
+                const card = document.createElement("div");
+                card.className = "spin-result-card rare-win";
+                const eyebrow = document.createElement("p");
+                eyebrow.className = "eyebrow";
+                eyebrow.textContent = "PRESENT OPENED";
+                const heading = document.createElement("h2");
+                heading.textContent = result.reward.name;
+                const description = document.createElement("p");
+                description.textContent = result.reward.description;
+                const close = document.createElement("button");
+                close.className = "menu-button";
+                close.type = "button";
+                close.textContent = "Continue";
+                close.addEventListener("click", () => { resultPopup.remove(); status.textContent = `${result.reward.name} — ${result.reward.description}`; });
+                card.append(eyebrow, heading, description, close);
+                resultPopup.append(card);
+                menu.append(resultPopup);
+            }, 2400);
         } catch (error) {
             status.textContent = error instanceof Error ? error.message : "Could not open the present wheel.";
             spin.disabled = false;
@@ -6345,7 +6384,8 @@ function showWinScreen() {
     const screen = document.createElement("main");
         screen.className = "win-screen win-screen-animation";
     const prestigeGateCleared = levels[currentLevel].secretId === "prestige-gate";
-    const reward = isChristmasLevel(level) ? `Holiday flight complete! +${getChristmasLevelPresentReward(currentLevel)} presents secured. This route returns in 15 minutes.` : prestigeGateCleared ? "Prestige Gate cleared. Return to the main menu to claim your prestige." : levels[currentLevel].boss ? "Titan Core skin unlocked. The fleet has a new legend." : levels[currentLevel].secret ? "The Eclipse skin has joined your collection." : `Every asteroid secured. Total fleet claims: ${asteroidsClaimed}.`;
+    const presentsReward = isChristmasLevel(level) ? getChristmasLevelPresentReward(currentLevel) : 0;
+    const reward = isChristmasLevel(level) ? `Holiday flight complete! Collected ${levelAsteroids.length}/${level.asteroids.length} presents (+${presentsReward} presents). This route returns in 15 minutes.` : prestigeGateCleared ? "Prestige Gate cleared. Return to the main menu to claim your prestige." : levels[currentLevel].boss ? "Titan Core skin unlocked. The fleet has a new legend." : levels[currentLevel].secret ? "The Eclipse skin has joined your collection." : `Every asteroid secured. Total fleet claims: ${asteroidsClaimed}.`;
     screen.innerHTML = `<p class="eyebrow">BEACON REACHED / ${levels[currentLevel].secret ? "SECRET" : `SECTOR 0${currentLevel + 1}`}</p><h1>Claim <em>complete</em></h1><p class="time-result">${formatTime(elapsedMilliseconds)}</p><p class="menu-copy">${reward}</p>`;
     if (level.secret && !prestigeGateCleared) {
         screen.append(createMenuButton("Leave", showLevelMenu));
@@ -7019,7 +7059,27 @@ function startGameLoop(timestamp = performance.now()) {
     playerLabel.classList.toggle("flipped", shipFlipped);
     if (gameStarted) { elapsedMilliseconds = performance.now() - levelStartedAt; timerLabel.textContent = formatTime(elapsedMilliseconds); }
     const gravityForce = getGravityForce();
-    verticalSpeed += (shipFlipped ? -1 : 1) * (inGravity ? gravityForce * 1.55 : gravityForce) * currentFrameScale; playerY += verticalSpeed * currentFrameScale;
+    verticalSpeed += (shipFlipped ? -1 : 1) * (inGravity ? gravityForce * 1.55 : gravityForce) * currentFrameScale;
+    const nextY = playerY + verticalSpeed * currentFrameScale;
+    // Prevent jumping through tall obstacles from below
+    if (!shipFlipped) {
+        const pb = playerBox();
+        const wouldClip = levelObstacles.some((obs) => {
+            if (obs.goalLock || obs.airborne) return false;
+            if (pb.x + pb.width <= obs.x + 2 || pb.x >= obs.x + obs.width - 2) return false;
+            if (pb.y + pb.height <= obs.y && nextY + playerHeight > obs.y && verticalSpeed > 0) {
+                return true;
+            }
+        });
+        if (wouldClip) {
+            verticalSpeed = 0;
+            playerY = Math.floor(playerY / 1);
+        } else {
+            playerY = nextY;
+        }
+    } else {
+        playerY = nextY;
+    }
     if (!shipFlipped && playerY >= FLOOR_Y) { playerY = FLOOR_Y; verticalSpeed = 0; jumpCount = 0; }
     if (shipFlipped && playerY <= CEILING_Y) { playerY = CEILING_Y; verticalSpeed = 0; jumpCount = 0; }
     trailTimer += currentFrameScale; playerShotTimer = Math.max(0, playerShotTimer - currentFrameScale); boostTimer = Math.max(0, boostTimer - currentFrameScale); cannonTimer = cannonTimer === Number.POSITIVE_INFINITY ? cannonTimer : Math.max(0, cannonTimer - currentFrameScale); rapidTimer = Math.max(0, rapidUntil - performance.now()); rapidCannonUntil = rapidCannonUntil > performance.now() ? rapidCannonUntil : 0;
