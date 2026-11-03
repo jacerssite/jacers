@@ -218,6 +218,8 @@ let mouseAim = { x: 148, y: 29 };
 let hasMouseAim = false;
 let accountProgressTimer = 0;
 let accountProgressSyncing = false;
+let accountProgressLoadRetryAt = 0;
+let accountProgressLoadFailed = false;
 let accountRedemptionInFlight = false;
 let lastSyncedAccountProgress = "";
 let loadedAccountProgressFor: string | null = null;
@@ -300,6 +302,8 @@ function setOnlineUser(user: OnlineUser | null, sameAccount = false) {
     const nextIdentity = accountIdentity(user);
     if (previousIdentity !== nextIdentity) {
         onlineSessionVersion++;
+        accountProgressLoadRetryAt = 0;
+        accountProgressLoadFailed = false;
         if (sameAccount && loadedAccountProgressFor === previousIdentity) loadedAccountProgressFor = nextIdentity;
         else {
             loadedAccountProgressFor = null;
@@ -798,6 +802,34 @@ function showAccountSyncWarning(message: string) {
     document.body.append(notice);
 }
 
+function showAccountProgressLoadWarning(message: string) {
+    showAccountSyncWarning(message);
+    const notice = document.querySelector<HTMLElement>(".account-sync-warning");
+    if (!notice) return;
+    const existingRetry = notice.querySelector<HTMLButtonElement>(".account-sync-retry");
+    if (existingRetry) {
+        existingRetry.disabled = false;
+        existingRetry.textContent = "Retry account sync";
+        return;
+    }
+    const retry = document.createElement("button");
+    retry.className = "account-sync-retry";
+    retry.type = "button";
+    retry.textContent = "Retry account sync";
+    retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "Retrying...";
+        void syncAccountProgress("load").catch((error: unknown) => {
+            console.error("Could not retry account progress load:", error);
+            if (retry.isConnected) {
+                retry.disabled = false;
+                retry.textContent = "Retry account sync";
+            }
+        });
+    });
+    notice.insertBefore(retry, notice.querySelector("button"));
+}
+
 function clearAccountSyncWarning() {
     document.querySelector(".account-sync-warning")?.remove();
 }
@@ -844,6 +876,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
                 localStorage.setItem("jacer-local-owner", identity ?? "");
+                accountProgressLoadRetryAt = 0;
+                accountProgressLoadFailed = false;
                 clearAccountSyncWarning();
                 return;
             }
@@ -863,6 +897,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
                 rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
+                accountProgressLoadRetryAt = 0;
+                accountProgressLoadFailed = false;
                 clearAccountSyncWarning();
                 return;
             }
@@ -878,6 +914,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
                 rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
+                accountProgressLoadRetryAt = 0;
+                accountProgressLoadFailed = false;
                 clearAccountSyncWarning();
                 return;
             }
@@ -891,6 +929,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             rememberProgressSnapshot(identity, getLocalAccountProgress());
             loadedAccountProgressFor = identity;
             localStorage.setItem("jacer-local-owner", identity ?? "");
+            accountProgressLoadRetryAt = 0;
+            accountProgressLoadFailed = false;
             clearAccountSyncWarning();
             return;
         }
@@ -941,6 +981,11 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             showAccountSyncWarning(conflict
                 ? reason
                 : `Your changes remain saved on this device but have not been confirmed online. Saving will retry automatically. ${reason}`);
+        } else if (direction === "load" && accountIdentity(currentOnlineUser) === identity) {
+            const reason = error instanceof Error ? error.message : "Online service error.";
+            accountProgressLoadRetryAt = Date.now() + 5000;
+            accountProgressLoadFailed = true;
+            showAccountProgressLoadWarning(`Your account progress could not be loaded, so gameplay is paused to protect your saved data. Retry the account sync. ${reason}`);
         }
         throw error;
     } finally {
@@ -1008,7 +1053,7 @@ async function restoreOnlineSession() {
     void sendPresenceHeartbeat();
     updateOwnerAccountIndicator();
     if (session.user) {
-        void syncAccountProgress("load").catch((error: unknown) => {
+        await syncAccountProgress("load").catch((error: unknown) => {
             console.error("Could not restore account progress:", error);
         }).finally(() => {
             // Refresh a visible home screen with synced stats, but never
@@ -1212,7 +1257,12 @@ export function startApp() {
             // Do not flash an unsigned home screen before a remembered session
             // has been read. A valid session now lands directly in its signed-in
             // home screen on returning devices.
-            if (startupScreen.isConnected) showMenu();
+            if (startupScreen.isConnected) {
+                showMenu();
+                if (currentOnlineUser && loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) {
+                    showAccountProgressLoadWarning("Your account progress could not be loaded, so gameplay is paused to protect your saved data. Retry the account sync.");
+                }
+            }
         });
     void refreshOnlineState(false)
         .catch((error: unknown) => { console.error("Could not load shared game settings:", error); });
@@ -1236,9 +1286,16 @@ export function startApp() {
         else if (musicUnlocked) void musicContext.resume().catch((error: unknown) => console.error("Could not resume background music:", error));
     });
     if (!accountProgressTimer) accountProgressTimer = globalThis.setInterval(() => {
-        if (!offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) {
-            void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
-            void refreshRemoteProgressIfChanged();
+        if (!offlineOwnerMode && currentOnlineUser) {
+            if (loadedAccountProgressFor === accountIdentity(currentOnlineUser)) {
+                void syncAccountProgress("save").catch((error: unknown) => console.error("Could not sync account progress:", error));
+                void refreshRemoteProgressIfChanged();
+            } else if (accountProgressLoadFailed) {
+                if (Date.now() >= accountProgressLoadRetryAt) {
+                    accountProgressLoadRetryAt = Date.now() + 5000;
+                    void syncAccountProgress("load").catch((error: unknown) => console.error("Could not retry account progress load:", error));
+                }
+            }
         }
     }, 1000);
     if (!accountNoticeTimer) accountNoticeTimer = globalThis.setInterval(() => void refreshAccountNotices(), 7000);
@@ -6307,6 +6364,10 @@ async function waitForRunProof(levelName: string, timeoutMs = 3000) {
 function startGame(levelIndex = currentLevel) {
     const level = levels[levelIndex];
     if (!level) return;
+    if (currentOnlineUser && !ownerChangesAreLocal() && loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) {
+        showAccountProgressLoadWarning("Your account progress is still syncing. Gameplay is paused until your saved account data is restored.");
+        return;
+    }
     if (isChristmasLevel(level)) {
         const cooldownUntil = getChristmasCooldownUntil(levelIndex);
         if (cooldownUntil > Date.now()) { showChristmasEvent(); return; }

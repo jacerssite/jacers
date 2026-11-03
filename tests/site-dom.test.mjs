@@ -344,6 +344,61 @@ test("first sync uses server progress if another device initialized the account 
   }
 });
 
+test("startup waits for account progress and blocks gameplay until a failed load is retried", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let progressLoads = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": async () => {
+      progressLoads++;
+      if (progressLoads === 1) return { status: 503, json: { error: "Progress temporarily unavailable" } };
+      return { progress: { "orbit-claims": "42" } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not appear after account load failure");
+    assert.ok(document.querySelector(".account-sync-warning"), "Account load failure should be visible");
+    clickButton(document, "Launch mission");
+    const firstRoute = document.querySelector(".level-button:not([disabled])");
+    assert.ok(firstRoute, "First route should be listed");
+    firstRoute.click();
+    assert.equal(document.querySelector(".game-frame"), null, "Gameplay should stay paused until saved progress loads");
+    assert.match(document.querySelector(".account-sync-warning").textContent, /gameplay is paused/i);
+    clickButton(document, "Retry account sync");
+    await waitFor(() => !document.querySelector(".account-sync-warning"), "Progress retry did not complete");
+    assert.equal(window.localStorage.getItem("orbit-claims"), "42");
+    document.querySelector(".level-button:not([disabled])").click();
+    assert.ok(document.querySelector(".game-frame"), "Gameplay should start after saved progress loads");
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("startup keeps the game behind the loading screen until cloud progress is ready", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let releaseProgress;
+  const progressGate = new Promise((resolve) => { releaseProgress = resolve; });
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": async () => {
+      await progressGate;
+      return { progress: { "orbit-claims": "42" } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector(".startup-screen"), "Startup screen did not appear");
+    await delay(50);
+    assert.ok(document.querySelector(".startup-screen"), "Startup screen should remain until progress is restored");
+    assert.equal(document.querySelector(".home-screen"), null);
+    releaseProgress();
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not appear after progress loaded");
+    assert.equal(window.localStorage.getItem("orbit-claims"), "42");
+  } finally {
+    releaseProgress();
+    dom.window.close();
+  }
+});
+
 test("leaderboard profiles show the player's presence and character", async () => {
   const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Vega Outpost", timeMs: 12000, abilities: [] };
   const player = { username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1, title: "Cadet" };
