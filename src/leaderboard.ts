@@ -420,7 +420,37 @@ export function createLeaderboard(context: LeaderboardContext) {
                 status.textContent = error instanceof Error ? error.message : "Could not update the golden progress threshold.";
             }
         });
-        container.append(title, description, form);
+        const wipe = createTextButton("Wipe leaderboard scores and personal best times", async () => {
+            const confirmation = await showActionDialog({
+                title: "Wipe all leaderboard data?",
+                description: "This permanently deletes every online leaderboard entry and personal best time. Completed levels, collectible history, asteroid balances, prestige, unlocks, power-ups, and earned titles stay saved. All players will receive a message.",
+                confirmLabel: "Wipe leaderboard",
+                danger: true,
+                input: { label: "Type WIPE to confirm", requiredValue: "WIPE" },
+            });
+            if (!confirmation.confirmed) return;
+            wipe.disabled = true;
+            try {
+                const result = await apiRequest<{ deletedEntries: number; clearedPersonalBestAccounts: number }>("/leaderboard/wipe", {
+                    method: "POST",
+                    body: "{}",
+                });
+                await showActionDialog({
+                    title: "Leaderboard wipe complete",
+                    description: `Deleted ${result.deletedEntries} online score${result.deletedEntries === 1 ? "" : "s"} and cleared personal best times for ${result.clearedPersonalBestAccounts} account${result.clearedPersonalBestAccounts === 1 ? "" : "s"}. Players have been notified. Level completions and all other progress were preserved.`,
+                    confirmLabel: "Done",
+                });
+                refresh();
+            } catch (error) {
+                await showActionDialog({
+                    title: "Leaderboard wipe failed",
+                    description: error instanceof Error ? error.message : "Could not wipe leaderboard data.",
+                    confirmLabel: "Close",
+                    danger: true,
+                });
+            } finally { wipe.disabled = false; }
+        });
+        container.append(title, description, form, wipe);
     }
 
 

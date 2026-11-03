@@ -280,13 +280,11 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                     const access = document.createElement("input");
                     access.type = "checkbox";
                     access.checked = level.secret
-                        ? level.secretId === "prestige-gate"
-                            ? user.progress["orbit-key-prestige-gate"] === "1"
-                            : level.secretId === "eclipse"
-                                ? user.progress["orbit-key-eclipse"] === "1" || user.progress["orbit-secret-unlocked"] === "1"
-                                : level.secretId
-                                    ? user.progress[`orbit-key-${level.secretId}`] === "1"
-                                    : user.progress["orbit-secret-unlocked"] === "1"
+                        ? level.secretId === "eclipse"
+                            ? user.progress["orbit-key-eclipse"] === "1" || user.progress["orbit-secret-unlocked"] === "1"
+                            : level.secretId
+                                ? user.progress[`orbit-key-${level.secretId}`] === "1"
+                                : user.progress["orbit-secret-unlocked"] === "1"
                         : index === 0 || user.progress[`orbit-level-${index}`] === "1";
                     access.dataset.levelAccess = String(index);
                     accessLabel.append(access, document.createTextNode(" Access"));
@@ -363,11 +361,9 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
                         const level = levels[index];
                         if (!level) throw new Error("A selected level is no longer available. Refresh accounts and try again.");
                         const key = level.secret
-                            ? level.secretId === "prestige-gate"
-                                ? "orbit-key-prestige-gate"
-                                : level.secretId
-                                    ? `orbit-key-${level.secretId}`
-                                    : "orbit-secret-unlocked"
+                            ? level.secretId
+                                ? `orbit-key-${level.secretId}`
+                                : "orbit-secret-unlocked"
                             : `orbit-level-${index}`;
                         levelAccessUpdates.set(key, Boolean(levelAccessUpdates.get(key) || input.checked));
                         if (level.secretId === "eclipse") levelAccessUpdates.set("orbit-secret-unlocked", Boolean(levelAccessUpdates.get("orbit-secret-unlocked") || input.checked));
@@ -723,4 +719,3 @@ export async function loadManagedUsers(container: HTMLElement, options: ManagedU
         status.textContent = error instanceof Error ? error.message : "Could not load player accounts.";
     }
 }
-

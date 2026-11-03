@@ -73,11 +73,64 @@ test("normal player syncs use an explicit allowlist and cannot import inventory"
   assert.deepEqual(initial, { "orbit-skin": "1" });
 });
 
-test("prestige resets require a completed Prestige Gate", () => {
-  const completedNormalRoutes = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`orbit-level-complete-${index}`, "1"]));
-  const attemptedReset = { ...completedNormalRoutes, "orbit-claims": "0", "orbit-special-claims": "0", "orbit-prestige": "1", "orbit-prestige-world-unlocked": "1" };
-  assert.match(getSuspiciousPlayerMutation({ ...completedNormalRoutes, "orbit-claims": "50", "orbit-special-claims": "4" }, attemptedReset), /Prestige Gate/i);
-  assert.equal(getSuspiciousPlayerMutation({ ...completedNormalRoutes, "orbit-level-complete-prestige-gate": "1", "orbit-claims": "50", "orbit-special-claims": "4" }, attemptedReset), null);
+test("one route completion can save its golden-time reward in the same sync", () => {
+  assert.equal(getSuspiciousPlayerMutation({}, {
+    "orbit-level-complete-3": "1",
+    "orbit-golden-level-3": "1",
+  }), null);
+});
+
+test("prestige resets only normal progress after every normal route is complete", () => {
+  const normalRouteIndices = [
+    ...Array.from({ length: 12 }, (_, index) => index),
+    18,
+    19,
+    ...Array.from({ length: 6 }, (_, index) => index + 30),
+  ];
+  const completedNormalRoutes = Object.fromEntries(normalRouteIndices.map((index) => [
+    `orbit-level-complete-${index}`, "1",
+  ]));
+  const existing = {
+    ...completedNormalRoutes,
+    "orbit-claims": "50",
+    "orbit-special-claims": "4",
+    "orbit-level-2": "1",
+    "orbit-best-2": "1200",
+    "orbit-level-complete-12": "1",
+    "orbit-asteroids-12": "[0,1]",
+    "orbit-level-complete-13": "1",
+    "orbit-level-complete-20": "1",
+    "orbit-asteroids-20": "[0,1]",
+  };
+  const attemptedReset = {
+    ...existing,
+    "orbit-claims": "0",
+    "orbit-special-claims": "0",
+    "orbit-prestige": "1",
+    "orbit-prestige-world-unlocked": "1",
+    "orbit-level-0": "1",
+  };
+  for (const index of normalRouteIndices) {
+    delete attemptedReset[`orbit-level-complete-${index}`];
+    delete attemptedReset[`orbit-level-${index}`];
+    delete attemptedReset[`orbit-best-${index}`];
+    delete attemptedReset[`orbit-golden-level-${index}`];
+    delete attemptedReset[`orbit-level-claims-${index}`];
+    delete attemptedReset[`orbit-asteroids-${index}`];
+  }
+  attemptedReset["orbit-level-0"] = "1";
+  assert.match(
+    getSuspiciousPlayerMutation({ ...existing, "orbit-level-complete-11": undefined }, attemptedReset),
+    /every normal route/i,
+  );
+  assert.equal(getSuspiciousPlayerMutation(existing, attemptedReset), null);
+
+  const erasedSecretProgress = { ...attemptedReset };
+  delete erasedSecretProgress["orbit-asteroids-12"];
+  assert.match(getSuspiciousPlayerMutation(existing, erasedSecretProgress), /unexpected progress changes/i);
+  const erasedLaterSecretProgress = { ...attemptedReset };
+  delete erasedLaterSecretProgress["orbit-asteroids-20"];
+  assert.match(getSuspiciousPlayerMutation(existing, erasedLaterSecretProgress), /unexpected progress changes/i);
 });
 
 test("client saves cannot rewrite expired secret route collection history", () => {

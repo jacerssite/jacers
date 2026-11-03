@@ -1,7 +1,6 @@
-// This catalog is deliberately server-side.  It mirrors the fixed built-in
-// routes, but contains only the reward facts the server needs to verify an
-// asteroid collection.  A browser may name a route or asteroid slot; it may
-// not choose how much currency that slot is worth.
+// This catalog is deliberately server-side. It mirrors the built-in routes,
+// including server-defined generated routes, and contains only the reward
+// facts needed to verify a collection. A browser cannot choose its value.
 
 const MAX_CURRENCY = 100_000_000;
 
@@ -9,35 +8,62 @@ const MAX_CURRENCY = 100_000_000;
 
 /** @type {ReadonlyArray<{ index: number, name: string, asteroidCount: number, currency: RewardCurrency }>} */
 export const TRUSTED_LEVEL_REWARDS = Object.freeze([
-  { index: 0, name: "Quiet Orbit", asteroidCount: 3, currency: "claims" },
-  { index: 1, name: "Redline Pass", asteroidCount: 4, currency: "claims" },
-  { index: 2, name: "Gravity Well", asteroidCount: 5, currency: "claims" },
-  { index: 3, name: "Shatter Belt", asteroidCount: 6, currency: "claims" },
-  { index: 4, name: "Last Light", asteroidCount: 7, currency: "claims" },
-  { index: 5, name: "Ion Cathedral", asteroidCount: 7, currency: "claims" },
-  { index: 6, name: "Neon Graveyard", asteroidCount: 7, currency: "claims" },
-  { index: 7, name: "Crystal Run", asteroidCount: 8, currency: "claims" },
-  { index: 8, name: "Titan's Wake", asteroidCount: 10, currency: "claims" },
-  { index: 9, name: "Solar Foundry", asteroidCount: 7, currency: "claims" },
-  { index: 10, name: "Moonlit Ruins", asteroidCount: 7, currency: "claims" },
+  { index: 0, name: "Vega Outpost", asteroidCount: 4, currency: "claims" },
+  { index: 1, name: "Emberline Run", asteroidCount: 4, currency: "claims" },
+  { index: 2, name: "Graviton Rift", asteroidCount: 5, currency: "claims" },
+  { index: 3, name: "Shardstorm Passage", asteroidCount: 6, currency: "claims" },
+  { index: 4, name: "Duskfall Reach", asteroidCount: 7, currency: "claims" },
+  { index: 5, name: "Ion Crown", asteroidCount: 7, currency: "claims" },
+  { index: 6, name: "Reliquary of Stars", asteroidCount: 7, currency: "claims" },
+  { index: 7, name: "Prism Breaker", asteroidCount: 8, currency: "claims" },
+  { index: 8, name: "Colossus Crossing", asteroidCount: 10, currency: "claims" },
+  { index: 9, name: "Helios Crucible", asteroidCount: 7, currency: "claims" },
+  { index: 10, name: "Moonforge Depths", asteroidCount: 7, currency: "claims" },
   { index: 11, name: "Event Horizon", asteroidCount: 9, currency: "claims" },
   { index: 12, name: "Eclipse Vault", asteroidCount: 6, currency: "specialClaims" },
-  { index: 13, name: "Comet Nursery", asteroidCount: 6, currency: "claims" },
-  { index: 14, name: "Prism Citadel", asteroidCount: 8, currency: "claims" },
-  { index: 15, name: "Afterglow Station", asteroidCount: 9, currency: "claims" },
+  { index: 13, name: "Comet Foundry", asteroidCount: 6, currency: "claims" },
+  { index: 14, name: "Amethyst Rampart", asteroidCount: 8, currency: "claims" },
+  { index: 15, name: "Starfall Citadel", asteroidCount: 9, currency: "claims" },
   { index: 16, name: "Nebula Hollow", asteroidCount: 6, currency: "specialClaims" },
   { index: 17, name: "Black Hole Archive", asteroidCount: 7, currency: "specialClaims" },
-  { index: 18, name: "Prestige Gate", asteroidCount: 6, currency: "specialClaims" },
-  { index: 19, name: "Stellar Sanctum", asteroidCount: 7, currency: "specialClaims" },
-  { index: 20, name: "Quantum Depths", asteroidCount: 8, currency: "specialClaims" },
-  { index: 21, name: "Infinity Spiral", asteroidCount: 9, currency: "specialClaims" },
-  // Christmas routes are appended after the fixed routes by ensureChristmasLevels.
-  { index: 22, name: "Tinsel Trail", asteroidCount: 5, currency: "presents" },
-  { index: 23, name: "Candy Cane Crossing", asteroidCount: 5, currency: "presents" },
-  { index: 24, name: "Evergreen Escape", asteroidCount: 6, currency: "presents" },
-  { index: 25, name: "Frostlight Station", asteroidCount: 6, currency: "presents" },
-  { index: 26, name: "Sleighbelt Run", asteroidCount: 7, currency: "presents" },
-  { index: 27, name: "Star atop the Tree", asteroidCount: 8, currency: "presents" },
+  { index: 18, name: "Nova Crossing", asteroidCount: 6, currency: "claims" },
+  { index: 19, name: "Meteor Run", asteroidCount: 6, currency: "claims" },
+  { index: 20, name: "Astral Vault", asteroidCount: 6, currency: "specialClaims" },
+  { index: 21, name: "Celestial Sanctum", asteroidCount: 7, currency: "specialClaims" },
+  { index: 22, name: "Quantum Trench", asteroidCount: 8, currency: "specialClaims" },
+  { index: 23, name: "Infinity Spiral", asteroidCount: 9, currency: "specialClaims" },
+  { index: 24, name: "Frostbound Passage", asteroidCount: 5, currency: "presents" },
+  { index: 25, name: "Candy Comet Run", asteroidCount: 5, currency: "presents" },
+  { index: 26, name: "Evergreen Circuit", asteroidCount: 6, currency: "presents" },
+  { index: 27, name: "Aurora Station", asteroidCount: 6, currency: "presents" },
+  { index: 28, name: "Reindeer Nebula", asteroidCount: 7, currency: "presents" },
+  { index: 29, name: "Northstar Throne", asteroidCount: 8, currency: "presents" },
+  { index: 30, name: "Solar Breaker", asteroidCount: 6, currency: "claims" },
+  { index: 31, name: "Aurora Run", asteroidCount: 6, currency: "claims" },
+  { index: 32, name: "Gravity Escape", asteroidCount: 6, currency: "claims" },
+  { index: 33, name: "Starline Rally", asteroidCount: 6, currency: "claims" },
+  { index: 34, name: "Titan Passage", asteroidCount: 6, currency: "claims" },
+  { index: 35, name: "Northstar Reach", asteroidCount: 6, currency: "claims" },
+  { index: 36, name: "Aether Run", asteroidCount: 7, currency: "claims" },
+  { index: 37, name: "Ringfall Circuit", asteroidCount: 7, currency: "claims" },
+  { index: 38, name: "Violet Singularity", asteroidCount: 7, currency: "claims" },
+  { index: 39, name: "Saturn's Crown", asteroidCount: 7, currency: "claims" },
+  { index: 40, name: "Nebula Citadel", asteroidCount: 7, currency: "claims" },
+  { index: 41, name: "Oracle's Crossing", asteroidCount: 7, currency: "claims" },
+  { index: 42, name: "Prism Wastes", asteroidCount: 7, currency: "claims" },
+  { index: 43, name: "Pale Eclipse", asteroidCount: 7, currency: "claims" },
+  { index: 44, name: "Sovereign's Drift", asteroidCount: 7, currency: "claims" },
+  { index: 45, name: "Astral Fortress", asteroidCount: 7, currency: "claims" },
+  { index: 46, name: "Io's Veil", asteroidCount: 7, currency: "claims" },
+  { index: 47, name: "Radiant Rupture", asteroidCount: 7, currency: "claims" },
+  { index: 48, name: "Dusk Cathedral", asteroidCount: 7, currency: "claims" },
+  { index: 49, name: "Nova Maze", asteroidCount: 7, currency: "claims" },
+  { index: 50, name: "Violet Eventide", asteroidCount: 7, currency: "claims" },
+  { index: 51, name: "Inverted Starsea", asteroidCount: 7, currency: "claims" },
+  { index: 52, name: "Ashen Halo", asteroidCount: 7, currency: "claims" },
+  { index: 53, name: "Sable Lights", asteroidCount: 7, currency: "claims" },
+  { index: 54, name: "Titan's Expanse", asteroidCount: 7, currency: "claims" },
+  { index: 55, name: "Endless Crown", asteroidCount: 7, currency: "claims" },
 ]);
 
 const currencyProgressKey = Object.freeze({
@@ -119,4 +145,3 @@ export function applyTrustedAsteroidReward(progress, reward) {
 }
 
 export const SERVER_OWNED_PROGRESS_KEY = /^(orbit-(claims|special-claims|christmas-presents|asteroids-\d+|level-claims-\d+|reward-|secret-cooldown-|christmas-cooldown-))/;
-

@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { build } from "vite";
 import { DEFAULT_GAME_CONFIG, validateUpdateLog } from "../server/game-data.mjs";
+import { TRUSTED_LEVEL_REWARDS } from "../server/reward-events.mjs";
 
 let clientScript;
 let siteStyles;
@@ -68,6 +69,41 @@ function clickButton(document, name) {
   button.click();
 }
 
+test("client normal, secret, and prestige routes match the stable server reward indices", async () => {
+  const { dom, document } = await createPage({
+    "/api/auth/session": { user: { id: "owner1", username: "Owner", role: "owner" } },
+  });
+  const readRouteNames = () => [...document.querySelectorAll(".level-button")].map((button) => button.querySelector("span").textContent.replace(/^(?:\d+|\?{2})\s*/, ""));
+  const expectedNames = (indices) => indices.map((index) => TRUSTED_LEVEL_REWARDS[index].name);
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(document, "Launch mission");
+    await waitFor(() => document.querySelectorAll(".level-button").length === 20, "Normal route list did not load");
+    assert.deepEqual(readRouteNames(), expectedNames([
+      ...Array.from({ length: 12 }, (_, index) => index),
+      18, 19,
+      ...Array.from({ length: 6 }, (_, index) => index + 30),
+    ]));
+    document.querySelector(".secret-gate").click();
+    await waitFor(() => document.querySelectorAll(".level-button").length === 4, "Secret route list did not load");
+    assert.deepEqual(readRouteNames(), expectedNames([12, 16, 17, 20]));
+    clickButton(document, "Mission select");
+    const prestigePlanet = [...document.querySelectorAll("button")].find((button) => button.textContent.startsWith("Fly to prestige planet"));
+    assert.ok(prestigePlanet, "Prestige planet control did not load");
+    prestigePlanet.click();
+    await waitFor(() => document.querySelectorAll(".level-button").length === 23, "Prestige route list did not load");
+    assert.deepEqual(readRouteNames(), expectedNames([
+      13, 14, 15,
+      ...Array.from({ length: 20 }, (_, index) => index + 36),
+    ]));
+    document.querySelector(".secret-gate").click();
+    await waitFor(() => document.querySelectorAll(".level-button").length === 3, "Prestige secret route list did not load");
+    assert.deepEqual(readRouteNames(), expectedNames([21, 22, 23]));
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("main menus, customization, settings, and a mission respond to player actions", async () => {
   const { dom, document, window, errors } = await createPage();
   try {
@@ -117,31 +153,37 @@ test("Backspace returns to the previous in-app screen", async () => {
   }
 });
 
-test("Prestige Gate appears in Secret Space only after every normal route is complete", async () => {
+test("Prestige is offered after every normal route is complete without a Prestige Gate", async () => {
   const incomplete = await createPage();
   try {
     await waitFor(() => incomplete.document.querySelector(".home-screen"), "Home screen did not load");
     clickButton(incomplete.document, "Launch mission");
+    assert.equal([...incomplete.document.querySelectorAll(".level-button")].some((button) => button.textContent.includes("Prestige now")), false);
+    const normalLevels = [...incomplete.document.querySelectorAll(".level-button")];
+    assert.equal(normalLevels.length, 20);
+    for (const name of ["Nova Crossing", "Meteor Run", "Solar Breaker", "Aurora Run", "Gravity Escape", "Starline Rally", "Titan Passage", "Northstar Reach"]) {
+      assert.ok(normalLevels.some((button) => button.textContent.includes(name)), `Missing normal route ${name}`);
+    }
+    assert.equal(normalLevels.some((button) => button.textContent.includes("Frontier")), false);
     incomplete.document.querySelector(".secret-gate").click();
     assert.equal([...incomplete.document.querySelectorAll(".level-button")].some((button) => button.textContent.includes("Prestige Gate")), false);
   } finally {
     incomplete.dom.window.close();
   }
 
-  // Mark every built-in slot complete. The menu ignores secret/prestige slots
-  // when calculating the normal-route gate, so this remains resilient when
-  // more normal routes are added.
-  const completedRoutes = Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`orbit-level-complete-${index}`, "1"]));
-  const complete = await createPage({}, completedRoutes);
+  const complete = await createPage();
   try {
     await waitFor(() => complete.document.querySelector(".home-screen"), "Home screen did not load");
+    const normalRouteIndices = [
+      ...Array.from({ length: 12 }, (_, index) => index),
+      18,
+      19,
+      ...Array.from({ length: 6 }, (_, index) => index + 30),
+    ];
+    normalRouteIndices.forEach((index) => complete.window.localStorage.setItem(`orbit-level-complete-${index}`, "1"));
     clickButton(complete.document, "Launch mission");
-    complete.document.querySelector(".secret-gate").click();
-    const gate = [...complete.document.querySelectorAll(".prestige-gate-level")].find((button) => button.textContent.includes("Prestige Gate"));
-    assert.ok(gate, "Completed players should see the Prestige Gate");
-    assert.equal(gate.disabled, false, "The Prestige Gate should be playable immediately");
-    assert.match(gate.textContent, /PRESTIGE GATE/i);
-    assert.doesNotMatch(gate.textContent, /AVAILABLE IN/i);
+    assert.ok([...complete.document.querySelectorAll("button")].some((button) => button.textContent.includes("Prestige now")));
+    assert.equal([...complete.document.querySelectorAll(".level-button")].some((button) => button.textContent.includes("Prestige Gate")), false);
   } finally {
     complete.dom.window.close();
   }
@@ -303,7 +345,7 @@ test("first sync uses server progress if another device initialized the account 
 });
 
 test("leaderboard profiles show the player's presence and character", async () => {
-  const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Quiet Orbit", timeMs: 12000, abilities: [] };
+  const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Vega Outpost", timeMs: 12000, abilities: [] };
   const player = { username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1, title: "Cadet" };
   const { dom, document, errors } = await createPage({ "/api/leaderboard": { entries: [entry] }, "/api/players/player1": { player } });
   try {
@@ -322,11 +364,47 @@ test("leaderboard profiles show the player's presence and character", async () =
   }
 });
 
+test("owner leaderboard wipe requires typed confirmation and reports successful deletion", async () => {
+  let wipeRequests = 0;
+  const owner = { id: "owner1", username: "Owner", role: "owner" };
+  const { dom, document, errors } = await createPage({
+    "/api/auth/session": { user: owner },
+    "POST /api/leaderboard/wipe": async () => {
+      wipeRequests++;
+      return { deletedEntries: 3, clearedPersonalBestAccounts: 2 };
+    },
+  });
+  try {
+    await delay(30);
+    clickButton(document, "Launch mission");
+    clickButton(document, "Online leaderboard");
+    await waitFor(() => [...document.querySelectorAll("button")].some((button) => button.textContent === "Wipe leaderboard scores and personal best times"), "Owner wipe control did not load");
+    clickButton(document, "Wipe leaderboard scores and personal best times");
+    const confirmation = document.querySelector(".action-dialog");
+    assert.match(confirmation.textContent, /every online leaderboard entry and personal best time/i);
+    const input = confirmation.querySelector("input");
+    input.value = "NO";
+    clickButton(document, "Wipe leaderboard");
+    assert.equal(wipeRequests, 0);
+    assert.match(confirmation.querySelector('[role="status"]').textContent, /type WIPE exactly/i);
+    input.value = "WIPE";
+    clickButton(document, "Wipe leaderboard");
+    await waitFor(() => document.querySelector(".action-dialog")?.textContent.includes("Leaderboard wipe complete"), "Success dialog did not appear");
+    assert.equal(wipeRequests, 1);
+    assert.match(document.querySelector(".action-dialog").textContent, /Deleted 3 online scores.*cleared personal best times for 2 accounts/i);
+    clickButton(document, "Done");
+    await delay(30);
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("signed-in player profiles animate their character before friend data finishes loading", async () => {
   let releaseFriends;
   const friendsGate = new Promise((resolve) => { releaseFriends = resolve; });
   const user = { username: "Viewer", role: "player", appearOffline: false, leaderboardOptIn: true, allowFriendRequests: true };
-  const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Quiet Orbit", timeMs: 12000, abilities: [] };
+  const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Vega Outpost", timeMs: 12000, abilities: [] };
   const player = { id: "player1", username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1 };
   const { dom, document, errors } = await createPage({
     "/api/auth/session": { user },
@@ -357,8 +435,8 @@ test("leaderboard keeps the latest level selection when responses arrive out of 
   const { dom, document, window } = await createPage({
     "/api/leaderboard": async ({ url }) => {
       const level = new URL(url, "https://test.example").searchParams.get("level");
-      if (level === "Quiet Orbit") { await gate; return { entries: [entry("SlowReply", level)] }; }
-      if (level === "Redline Pass") return { entries: [entry("LatestReply", level)] };
+      if (level === "Vega Outpost") { await gate; return { entries: [entry("SlowReply", level)] }; }
+      if (level === "Emberline Run") return { entries: [entry("LatestReply", level)] };
       return { entries: [] };
     },
   });
@@ -367,9 +445,9 @@ test("leaderboard keeps the latest level selection when responses arrive out of 
     clickButton(document, "Launch mission");
     clickButton(document, "Online leaderboard");
     const picker = document.querySelector(".leaderboard-level-picker");
-    picker.value = "Quiet Orbit";
+    picker.value = "Vega Outpost";
     picker.dispatchEvent(new window.Event("change"));
-    picker.value = "Redline Pass";
+    picker.value = "Emberline Run";
     picker.dispatchEvent(new window.Event("change"));
     await waitFor(() => document.querySelector(".leaderboard-player-button")?.textContent === "LatestReply", "Latest leaderboard did not load");
     release();
@@ -550,6 +628,31 @@ test("a concurrent currency conflict keeps local progress and warns that cloud s
   }
 });
 
+test("background save failures are visible and the warning clears after a successful retry", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let progressWrites = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": { progress: { "orbit-claims": "100" } },
+    "PUT /api/account/progress": ({ init }) => {
+      progressWrites++;
+      if (progressWrites === 1) return { status: 503, json: { error: "Progress service unavailable" } };
+      return { progress: JSON.parse(init.body).progress };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Pilot_7"]'), "Account did not load");
+    window.localStorage.setItem("orbit-claims", "105");
+    await waitFor(() => document.querySelector(".account-sync-warning"), "Failed background save was not shown", 3000);
+    assert.match(document.querySelector(".account-sync-warning").textContent, /saved on this device but have not been confirmed online/i);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "105");
+    await waitFor(() => progressWrites >= 2 && !document.querySelector(".account-sync-warning"), "Save retry did not clear the warning", 4000);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "105");
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("registration shows the one-time recovery code and does not save before progress loads", async () => {
   const user = { username: "Pilot_7", role: "player", appearOffline: false };
   let progressWrites = 0;
@@ -680,7 +783,7 @@ test("control center keeps sections separate and preserves drafts while switchin
     claims.value = "17";
     clickButton(document, "Levels & prestige");
     const sanctuaryInputs = [...document.querySelectorAll('.tester-levels label')]
-      .filter((label) => label.querySelector("span")?.textContent === "Stellar Sanctum")
+      .filter((label) => label.querySelector("span")?.textContent === "Celestial Sanctum")
       .map((label) => label.querySelector("input"));
     assert.equal(sanctuaryInputs.length, 2);
     sanctuaryInputs[0].click();
@@ -943,14 +1046,14 @@ test("owners can edit built-in routes without shrinking their original route", a
     await waitFor(() => document.querySelector('[data-section="workshop"]'), "Owner tools did not load");
     clickButton(document, "Level workshop");
     clickButton(document, "Open level maker");
-    clickButton(document, "Edit Quiet Orbit");
-    assert.equal(document.querySelector('[aria-label="Level name"]').value, "Quiet Orbit");
+    clickButton(document, "Edit Vega Outpost");
+    assert.equal(document.querySelector('[aria-label="Level name"]').value, "Vega Outpost");
     assert.equal(document.querySelectorAll('[aria-label^="Normal tile"]').length, 144);
-    document.querySelector('[aria-label="Level name"]').value = "Quiet Orbit Revised";
+    document.querySelector('[aria-label="Level name"]').value = "Vega Outpost Revised";
     clickButton(document, "Save built-in changes");
     await waitFor(() => document.querySelector(".level-menu"), "Built-in route did not return to the level menu");
-    assert.equal(savedLevel.name, "Quiet Orbit Revised");
-    assert.equal(savedLevel.length, 12);
+    assert.equal(savedLevel.name, "Vega Outpost Revised");
+    assert.equal(savedLevel.length, 13);
   } finally {
     dom.window.close();
   }

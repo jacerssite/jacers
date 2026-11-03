@@ -8,11 +8,18 @@ const SECRET_ROUTE_BY_LEVEL_INDEX = new Map([
   [12, "eclipse"],
   [16, "nebula"],
   [17, "archive"],
-  [18, "prestige-gate"],
-  [19, "stellar-sanctum"],
-  [20, "quantum-depths"],
-  [21, "infinity-spiral"],
+  [20, "astral-vault"],
+  [21, "stellar-sanctum"],
+  [22, "quantum-depths"],
+  [23, "infinity-spiral"],
 ]);
+const NORMAL_LEVEL_INDICES = [
+  ...Array.from({ length: 12 }, (_, index) => index),
+  18,
+  19,
+  ...Array.from({ length: 6 }, (_, index) => index + 30),
+];
+const NORMAL_LEVEL_PROGRESS_KEY = /^orbit-(?:level|level-complete|level-claims|asteroids|best|golden-level)-(\d+)$/;
 const SECRET_ROUTE_COOLDOWN_MS = 30 * 60 * 1000;
 const CLIENT_MUTABLE_CURRENCY_KEYS = new Set(["orbit-claims", "orbit-special-claims", "orbit-christmas-presents"]);
 const CLIENT_MUTABLE_COLLECTION_KEY = /^orbit-(asteroids|level-claims)-\d+$/;
@@ -20,7 +27,7 @@ const CLIENT_MUTABLE_COLLECTION_KEY = /^orbit-(asteroids|level-claims)-\d+$/;
 // state. Everything with economic or privileged value is issued by a server
 // endpoint. Keeping this an allowlist is important: adding a future local
 // storage key cannot silently make it cloud-writable.
-const CLIENT_MUTABLE_PROGRESS_KEY = /^(?:orbit-(?:ship-color|avatar|skin|trail|title|last-level|roulette-color-preference|claimed-secret-portals|powerups|enemies-killed|bosses-killed|prestige|prestige-world-unlocked|boss-defeated|secret-unlocked|level-complete-prestige-gate)|orbit-(?:level|level-complete|best|golden-level)-\d+|orbit-key-(?:eclipse|nebula|archive|prestige-gate|stellar-sanctum|quantum-depths|infinity-spiral)|orbit-secret-cooldown-(?:eclipse|nebula|archive|stellar-sanctum|quantum-depths|infinity-spiral)|orbit-christmas-cooldown-\d+)$/;
+const CLIENT_MUTABLE_PROGRESS_KEY = /^(?:orbit-(?:ship-color|avatar|skin|trail|title|last-level|roulette-color-preference|claimed-secret-portals|powerups|enemies-killed|bosses-killed|prestige|prestige-world-unlocked|boss-defeated|secret-unlocked)|orbit-(?:level|level-complete|best|golden-level)-\d+|orbit-key-(?:eclipse|nebula|archive|astral-vault|stellar-sanctum|quantum-depths|infinity-spiral)|orbit-secret-cooldown-(?:eclipse|nebula|archive|astral-vault|stellar-sanctum|quantum-depths|infinity-spiral)|orbit-christmas-cooldown-\d+)$/;
 
 export function isClientMutableProgressKey(key) {
   return typeof key === "string" && CLIENT_MUTABLE_PROGRESS_KEY.test(key);
@@ -120,20 +127,31 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   }
   const currentPrestige = readCount("orbit-prestige");
   const nextPrestige = nextCount("orbit-prestige");
-  // Prestige is the one legitimate player action that resets normal currency,
-  // inventory and route records.  Validate the completed normal routes from
-  // the already-saved record, then allow that single, expected reset through.
-  // Without this exception every prestige save is rejected as a currency drop.
-  const savedNormalRoutes = Object.keys(existing).filter((key) => /^orbit-level-complete-\d+$/.test(key) && existing[key] === "1").length;
+  // Prestige clears only normal route progress and both asteroid balances.
+  // Secret and prestige route records are deliberately preserved.
   const isPrestigeAttempt = nextPrestige === currentPrestige + 1;
-  if (isPrestigeAttempt && existing["orbit-level-complete-prestige-gate"] !== "1") return "prestige requires completing the Prestige Gate";
+  const allNormalRoutesComplete = NORMAL_LEVEL_INDICES.every((index) => existing[`orbit-level-complete-${index}`] === "1");
+  if (isPrestigeAttempt && !allNormalRoutesComplete) return "prestige requires completing every normal route";
+  const resetKeys = new Set([
+    "orbit-claims",
+    "orbit-special-claims",
+    "orbit-prestige",
+    "orbit-prestige-world-unlocked",
+    "orbit-level-0",
+  ]);
+  const isAllowedNormalLevelReset = (key) => {
+    const match = key.match(NORMAL_LEVEL_PROGRESS_KEY);
+    return match !== null && NORMAL_LEVEL_INDICES.includes(Number(match[1]));
+  };
   const isValidatedPrestigeReset = isPrestigeAttempt
-    && savedNormalRoutes >= 20
-    && existing["orbit-level-complete-prestige-gate"] === "1"
+    && allNormalRoutesComplete
     && nextCount("orbit-claims") === 0
     && nextCount("orbit-special-claims") === 0
-    && progress["orbit-prestige-world-unlocked"] === "1";
+    && progress["orbit-prestige-world-unlocked"] === "1"
+    && progress["orbit-level-0"] === "1"
+    && changedKeys.every((key) => resetKeys.has(key) || isAllowedNormalLevelReset(key));
   if (isValidatedPrestigeReset) return null;
+  if (isPrestigeAttempt) return "prestige reset contains unexpected progress changes";
   // Currency and collection history are written only by a trusted server
   // reward endpoint. A browser can edit both fields together, so matching a
   // client-supplied balance to client-supplied collection JSON is not proof of
@@ -155,13 +173,14 @@ export function getSuspiciousPlayerMutation(existing, progress, role = "player")
   }
   if (nextPrestige < currentPrestige) return "prestige cannot decrease in a player sync";
   if (nextPrestige - currentPrestige > 1) return "prestige advanced too far in one sync";
-  const routeKeys = new Set([...Object.keys(existing), ...Object.keys(progress)]);
-  const completedRouteCount = [...routeKeys].filter((key) => /^orbit-level-complete-\d+$/.test(key)
-    && (progress[key] === "1" || existing[key] === "1")).length;
-  if (nextPrestige > Math.floor(completedRouteCount / 20)) return "prestige does not match completed routes";
-
-  const completionKeys = changedKeys.filter((key) => /^(orbit-(level-complete|golden-level)-|orbit-key-)/.test(key) && progress[key] === "1");
-  if (completionKeys.length > 1) return "multiple route rewards changed in one sync";
+  const completedRouteRewards = new Set();
+  let newSecretKeys = 0;
+  for (const key of changedKeys) {
+    const routeMatch = key.match(/^orbit-(?:level-complete|golden-level)-(\d+)$/);
+    if (routeMatch && progress[key] === "1") completedRouteRewards.add(routeMatch[1]);
+    else if (key.startsWith("orbit-key-") && progress[key] === "1") newSecretKeys++;
+  }
+  if (completedRouteRewards.size > 1 || newSecretKeys > 1) return "multiple route rewards changed in one sync";
   if (progress["orbit-powerups"] !== existing["orbit-powerups"]) {
     let before = {};
     let after = {};

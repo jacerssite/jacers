@@ -1606,10 +1606,11 @@ app.post("/api/rewards/asteroid", requireSameOrigin, requireUser, async (req, re
 });
 
 const CHRISTMAS_ROUTE_COOLDOWN_MS = 15 * 60 * 1000;
+const CHRISTMAS_ROUTE_INDICES = Object.freeze([24, 25, 26, 27, 28, 29]);
 
 function christmasRouteForIndex(levelIndex) {
-  const names = ["Tinsel Trail", "Candy Cane Crossing", "Evergreen Escape", "Frostlight Station", "Sleighbelt Run", "Star atop the Tree"];
-  const name = names[levelIndex - 22];
+  const names = ["Frostbound Passage", "Candy Comet Run", "Evergreen Circuit", "Aurora Station", "Reindeer Nebula", "Northstar Throne"];
+  const name = names[levelIndex - 24];
   return typeof name === "string" ? getTrustedLevelReward(name, levelIndex) : null;
 }
 
@@ -1638,21 +1639,27 @@ app.post("/api/holiday/christmas-routes/:levelIndex/complete", requireSameOrigin
     if (!route) return res.status(400).json({ error: "That is not a Winter Orbit route." });
     const db = await getDatabase();
     const collection = db.collection("player_progress");
-    const record = await collection.findOne({ _id: req.user.id });
-    const progress = validatePlayerProgress(record?.data ?? {});
-    if (!progress || !hasEveryTrustedCollectible(progress, route)) return res.status(409).json({ error: "Secure every present in this route before its cooldown can begin." });
-    const key = christmasRouteCooldownKey(route.index);
-    const existingExpiry = Number(progress[key] ?? 0);
-    const expiresAt = Number.isSafeInteger(existingExpiry) && existingExpiry > Date.now()
-      ? existingExpiry
-      : Date.now() + CHRISTMAS_ROUTE_COOLDOWN_MS;
-    const nextProgress = { ...progress, [key]: String(expiresAt) };
-    // Retire the old client-only marker so the server's timestamp is the
-    // single source of truth for the next respawn.
-    delete nextProgress[`orbit-christmas-cooldown-${route.index}`];
-    const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
-    if (!saved.progress) return res.status(409).json({ error: "Could not start this route cooldown. Try again." });
-    res.json({ progress: saved.progress, expiresAt });
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress || !hasEveryTrustedCollectible(progress, route)) {
+          throw Object.assign(new Error("Secure every present in this route before its cooldown can begin."), { statusCode: 409 });
+        }
+        const key = christmasRouteCooldownKey(route.index);
+        const existingExpiry = Number(progress[key] ?? 0);
+        const expiresAt = Number.isSafeInteger(existingExpiry) && existingExpiry > Date.now()
+          ? existingExpiry
+          : Date.now() + CHRISTMAS_ROUTE_COOLDOWN_MS;
+        const nextProgress = { ...progress, [key]: String(expiresAt) };
+        delete nextProgress[`orbit-christmas-cooldown-${route.index}`];
+        const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not start this route cooldown. Try again."), { statusCode: 409 });
+        return { progress: saved.progress, expiresAt };
+      });
+      res.json(result);
+    } finally { await session.endSession(); }
   } catch (error) { next(error); }
 });
 
@@ -1662,22 +1669,73 @@ app.post("/api/holiday/christmas-routes/:levelIndex/respawn", requireSameOrigin,
     if (!route) return res.status(400).json({ error: "That is not a Winter Orbit route." });
     const db = await getDatabase();
     const collection = db.collection("player_progress");
-    const record = await collection.findOne({ _id: req.user.id });
-    const progress = validatePlayerProgress(record?.data ?? {});
-    if (!progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
-    const key = christmasRouteCooldownKey(route.index);
-    const expiresAt = Number(progress[key] ?? 0);
-    if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) return res.status(409).json({ error: "This Winter Orbit route is not waiting for a respawn." });
-    if (expiresAt > Date.now()) return res.status(409).json({ error: "This Winter Orbit route is still cooling down.", expiresAt });
-    const nextProgress = { ...progress };
-    delete nextProgress[`orbit-asteroids-${route.index}`];
-    delete nextProgress[`orbit-level-claims-${route.index}`];
-    delete nextProgress[key];
-    delete nextProgress[`orbit-christmas-cooldown-${route.index}`];
-    const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true);
-    if (!saved.progress) return res.status(409).json({ error: "Could not respawn this route's presents. Try again." });
-    res.json({ progress: saved.progress });
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const key = christmasRouteCooldownKey(route.index);
+        const expiresAt = Number(progress[key] ?? 0);
+        if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) throw Object.assign(new Error("This Winter Orbit route is not waiting for a respawn."), { statusCode: 409 });
+        if (expiresAt > Date.now()) throw Object.assign(new Error("This Winter Orbit route is still cooling down."), { statusCode: 409, expiresAt });
+        const nextProgress = { ...progress };
+        delete nextProgress[`orbit-asteroids-${route.index}`];
+        delete nextProgress[`orbit-level-claims-${route.index}`];
+        delete nextProgress[key];
+        delete nextProgress[`orbit-christmas-cooldown-${route.index}`];
+        const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not respawn this route's presents. Try again."), { statusCode: 409 });
+        return { progress: saved.progress };
+      });
+      res.json(result);
+    } finally { await session.endSession(); }
   } catch (error) { next(error); }
+});
+
+app.post("/api/holiday/christmas-routes/reset-cooldowns", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" }, { session });
+        const eventEnabled = resolveHolidayEventSettings(holiday?.value).christmasEnabled;
+        if (!eventEnabled && !["owner", "developer", "tester"].includes(req.user.role)) {
+          throw Object.assign(new Error("The Christmas event is not active."), { statusCode: 403 });
+        }
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        const progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const presents = typeof progress["orbit-christmas-presents"] === "string" && /^\d{1,10}$/.test(progress["orbit-christmas-presents"])
+          ? Number(progress["orbit-christmas-presents"])
+          : 0;
+        if (presents < 25) throw Object.assign(new Error("You need 25 presents to reset Winter Orbit route cooldowns."), { statusCode: 400 });
+        const nextProgress = { ...progress, "orbit-christmas-presents": String(presents - 25) };
+        for (const index of CHRISTMAS_ROUTE_INDICES) {
+          delete nextProgress[`orbit-asteroids-${index}`];
+          delete nextProgress[`orbit-level-claims-${index}`];
+          delete nextProgress[christmasRouteCooldownKey(index)];
+          delete nextProgress[`orbit-christmas-cooldown-${index}`];
+        }
+        const saved = await writePlayerProgress(collection, req.user.id, nextProgress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not reset Winter Orbit route cooldowns. Try again."), { statusCode: 409 });
+        await db.collection("reward_events").insertOne({
+          _id: crypto.randomUUID(),
+          userId: req.user.id,
+          source: "christmas-cooldown-reset",
+          cost: 25,
+          createdAt: new Date(),
+        }, { session });
+        return { progress: saved.progress };
+      });
+      res.status(201).json(result);
+    } finally { await session.endSession(); }
+  } catch (error) {
+    if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message, ...(error.expiresAt ? { expiresAt: error.expiresAt } : {}) });
+    next(error);
+  }
 });
 
 function chooseWeightedOption(options) {
@@ -1761,7 +1819,7 @@ app.post("/api/shop/roulette", requireSameOrigin, requireUser, async (req, res, 
 
 const SHOP_POWERUP_PRICES = Object.freeze({ shield: 8, boost: 10, rapid: 12, cannon: 15 });
 const SECRET_REWARD_LEVELS = Object.freeze([
-  [12, "eclipse"], [16, "nebula"], [17, "archive"], [18, "prestige-gate"], [19, "stellar-sanctum"], [20, "quantum-depths"], [21, "infinity-spiral"],
+  [12, "eclipse"], [16, "nebula"], [17, "archive"], [20, "astral-vault"], [21, "stellar-sanctum"], [22, "quantum-depths"], [23, "infinity-spiral"],
 ]);
 
 app.post("/api/shop/powerups", requireSameOrigin, requireUser, async (req, res, next) => {
@@ -4151,6 +4209,77 @@ app.delete("/api/leaderboard/:id", requireSameOrigin, requireOwner, async (req, 
     if (!result.deletedCount) return res.status(404).json({ error: "Leaderboard entry not found." });
     res.status(204).end();
   } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/leaderboard/wipe", requireSameOrigin, requireOwner, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const entries = await db.collection("leaderboard_entries").deleteMany({}, { session });
+        const progressCollection = db.collection("player_progress");
+        const goldenTimeSetting = await db.collection("game_settings").findOne({ _id: "golden_time_limit_ms" }, { session });
+        const goldenTimeLimitMs = parseGoldenTimeLimit(goldenTimeSetting?.value) ? goldenTimeSetting.value : 60_000;
+        const progressRecords = await progressCollection.find({}, {
+          projection: { data: 1, revision: 1 },
+          session,
+        }).toArray();
+        let clearedPersonalBestAccounts = 0;
+        const normalLevelIndices = new Set([
+          ...Array.from({ length: 12 }, (_, index) => index),
+          18,
+          19,
+          ...Array.from({ length: 6 }, (_, index) => index + 30),
+        ]);
+        for (const record of progressRecords) {
+          const personalBestKeys = Object.keys(record.data ?? {}).filter((key) => /^orbit-best-\d+$/.test(key));
+          if (!personalBestKeys.length) continue;
+          const unset = Object.fromEntries(personalBestKeys.map((key) => [`data.${key}`, ""]));
+          const goldenProgress = {};
+          for (const key of personalBestKeys) {
+            const index = Number(key.slice("orbit-best-".length));
+            const bestTime = Number(record.data[key]);
+            if (normalLevelIndices.has(index)
+              && record.data[`orbit-level-complete-${index}`] === "1"
+              && Number.isSafeInteger(bestTime)
+              && bestTime > 0
+              && bestTime <= goldenTimeLimitMs) {
+              goldenProgress[`data.orbit-golden-level-${index}`] = "1";
+            }
+          }
+          const revisionFilter = Number.isSafeInteger(record.revision)
+            ? { revision: record.revision }
+            : { revision: { $exists: false } };
+          const updated = await progressCollection.updateOne(
+            { _id: record._id, ...revisionFilter },
+            { $unset: unset, ...(Object.keys(goldenProgress).length ? { $set: goldenProgress } : {}), $inc: { revision: 1 } },
+            { session },
+          );
+          if (!updated.matchedCount) {
+            throw Object.assign(new Error("Player data changed while the leaderboard was being wiped. Nothing was deleted; try again."), { statusCode: 409 });
+          }
+          clearedPersonalBestAccounts++;
+        }
+        await db.collection("owner_messages").insertOne({
+          title: "Leaderboard reset",
+          body: "An owner reset online leaderboard scores and personal best times. Completed levels, collected asteroids and presents, prestige, unlocks, power-ups, and titles were not deleted.",
+          type: "info",
+          userId: null,
+          createdAt: new Date(),
+          createdBy: req.user.id,
+        }, { session });
+        return {
+          deletedEntries: entries.deletedCount ?? 0,
+          clearedPersonalBestAccounts,
+        };
+      });
+      res.json(result);
+    } finally { await session.endSession(); }
+  } catch (error) {
+    if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message });
     next(error);
   }
 });

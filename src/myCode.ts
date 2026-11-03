@@ -33,18 +33,17 @@ let updateLogEntries: UpdateLogEntry[] = [];
 let profileTitles: ProfileTitle[] = structuredClone(PROFILE_TITLES);
 let holidayEvent: HolidayEventSettings = { christmasEnabled: false };
 const CHRISTMAS_LEVELS: readonly Level[] = [
-    { name: "Tinsel Trail", briefing: "Follow the tinsel through the first snowfield and reach the beacon.", length: 18, asteroids: [2, 5, 8, 12, 15], walls: [4, 10, 14], enemies: [7, 13], spikes: [6, 11], gravity: [16], powerups: [{ index: 3, kind: "shield" }], holiday: "christmas" },
-    { name: "Candy Cane Crossing", briefing: "Weave between striped barriers, snow sparks, and gift patrols.", length: 21, asteroids: [2, 5, 9, 13, 17], walls: [4, 8, 12, 16], enemies: [7, 15], spikes: [6, 11, 18], gravity: [10], holiday: "christmas" },
-    { name: "Evergreen Escape", briefing: "Race through the evergreen orbit before the holiday sentries lock the lane.", length: 24, asteroids: [3, 6, 10, 14, 18, 21], walls: [5, 9, 13, 17, 20], enemies: [7, 15, 22], spikes: [8, 12, 19], gravity: [11, 16], powerups: [{ index: 4, kind: "boost" }], holiday: "christmas" },
-    { name: "Frostlight Station", briefing: "A frozen station glows ahead. Claim the presents and keep the hull warm.", length: 27, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 10, 14, 18, 22], enemies: [8, 16, 24], spikes: [6, 13, 20], gravity: [12, 21], holiday: "christmas" },
-    { name: "Sleighbelt Run", briefing: "Glide through the sleighbelt, clear the festive guardians, and follow the gold lights.", length: 30, asteroids: [3, 7, 11, 15, 19, 23, 27], walls: [5, 9, 13, 17, 21, 25], enemies: [6, 14, 22, 28], spikes: [8, 12, 20, 26], gravity: [10, 18, 24], powerups: [{ index: 4, kind: "rapid" }, { index: 16, kind: "shield" }], holiday: "christmas" },
-    { name: "Star atop the Tree", briefing: "The final holiday flight. Protect the star through the decorated winter orbit.", length: 34, asteroids: [3, 7, 11, 15, 19, 23, 27, 30], walls: [5, 9, 13, 17, 21, 25, 29], enemies: [6, 14, 22, 28], spikes: [8, 12, 20, 26, 31], gravity: [10, 18, 24, 30], miniBosses: [16], powerups: [{ index: 4, kind: "cannon" }, { index: 22, kind: "shield" }], holiday: "christmas" },
+    { name: "Frostbound Passage", briefing: "Follow the north lights through the first snowfield and reach the beacon.", length: 18, asteroids: [2, 5, 8, 12, 15], walls: [5, 11, 15], enemies: [7, 13], spikes: [4, 10], gravity: [16], powerups: [{ index: 3, kind: "shield" }], holiday: "christmas" },
+    { name: "Candy Comet Run", briefing: "Weave between striped barriers, snow sparks, and gift patrols.", length: 21, asteroids: [2, 5, 9, 13, 17], walls: [5, 10, 15, 19], enemies: [7, 14], spikes: [4, 12, 18], gravity: [9], holiday: "christmas" },
+    { name: "Evergreen Circuit", briefing: "Race through the evergreen orbit before the holiday sentries lock the lane.", length: 24, asteroids: [3, 6, 10, 14, 18, 21], walls: [6, 11, 16, 21], enemies: [8, 15, 22], spikes: [4, 12, 19], gravity: [9, 17], powerups: [{ index: 4, kind: "boost" }], holiday: "christmas" },
+    { name: "Aurora Station", briefing: "A frozen station glows ahead. Claim the presents and keep the hull warm.", length: 27, asteroids: [3, 7, 11, 15, 19, 23], walls: [6, 12, 17, 23], enemies: [8, 16, 25], spikes: [4, 13, 20], gravity: [10, 21], holiday: "christmas" },
+    { name: "Reindeer Nebula", briefing: "Glide through the sleighbelt, clear the festive guardians, and follow the gold lights.", length: 30, asteroids: [3, 7, 11, 15, 19, 23, 27], walls: [6, 11, 16, 22, 28], enemies: [8, 14, 23, 29], spikes: [4, 12, 20, 26], gravity: [10, 18, 25], powerups: [{ index: 4, kind: "rapid" }, { index: 16, kind: "shield" }], holiday: "christmas" },
+    { name: "Northstar Throne", briefing: "The final holiday flight. Protect the star through the decorated winter orbit.", length: 34, asteroids: [3, 7, 11, 15, 19, 23, 27, 30], walls: [6, 12, 17, 23, 29], enemies: [8, 14, 22, 28], spikes: [4, 13, 20, 26, 31], gravity: [10, 18, 25, 30], miniBosses: [16], boss: true, bossIndex: 24, powerups: [{ index: 4, kind: "cannon" }, { index: 22, kind: "shield" }], holiday: "christmas" },
 ];
 function ensureChristmasLevels() {
     if (levels.some((level) => level.holiday === "christmas")) return;
-    levels.push(...CHRISTMAS_LEVELS.map((level) => structuredClone(level)));
+    levels.splice(24, 0, ...CHRISTMAS_LEVELS.map((level) => structuredClone(level)));
 }
-ensureChristmasLevels();
 let accountDeletionNoticeShown = false;
 let builtinLevelOverrides: Record<string, Level> = {};
 let portalAssignments: Record<string, string> = {};
@@ -52,8 +51,9 @@ const secretPortalTargetLabels: Record<string, string> = {
     eclipse: "Eclipse Vault",
     nebula: "Nebula Hollow",
     archive: "Black Hole Archive",
-    "stellar-sanctum": "Stellar Sanctum",
-    "quantum-depths": "Quantum Depths",
+    "astral-vault": "Astral Vault",
+    "stellar-sanctum": "Celestial Sanctum",
+    "quantum-depths": "Quantum Trench",
     "infinity-spiral": "Infinity Spiral",
 };
 let selectedRouletteSpinAmount = Math.max(1, Number(localStorage.getItem("orbit-roulette-spin-amount") ?? "5") || 5);
@@ -358,7 +358,17 @@ const showLevelMaker = (draft?: LevelMakerDraft) => {
     enterAppPage(page);
     levelMakerRenderer(draft);
 };
-const prestigeRouteNames = ["Violet Meridian", "Moonfall Circuit", "Amethyst Rift", "Crown of Saturn", "Lilac Nebula", "Oracle's Reach", "Prismatic Grave", "The White Eclipse", "Sovereign Drift", "Astral Citadel", "Veil of Io", "Radiant Ruin", "Dusk Cathedral", "Nova Labyrinth", "Purple Eventide", "The Inverted Sea", "Halo of Ash", "Sable Aurora", "Titan's Throne", "Infinity Crown"];
+const frontierLevels: readonly Level[] = [
+    { name: "Nova Crossing", briefing: "Thread the broken moon fragments and reach the beacon.", length: 34, asteroids: [3, 8, 13, 18, 23, 29], walls: [5, 11, 16, 21, 27], enemies: [9, 20], spikes: [7, 15, 25], gravity: [12, 22] },
+    { name: "Meteor Run", briefing: "Outrun the meteor field and break through its guardian.", length: 36, asteroids: [4, 9, 14, 19, 24, 29], walls: [6, 12, 17, 23, 30], enemies: [8, 20, 28], spikes: [5, 15, 26], gravity: [11, 21], boss: true, bossIndex: 32 },
+    { name: "Solar Breaker", briefing: "Cross the solar flares and follow the safe orbit.", length: 35, asteroids: [3, 8, 13, 18, 23, 28], walls: [5, 12, 17, 24, 30], enemies: [9, 19, 27], spikes: [6, 15, 25], gravity: [11, 21] },
+    { name: "Aurora Run", briefing: "Ride the aurora lanes between the sentries.", length: 36, asteroids: [4, 9, 14, 19, 24, 29], walls: [6, 11, 17, 22, 28], enemies: [8, 20, 27], spikes: [5, 15, 25, 31], gravity: [12, 23] },
+    { name: "Gravity Escape", briefing: "Escape the shifting gravity wells before the beacon.", length: 37, asteroids: [3, 8, 13, 18, 23, 28], walls: [5, 11, 17, 22, 29], enemies: [9, 19, 28], spikes: [6, 15, 25, 32], gravity: [12, 20, 30] },
+    { name: "Starline Rally", briefing: "Weave through the starline and clear the patrol.", length: 38, asteroids: [4, 9, 14, 19, 24, 29], walls: [6, 12, 18, 24, 31], enemies: [8, 20, 30], spikes: [5, 16, 26, 34], gravity: [11, 22, 32] },
+    { name: "Titan Passage", briefing: "Pass the titan's barricades and secure the exit.", length: 39, asteroids: [3, 8, 13, 18, 23, 28], walls: [5, 11, 17, 23, 30, 35], enemies: [9, 20, 31], spikes: [6, 15, 26, 34], gravity: [12, 22, 32] },
+    { name: "Northstar Reach", briefing: "Defeat the last frontier guardian and claim the beacon.", length: 40, asteroids: [4, 9, 14, 19, 24, 29], walls: [6, 12, 18, 24, 31, 35], enemies: [8, 20, 30, 36], spikes: [5, 16, 26, 34], gravity: [11, 22, 32], miniBosses: [25], boss: true, bossIndex: 36 },
+];
+const prestigeRouteNames = ["Aether Run", "Ringfall Circuit", "Violet Singularity", "Saturn's Crown", "Nebula Citadel", "Oracle's Crossing", "Prism Wastes", "Pale Eclipse", "Sovereign's Drift", "Astral Fortress", "Io's Veil", "Radiant Rupture", "Dusk Cathedral", "Nova Maze", "Violet Eventide", "Inverted Starsea", "Ashen Halo", "Sable Lights", "Titan's Expanse", "Endless Crown"];
 const customizationController = createCustomization({
     getLoadout: () => ({ shipColor: selectedShipColor, avatar: selectedAvatar, skin: selectedSkin, trail: selectedTrail }),
     setLoadout: (changes) => {
@@ -445,12 +455,21 @@ function readStoredLevels(key: string): Level[] {
 
 function loadCustomLevels() {
     const legacyLevels = readStoredLevels("orbit-custom-levels");
-    const normalCount = levels.filter((level) => !level.secret && !level.prestige).length;
-    for (let index = normalCount; index < 20; index++) {
-        levels.splice(Math.min(index, levels.length), 0, { name: `Frontier ${index + 1}`, briefing: "Collect the asteroids, navigate the hazards, and reach the beacon through the active route.", length: 28 + index, asteroids: [3, 7, 11, 15, 19, 23], walls: [5, 9, 13, 17, 21, 25], enemies: [8, 16, 24], spikes: [6, 14, 22], gravity: [10, 20], boss: index === 19 });
+    const normalCount = levels.filter((level) => !level.holiday && !level.secret && !level.prestige && !level.customId && !level.localOnly).length;
+    const routesToAdd = Math.max(0, 20 - normalCount);
+    const preservedProgressSlots = Math.min(2, routesToAdd);
+    for (let routeIndex = 0; routeIndex < preservedProgressSlots; routeIndex++) {
+        const route = structuredClone(frontierLevels[routeIndex]);
+        levels.splice(18 + routeIndex, 0, route);
+    }
+    ensureChristmasLevels();
+    for (let routeIndex = preservedProgressSlots; routeIndex < routesToAdd; routeIndex++) {
+        levels.push(structuredClone(frontierLevels[routeIndex]));
     }
     for (let index = 0; index < 20; index++) {
-        levels.push({ name: prestigeRouteNames[index], briefing: "A longer route around the ringed planet. Planetary flip fields reveal the upper lane.", length: 38 + index, asteroids: [3, 8, 13, 18, 23, 28, 33], walls: [5, 10, 15, 20, 25, 30], enemies: [7, 17, 27, 35], spikes: [6, 14, 24, 32], gravity: [11, 21, 31], flip: [11, 31], boss: index === 19, prestige: true, prestigeRequirement: index < 5 ? 1 : index < 13 ? 2 : 3 });
+        const length = 38 + index;
+        const shift = index % 3;
+        levels.push({ name: prestigeRouteNames[index], briefing: "A longer route around the ringed planet. Planetary flip fields reveal the upper lane.", length, asteroids: [3, 8, 13, 18, 23, 28, 33], walls: [5, 10, 15, 20, 25, 30].map((tile) => tile + shift), enemies: [7, 17, 27, 35].map((tile) => tile + shift), spikes: [6, 14, 24, 32].map((tile) => tile + shift), gravity: [11, 21, 31].map((tile) => tile + shift), flip: [11 + shift, 31 + shift], boss: index === 19, bossIndex: index === 19 ? length - 4 : undefined, prestige: true, prestigeRequirement: index < 5 ? 1 : index < 13 ? 2 : 3 });
     }
     const cachedLevels = readStoredLevels("orbit-global-level-cache");
     [...legacyLevels, ...cachedLevels].forEach((level, index) => levels.push({
@@ -759,9 +778,14 @@ function applySyncedProgress(sentProgress: Record<string, string>, serverProgres
     if (previousCustomLevels !== localStorage.getItem("orbit-custom-levels")) reloadLocalCustomLevels();
 }
 
-function showAccountSyncConflict(message: string) {
-    if (document.querySelector(".account-sync-warning")) return;
-    const notice = document.createElement("aside");
+function showAccountSyncWarning(message: string) {
+    let notice = document.querySelector<HTMLElement>(".account-sync-warning");
+    if (notice) {
+        const details = notice.querySelector("p");
+        if (details) details.textContent = message;
+        return;
+    }
+    notice = document.createElement("aside");
     notice.className = "account-sync-warning";
     notice.setAttribute("role", "alert");
     const details = document.createElement("p");
@@ -769,9 +793,13 @@ function showAccountSyncConflict(message: string) {
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.textContent = "Dismiss";
-    dismiss.addEventListener("click", () => notice.remove());
+    dismiss.addEventListener("click", () => notice?.remove());
     notice.append(details, dismiss);
     document.body.append(notice);
+}
+
+function clearAccountSyncWarning() {
+    document.querySelector(".account-sync-warning")?.remove();
 }
 
 async function syncAccountProgress(direction: "load" | "save", force = false) {
@@ -816,6 +844,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
                 localStorage.setItem("jacer-local-owner", identity ?? "");
+                clearAccountSyncWarning();
                 return;
             }
             const localProgress = getLocalAccountProgress();
@@ -834,6 +863,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
                 rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
+                clearAccountSyncWarning();
                 return;
             }
             // Older accounts may not have a device snapshot yet. A completely
@@ -848,6 +878,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
                 rememberProgressSnapshot(identity, result.progress);
                 loadedAccountProgressFor = identity;
+                clearAccountSyncWarning();
                 return;
             }
             Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -860,6 +891,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             rememberProgressSnapshot(identity, getLocalAccountProgress());
             loadedAccountProgressFor = identity;
             localStorage.setItem("jacer-local-owner", identity ?? "");
+            clearAccountSyncWarning();
             return;
         }
         const localProgress = getLocalAccountProgress();
@@ -874,6 +906,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
         applySyncedProgress(localProgress, result.progress);
         lastSyncedAccountProgress = serializeAccountProgress(result.progress);
         rememberProgressSnapshot(identity, result.progress);
+        clearAccountSyncWarning();
     } catch (error) {
         if (error instanceof ApiError && error.status === 403 && error.message.startsWith("Your account is being deleted:")) {
             clearLocalAccountData();
@@ -901,9 +934,13 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 }).then(() => showMenu());
             }
         }
-        if (direction === "save" && error instanceof ApiError && error.status === 409 && accountIdentity(currentOnlineUser) === identity) {
-            loadedAccountProgressFor = null;
-            showAccountSyncConflict(error.message);
+        if (direction === "save" && accountIdentity(currentOnlineUser) === identity) {
+            const conflict = error instanceof ApiError && error.status === 409;
+            if (conflict) loadedAccountProgressFor = null;
+            const reason = error instanceof Error ? error.message : "Online service error.";
+            showAccountSyncWarning(conflict
+                ? reason
+                : `Your changes remain saved on this device but have not been confirmed online. Saving will retry automatically. ${reason}`);
         }
         throw error;
     } finally {
@@ -1926,6 +1963,7 @@ async function completeChristmasRoute(levelIndex: number) {
     applySyncedProgress(sent, result.progress);
     lastSyncedAccountProgress = serializeAccountProgress(result.progress);
     rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+    return result.expiresAt;
 }
 async function refreshChristmasRoutePresents(levelIndex: number) {
     if (!currentOnlineUser) { respawnChristmasPresents(levelIndex); return; }
@@ -1967,7 +2005,7 @@ function showChristmasEvent() {
         button.type = "button";
         button.className = `level-button christmas-level${remaining ? " locked" : ""}`;
         button.disabled = remaining > 0;
-        button.innerHTML = `<span><b>🎄</b> ${level.name}</span><small>${remaining ? `READY IN ${formatCooldown(remaining)}` : `+${getChristmasLevelPresentReward(index)} presents / ${level.briefing}`}</small>`;
+        button.innerHTML = `<span><b>🎄</b> ${level.name}</span><small>${remaining ? `READY IN ${formatCooldown(remaining)}` : `Collect ${getChristmasLevelPresentCount(index)} presents / ${level.briefing}`}</small>`;
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelsList.append(button);
     });
@@ -1975,7 +2013,9 @@ function showChristmasEvent() {
     document.body.replaceChildren(menu);
 }
 
-function getChristmasLevelPresentReward(levelIndex: number) { return 8 + Math.max(0, levelIndex - (levels.length - CHRISTMAS_LEVELS.length)) * 3; }
+function getChristmasLevelPresentCount(levelIndex: number) {
+    return levels[levelIndex]?.asteroids.length ?? 0;
+}
 
 async function showChristmasAdventCalendar() {
     if (!canAccessChristmasEvent()) return showMenu();
@@ -2087,22 +2127,17 @@ function showSecretLevels() {
     levelList.className = "level-list";
     levels.forEach((level, index) => {
         if (level.holiday || !level.secret || Boolean(level.prestige) !== (activePlanet === "prestige")) return;
-        // The Prestige Gate is a milestone route, not a discovered-key route.
-        // Keep Secret Space focused by revealing it only once every normal
-        // route has been completed (staff can always inspect it).
-        if (level.secretId === "prestige-gate" && !isPrestigeGateAvailable()) return;
         const unlocked = isSecretLevelUnlocked(level);
         const cooldownUntil = usesSecretRouteCooldown(level) ? Number(localStorage.getItem(`orbit-secret-cooldown-${level.secretId}`) ?? "0") + SECRET_LEVEL_COOLDOWN_MS : 0;
         const remainingMs = Math.max(0, cooldownUntil - Date.now());
         const button = document.createElement("button");
-        button.className = `level-button secret-level ${level.secretId === "prestige-gate" ? "prestige-gate-level" : ""} ${unlocked ? "" : "locked"}`;
+        button.className = `level-button secret-level ${unlocked ? "" : "locked"}`;
         button.type = "button";
         button.disabled = !unlocked || remainingMs > 0;
         const claimed = getClaimedAsteroids(index).size;
         const readyText = remainingMs <= 0 && claimed > 0 ? "SPECIAL ASTEROIDS READY" : "";
         const cooldownText = remainingMs > 0 ? `AVAILABLE IN ${formatCooldown(remainingMs)}` : readyText;
-        const gateReadyText = `PRESTIGE GATE / ${level.asteroids.length} special asteroids / ${level.briefing}`;
-        button.innerHTML = `<span><b>${level.secretId === "prestige-gate" ? "✦" : "??"}</b> ${level.name}</span><small>${!unlocked ? `LOCKED / find its ${level.prestige ? "prestige " : ""}key` : cooldownText || (level.secretId === "prestige-gate" ? gateReadyText : `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}`)}</small>`;
+        button.innerHTML = `<span><b>??</b> ${level.name}</span><small>${!unlocked ? `LOCKED / find its ${level.prestige ? "prestige " : ""}key` : cooldownText || `${level.prestige ? "PRESTIGE SECRET / " : ""}${level.asteroids.length} special asteroids / ${level.briefing}`}</small>`;
         if (!button.disabled) button.addEventListener("click", () => startGame(index));
         levelList.append(button);
     });
@@ -2434,7 +2469,6 @@ function createProgressArea() {
         { label: "Normal routes", value: normalDone, total: normalTotal },
         { label: "Prestige", value: prestigeLevel, total: prestigeTarget },
         { label: "Secret keys", value: secretKeys, total: secretTotal },
-        { label: "Prestige Gate", value: hasClearedPrestigeGate() ? 1 : 0, total: 1 },
     ];
     const pct = (value: number, total: number) => total > 0 ? Math.min(100, value / total * 100) : 0;
     const overall = Math.round(values.reduce((sum, item) => sum + pct(item.value, item.total), 0) / values.length);
@@ -2459,9 +2493,7 @@ function createProgressArea() {
                 ? `${normalTotal - normalDone} normal route${normalTotal - normalDone === 1 ? "" : "s"} remain before the next prestige.`
                 : label === "Prestige"
                     ? `Prestige ${prestigeLevel} of ${prestigeTarget}. Reach prestige 1 to enter the prestige planet; later routes may require more.`
-                    : label === "Secret keys"
-                        ? `${secretKeys} of ${secretTotal} secret keys or portal routes discovered.`
-                        : hasClearedPrestigeGate() ? "The Prestige Gate is cleared." : "Complete every normal route to open the Prestige Gate.";
+                    : `${secretKeys} of ${secretTotal} secret keys or portal routes discovered.`;
             row.append(detail);
         });
         section.append(row);
@@ -2472,7 +2504,7 @@ function createProgressArea() {
     if (canClaimPrestige()) {
         const ready = document.createElement("strong");
         ready.className = "prestige-ready";
-        ready.textContent = "Ready to prestige. Enter the Prestige Gate to claim it.";
+        ready.textContent = "Ready to prestige. Your secret and prestige routes will be kept.";
         section.append(ready);
     }
     const goldenProgress = pct(normalDone, normalTotal);
@@ -2663,8 +2695,7 @@ function showAccount(initialMessage = "") {
                 ["Routes cleared", `${getCompletedLevelCount()} / ${levels.length}`],
                 ["Normal routes", `${getNormalRouteCompletionCount()} / ${getNormalRouteCount()}`],
                 ["Golden Body", `${getNormalCompletedLevelCount()} / ${getNormalRouteCount()} under ${formatTime(goldenTimeLimitMs)}`],
-                ["Prestige Gate", hasClearedPrestigeGate() ? "Cleared" : "Not cleared"],
-                ["Next gate", canClaimPrestige() ? "Ready" : "Complete every normal route"],
+                ["Prestige", canClaimPrestige() ? "Ready" : `${getNormalRouteCompletionCount()} / ${getNormalRouteCount()} normal routes`],
             ].forEach(([label, value]) => {
                 const item = document.createElement("article");
                 item.innerHTML = `<small></small><b></b>`;
@@ -3542,16 +3573,20 @@ function showChristmasWheel() {
     menu.innerHTML = `<p class="eyebrow">CHRISTMAS EVENT / PRESENT WHEEL</p><h1>Open a <em>present</em></h1><p class="menu-copy">Spend 10 presents for a limited holiday cosmetic or title. The red, gold, and green wheel is separate from normal roulette.</p>`;
     const balance = document.createElement("p");
     balance.className = "christmas-presents";
+    const wheelStage = document.createElement("div");
+    wheelStage.className = "christmas-wheel-stage";
     const wheel = document.createElement("div");
     wheel.className = "christmas-wheel";
+    const wheelPointer = document.createElement("i");
+    wheelPointer.className = "christmas-wheel-pointer";
+    wheelPointer.setAttribute("aria-hidden", "true");
+    wheelStage.append(wheel, wheelPointer);
     const odds = document.createElement("div");
     odds.className = "christmas-wheel-odds";
     const status = document.createElement("p");
     status.className = "menu-copy";
     type ChristmasWheelOption = { name: string; chance: number };
     const renderWheel = (options: ChristmasWheelOption[], selectedIndex = -1) => {
-        wheel.style.transition = "none";
-        wheel.style.transform = "rotate(0deg)";
         wheel.replaceChildren();
         const center = document.createElement("span");
         center.textContent = "🎁";
@@ -3582,9 +3617,12 @@ function showChristmasWheel() {
             rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
             renderWheel(result.options);
             playSound("roulette");
-            const rotation = 1440 + (result.options.length - result.selectedIndex) * 360 / result.options.length;
+            wheel.style.transition = "none";
+            wheel.style.transform = "rotate(0deg)";
+            void wheel.offsetWidth;
+            const rotation = 2160 + (result.options.length - result.selectedIndex) * 360 / result.options.length;
             requestAnimationFrame(() => {
-                wheel.style.transition = "transform 2.4s cubic-bezier(.05,.4,.15,1)";
+                wheel.style.transition = "transform 7.2s cubic-bezier(.04,.55,.1,1)";
                 wheel.style.transform = `rotate(${rotation}deg)`;
             });
             let lastTick = performance.now();
@@ -3622,7 +3660,7 @@ function showChristmasWheel() {
                 card.append(eyebrow, heading, description, close);
                 resultPopup.append(card);
                 menu.append(resultPopup);
-            }, 2400);
+            }, 7200);
         } catch (error) {
             status.textContent = error instanceof Error ? error.message : "Could not open the present wheel.";
             spin.disabled = false;
@@ -3630,15 +3668,31 @@ function showChristmasWheel() {
     });
     balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
     spin.disabled = true;
-    const resetCooldown = createTextButton("Reset winter route cooldowns / 25 presents", () => {
+    const resetCooldown = createTextButton("Reset winter route cooldowns / 25 presents", async () => {
         if (getChristmasPresents() < 25) { status.textContent = "You need 25 presents to reset winter route cooldowns."; return; }
-        setChristmasPresents(getChristmasPresents() - 25);
-        levels.forEach((level, index) => { if (isChristmasLevel(level)) localStorage.removeItem(`orbit-christmas-cooldown-${index}`); });
-        status.textContent = "Winter route cooldowns reset.";
-        balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
-        spin.disabled = getChristmasPresents() < 10;
+        resetCooldown.disabled = true;
+        status.textContent = "Resetting Winter Orbit cooldowns...";
+        try {
+            if (currentOnlineUser) {
+                const sent = getLocalAccountProgress();
+                const result = await apiRequest<{ progress: Record<string, string> }>("/holiday/christmas-routes/reset-cooldowns", { method: "POST", body: "{}" });
+                applySyncedProgress(sent, result.progress);
+                lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+            } else {
+                setChristmasPresents(getChristmasPresents() - 25);
+                levels.forEach((level, index) => { if (isChristmasLevel(level)) respawnChristmasPresents(index); });
+            }
+            status.textContent = "Winter route cooldowns reset. Your presents were saved.";
+            balance.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
+            spin.disabled = getChristmasPresents() < 10;
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : "Could not reset Winter Orbit cooldowns.";
+        } finally {
+            resetCooldown.disabled = false;
+        }
     });
-    menu.append(balance, wheel, odds, spin, resetCooldown, status, createTextButton("Back to Christmas event", showChristmasEvent), createPageCounter());
+    menu.append(balance, wheelStage, odds, spin, resetCooldown, status, createTextButton("Back to Christmas event", showChristmasEvent), createPageCounter());
     document.body.replaceChildren(menu);
     void apiRequest<{ options: ChristmasWheelOption[] }>("/holiday/christmas-wheel").then((response) => {
         renderWheel(response.options);
@@ -4219,17 +4273,12 @@ function getActiveSecretPortals(level: Level) {
     return (level.secretPortals ?? []).filter((portal) => hasOwnerAccess() || !isSecretPortalClaimed(portal.secretId));
 }
 
-function isPrestigeGateAvailable() {
-    return hasOwnerAccess() || getNormalRouteCompletionCount() >= getNormalRouteCount();
-}
-
 function usesSecretRouteCooldown(level: Level) {
-    return Boolean(level.secretId && level.secretId !== "prestige-gate");
+    return Boolean(level.secretId);
 }
 
 function isSecretLevelUnlocked(level: Level) {
     if (hasOwnerAccess()) return true;
-    if (level.secretId === "prestige-gate") return isPrestigeGateAvailable();
     return level.secretId === "eclipse" ? localStorage.getItem("orbit-key-eclipse") === "1" || localStorage.getItem("orbit-secret-unlocked") === "1" : level.secretId ? localStorage.getItem(`orbit-key-${level.secretId}`) === "1" : localStorage.getItem("orbit-secret-unlocked") === "1";
 }
 
@@ -5107,27 +5156,20 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const level = levels[index];
             if (matches(level)) input.checked = level.secret ? isSecretLevelUnlocked(level) : true;
         });
-        if (localStorage.getItem("orbit-key-prestige-gate") === "1") prestigeGateInput.checked = true;
     };
-    const normalUnlock = createTextButton("Unlock normal levels", () => unlockLevels((level) => !level.secret && !level.prestige));
+    const normalUnlock = createTextButton("Unlock normal levels", () => unlockLevels((level) => !level.holiday && !level.secret && !level.prestige));
     const secretUnlock = createTextButton("Unlock secret levels", () => { localStorage.setItem("orbit-secret-unlocked", "1"); unlockLevels((level) => Boolean(level.secret)); });
     const prestigeUnlock = createTextButton("Unlock prestige levels", () => { unlockLevels((level) => Boolean(level.prestige)); prestigeLevel = Math.max(prestigeLevel, 2); prestigeInput.value = String(prestigeLevel); localStorage.setItem("orbit-prestige", String(prestigeLevel)); });
-    levelActions.append(normalUnlock, secretUnlock, prestigeUnlock);
+    const eventUnlock = createTextButton("Unlock event levels", () => unlockLevels((level) => Boolean(level.holiday)));
+    levelActions.append(normalUnlock, secretUnlock, prestigeUnlock, eventUnlock);
     form.append(levelActions);
-    const prestigeGateLabel = document.createElement("label");
-    prestigeGateLabel.innerHTML = `<span>Access Prestige Gate</span>`;
-    const prestigeGateInput = document.createElement("input");
-    prestigeGateInput.type = "checkbox";
-    prestigeGateInput.checked = localStorage.getItem("orbit-key-prestige-gate") === "1";
-    prestigeGateInput.dataset.prestigeGate = "true";
-    prestigeGateLabel.append(prestigeGateInput);
-    form.append(prestigeGateLabel);
     const levelChoices = document.createElement("div");
     levelChoices.className = "tester-levels";
     const levelGroups = [
-        { title: "Normal levels", matches: (level: Level) => !level.secret && !level.prestige },
+        { title: "Normal levels", matches: (level: Level) => !level.holiday && !level.secret && !level.prestige },
         { title: "Secret levels", matches: (level: Level) => Boolean(level.secret) },
         { title: "Prestige levels", matches: (level: Level) => Boolean(level.prestige) },
+        { title: "Event", matches: (level: Level) => Boolean(level.holiday) },
     ];
     levelGroups.forEach((group) => {
         const groupPanel = document.createElement("section");
@@ -5142,7 +5184,6 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
                 levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((other) => {
                     if (other.dataset.level === input.dataset.level) other.checked = input.checked;
                 });
-                if (levels[Number(input.dataset.level)]?.secretId === "prestige-gate") prestigeGateInput.checked = input.checked;
             });
             const name = document.createElement("span");
             name.textContent = level.name;
@@ -5152,11 +5193,6 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             label.append(input, name, metadata); groupPanel.append(label);
         });
         levelChoices.append(groupPanel);
-    });
-    prestigeGateInput.addEventListener("change", () => {
-        levelChoices.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => {
-            if (levels[Number(input.dataset.level)]?.secretId === "prestige-gate") input.checked = prestigeGateInput.checked;
-        });
     });
     form.append(levelChoices);
     let portalAssignmentPanel: HTMLElement | undefined;
@@ -5171,7 +5207,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         portalDescription.textContent = "Choose the normal or prestige level where each secret portal can appear. If that level has a Portal tile, the secret portal uses the first placed tile; otherwise it uses a stable portal slot at a playable height. Empty assignments use automatic placement.";
         portalAssignmentPanel.append(portalHeading, portalDescription);
         const portalTargets: Record<"normal" | "prestige", string[]> = {
-            normal: ["eclipse", "nebula", "archive"],
+            normal: ["eclipse", "nebula", "archive", "astral-vault"],
             prestige: ["stellar-sanctum", "quantum-depths", "infinity-spiral"],
         };
         (Object.entries(portalTargets) as ["normal" | "prestige", string[]][]).forEach(([world, targetIds]) => {
@@ -5511,7 +5547,6 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
             const key = `orbit-unlock-${input.dataset.unlock}`; if (input.checked) localStorage.setItem(key, "1"); else localStorage.removeItem(key);
         });
         form.querySelectorAll<HTMLInputElement>("input[data-level]").forEach((input) => { const level = levels[Number(input.dataset.level)]; if (level.secret && level.secretId) { if (input.checked) localStorage.setItem(`orbit-key-${level.secretId}`, "1"); else localStorage.removeItem(`orbit-key-${level.secretId}`); } else if (input.checked) localStorage.setItem(`orbit-level-${input.dataset.level}`, "1"); else localStorage.removeItem(`orbit-level-${input.dataset.level}`); });
-        if (prestigeGateInput.checked) localStorage.setItem("orbit-key-prestige-gate", "1"); else localStorage.removeItem("orbit-key-prestige-gate");
         if (publishChanges) saveAccountProgressSoon();
     });
     const settingPanel = (id: string, elements: HTMLElement[]) => {
@@ -5529,7 +5564,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         { id: "roulette", title: "Roulette & spinning", group: "Game settings", description: "Configure wheel buy-ins, spin prize chances, and asteroid rewards.", panel: roulettePanel },
         { id: "profile", title: "Resources", group: "Your test profile", description: "Adjust the progress and inventory on this device, not other players' accounts.", panel: settingPanel("profile", pilotFields) },
         { id: "cosmetics", title: "Cosmetics", group: "Your test profile", description: "Manage cosmetic unlocks for this device.", panel: settingPanel("cosmetics", [customizationTitle, unlocks, unlockEverySkin]) },
-        { id: "levels", title: "Levels & prestige", group: "Your test profile", description: "Quick unlock buttons apply immediately. Save checkbox changes when you're ready.", panel: settingPanel("levels", [levelTitle, levelActions, prestigeGateLabel, levelChoices, ...(portalAssignmentPanel ? [portalAssignmentPanel] : []), tryPrestige]) },
+        { id: "levels", title: "Levels & prestige", group: "Your test profile", description: "Quick unlock buttons apply immediately. Save checkbox changes when you're ready.", panel: settingPanel("levels", [levelTitle, levelActions, levelChoices, ...(portalAssignmentPanel ? [portalAssignmentPanel] : []), tryPrestige]) },
         { id: "workshop", title: "Level workshop", group: "Your test profile", description: isOwner ? "Build routes or manage shared workshop levels." : "Playtest routes. Publishing or deleting shared levels requires owner access.", panel: settingPanel("workshop", [customTitle, sharedLevels, workshopStatus, openMaker]) },
         { id: "reset", title: "Device reset", group: "Your test profile", description: "Reset this device's game data without deleting shared settings.", panel: settingPanel("reset", [resetTitle, resetPanel]) },
     ];
@@ -6213,7 +6248,7 @@ async function requestRunProof(levelName: string, sequence: number) {
         });
         if (sequence !== runProofSequence || levels[currentLevel]?.name !== levelName || typeof response.runId !== "string") return;
         activeRunProof = { runId: response.runId, levelName };
-        void flushPendingAsteroidRewards(levelName);
+        void flushPendingAsteroidRewards(levelName).catch((error: unknown) => console.warn("Could not flush asteroid rewards after run verification:", error));
     } catch (error) {
         if (sequence === runProofSequence) console.warn("Online run verification is unavailable:", error);
     }
@@ -6247,7 +6282,12 @@ async function submitAsteroidReward(level: string, levelIndex: number, asteroidI
 
 async function flushPendingAsteroidRewards(level: string) {
     const rewards = [...pendingAsteroidRewards.values()].filter((reward) => reward.level === level);
+    if (!rewards.length) return;
+    if (!getRunProofId(level)) await waitForRunProof(level);
+    if (!getRunProofId(level)) throw new Error("Run verification is still pending. Your collected asteroids have not been saved yet.");
     await Promise.all(rewards.map((reward) => submitAsteroidReward(reward.level, reward.levelIndex, reward.asteroidIndex)));
+    const unsavedCount = rewards.filter((reward) => pendingAsteroidRewards.has(`${reward.level}\u0000${reward.asteroidIndex}`)).length;
+    if (unsavedCount) throw new Error(`${unsavedCount} collected asteroid${unsavedCount === 1 ? "" : "s"} could not be saved. Stay signed in and try again.`);
 }
 
 function getRunProofId(levelName: string) {
@@ -6308,20 +6348,6 @@ function startGame(levelIndex = currentLevel) {
             return;
         }
     }
-    if (level.secretId === "prestige-gate") {
-        const gateError = getPrestigeGateAccessError();
-        if (gateError) {
-            const screen = document.createElement("main");
-            screen.className = "menu-screen";
-            screen.innerHTML = `<p class="eyebrow">PRESTIGE GATE / REQUIREMENTS</p><h1>Gate <em>sealed</em></h1>`;
-            const message = document.createElement("p");
-            message.className = "menu-copy";
-            message.textContent = gateError;
-            screen.append(message, createTextButton("Secret space", showSecretLevels), createTextButton("Mission select", showLevelMenu));
-            document.body.replaceChildren(screen);
-            return;
-        }
-    }
     setMusicScene(isChristmasLevel(level) ? "christmas" : level.secret ? "secret" : level.boss ? "boss" : level.prestige ? "prestige" : "normal");
     cancelPortalTransit();
     currentLevel = levelIndex;
@@ -6351,7 +6377,6 @@ function showWinScreen() {
         return;
     }
     const level = levels[currentLevel];
-    if (currentOnlineUser) void flushPendingAsteroidRewards(level.name);
     // Account rewards store their own verified collection history on the
     // server. This old local completion counter caused the whole level save
     // to be rejected by anti-cheat for signed-in players.
@@ -6360,34 +6385,39 @@ function showWinScreen() {
     const previousBest = Number(localStorage.getItem(`orbit-best-${currentLevel}`) ?? "0");
     if (!previousBest || elapsedMilliseconds < previousBest) localStorage.setItem(`orbit-best-${currentLevel}`, String(elapsedMilliseconds));
     if (!level.secret && !level.prestige && !level.holiday && elapsedMilliseconds <= goldenTimeLimitMs) localStorage.setItem(`orbit-golden-level-${currentLevel}`, "1");
-    if (isChristmasLevel(level)) {
-        // Signed-in players receive one present per verified collectible from
-        // the server, then the server starts the 15-minute route cooldown.
-        // Guests keep the offline reward and local cooldown behavior.
-        if (currentOnlineUser) {
-            void completeChristmasRoute(currentLevel).catch((error: unknown) => console.error("Could not start Winter Orbit cooldown:", error));
-        } else {
-            const presents = getChristmasLevelPresentReward(currentLevel);
-            setChristmasPresents(getChristmasPresents() + presents);
-            localStorage.setItem(`orbit-christmas-cooldown-${currentLevel}`, String(Date.now() + 15 * 60 * 1000));
-        }
-    }
     if (usesSecretRouteCooldown(level)) localStorage.setItem(`orbit-secret-cooldown-${level.secretId}`, String(Date.now()));
     const nextLevel = getNextRouteIndex(currentLevel);
     if (nextLevel >= 0) localStorage.setItem(`orbit-level-${nextLevel}`, "1");
     if (levels[currentLevel].boss) localStorage.setItem("orbit-boss-defeated", "1");
-    if (levels[currentLevel].secretId === "prestige-gate") localStorage.setItem("orbit-level-complete-prestige-gate", "1");
-    // Queue an explicit cloud save for every finished route. Waiting only for
-    // the background timer meant a player could leave or refresh before their
-    // completion, best time, unlock and cooldown reached their account.
-    if (currentOnlineUser) saveAccountProgressSoon();
+    const presentsCollected = levelAsteroids.filter((asteroid) => asteroid.claimed).length;
+    const collectedEveryPresent = isChristmasLevel(level) && presentsCollected === levelAsteroids.length;
+    const progressSaveStatus = document.createElement("p");
+    progressSaveStatus.className = "menu-copy online-service-status";
+    progressSaveStatus.setAttribute("role", "status");
+    if (currentOnlineUser) {
+        progressSaveStatus.textContent = collectedEveryPresent ? "Saving presents and route progress..." : "Saving your route progress...";
+        if (!collectedEveryPresent) {
+            void (async () => {
+                await flushPendingAsteroidRewards(level.name);
+                await syncAccountProgress("save", true);
+                progressSaveStatus.textContent = "Route progress saved to your account.";
+            })().catch((error: unknown) => {
+                progressSaveStatus.textContent = `Route progress could not be saved: ${error instanceof Error ? error.message : "online service error"}`;
+                console.error("Could not save completed route progress:", error);
+            });
+        }
+    }
     const screen = document.createElement("main");
-        screen.className = "win-screen win-screen-animation";
-    const prestigeGateCleared = levels[currentLevel].secretId === "prestige-gate";
-    const presentsReward = isChristmasLevel(level) ? getChristmasLevelPresentReward(currentLevel) : 0;
-    const reward = isChristmasLevel(level) ? `Holiday flight complete! Collected ${levelAsteroids.length}/${level.asteroids.length} presents (+${presentsReward} presents). This route returns in 15 minutes.` : prestigeGateCleared ? "Prestige Gate cleared. Return to the main menu to claim your prestige." : levels[currentLevel].boss ? "Titan Core skin unlocked. The fleet has a new legend." : levels[currentLevel].secret ? "The Eclipse skin has joined your collection." : `Every asteroid secured. Total fleet claims: ${asteroidsClaimed}.`;
+    screen.className = "win-screen win-screen-animation";
+    const reward = isChristmasLevel(level)
+        ? collectedEveryPresent
+            ? `Holiday flight complete! You collected every present: ${presentsCollected}/${levelAsteroids.length}. Starting this route's 15-minute cooldown.`
+            : `Holiday flight complete! You collected ${presentsCollected}/${levelAsteroids.length} presents. Collect every present in one run to begin the cooldown.`
+        : `${level.secret ? "Special asteroids" : "Asteroids"} collected: ${presentsCollected}/${levelAsteroids.length}. Fleet balance: ${level.secret ? specialAsteroids : asteroidsClaimed}.`;
     screen.innerHTML = `<p class="eyebrow">BEACON REACHED / ${levels[currentLevel].secret ? "SECRET" : `SECTOR 0${currentLevel + 1}`}</p><h1>Claim <em>complete</em></h1><p class="time-result">${formatTime(elapsedMilliseconds)}</p><p class="menu-copy">${reward}</p>`;
-    if (level.secret && !prestigeGateCleared) {
+    if (currentOnlineUser) screen.append(progressSaveStatus);
+    if (level.secret) {
+        if (canClaimPrestige()) screen.append(createMenuButton("Prestige now", showPrestigeConfirmation));
         screen.append(createMenuButton("Leave", showLevelMenu));
         document.body.replaceChildren(screen);
         return;
@@ -6414,19 +6444,32 @@ function showWinScreen() {
         void submitLeaderboardRun(runStatus, levels[currentLevel].name, runTime, runAbilities);
     }
     if (isChristmasLevel(level)) {
+        const cooldownStatus = document.createElement("p");
+        cooldownStatus.className = "menu-copy online-service-status";
+        if (!collectedEveryPresent) cooldownStatus.textContent = "No cooldown started yet — missed presents remain unclaimed until you replay the route.";
+        else if (currentOnlineUser) {
+            cooldownStatus.textContent = "Saving your collected presents and starting the 15-minute cooldown...";
+            void completeChristmasRoute(currentLevel).then((expiresAt) => {
+                progressSaveStatus.textContent = "Presents and route progress saved to your account.";
+                cooldownStatus.textContent = `All ${presentsCollected} presents were saved. Ready again in ${formatCooldown(Math.max(0, Number(expiresAt ?? Date.now()) - Date.now()))}.`;
+            }).catch((error: unknown) => {
+                progressSaveStatus.textContent = "Presents or route progress could not be saved.";
+                cooldownStatus.textContent = `Presents were collected, but the cooldown could not start: ${error instanceof Error ? error.message : "online service error"}`;
+                console.error("Could not start Winter Orbit cooldown:", error);
+            });
+        } else {
+            const expiresAt = Date.now() + 15 * 60 * 1000;
+            localStorage.setItem(`orbit-christmas-cooldown-${currentLevel}`, String(expiresAt));
+            cooldownStatus.textContent = `All ${presentsCollected} presents were collected. Ready again in ${formatCooldown(expiresAt - Date.now())}.`;
+        }
+        screen.append(cooldownStatus);
         screen.append(createMenuButton("Back to Christmas event", showChristmasEvent));
         document.body.replaceChildren(screen);
-        if (currentOnlineUser) void syncAccountProgress("save", true).catch((error: unknown) => console.error("Could not save Christmas progress:", error));
         return;
     }
+    if (canClaimPrestige()) screen.append(createMenuButton("Prestige now", showPrestigeConfirmation));
     if (level.secret) {
-        if (prestigeGateCleared) {
-            const prestige = createMenuButton("Prestige", showPrestigeConfirmation);
-            prestige.disabled = !canClaimPrestige();
-            screen.append(prestige, createTextButton("Leave", showLevelMenu));
-        } else {
-            screen.append(createMenuButton("Leave", showLevelMenu));
-        }
+        screen.append(createTextButton("Leave", showLevelMenu));
         document.body.replaceChildren(screen);
         return;
     }
@@ -6687,13 +6730,6 @@ function startPortalTransit(target: number, secretId?: string) {
     const sourceLevel = levels[currentLevel];
     const targetLevel = levels.find((level) => level.secretId === secretId);
     if (targetLevel?.prestige && !sourceLevel.prestige) return;
-    if (secretId === "prestige-gate") {
-        const gateError = getPrestigeGateAccessError();
-        if (gateError) {
-            statusLabel.textContent = gateError;
-            return;
-        }
-    }
     portalTravelInProgress = true;
     setMusicScene("boss");
     secretBossRoomActive = true;
@@ -7589,9 +7625,11 @@ function updatePowerupHud() {
 }
 function damageBoss() { if (!boss || boss.defeated) return; boss.health--; bossLabel.textContent = `TITAN ${boss.health}/${boss.maxHealth}`; const bossElement = document.querySelector(".boss"); bossElement?.classList.add("hit"); globalThis.setTimeout(() => bossElement?.classList.remove("hit"), 180); if (boss.health <= 0) { boss.defeated = true; recordKill("boss"); bossElement?.classList.add("defeated"); createEnemyExplosion(world, boss.x + 64, boss.y + 75, "#ed7657"); statusLabel.textContent = "Titan Core shattered. Reach the beacon for your reward."; } }
 
-function getNormalRouteCount() { return levels.filter((level) => !level.holiday && !level.secret && !level.prestige).length; }
-function getNormalRouteCompletionCount() { return levels.filter((level, index) => !level.holiday && !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
-function getNormalCompletedLevelCount() { return levels.filter((level, index) => { const bestTime = Number(localStorage.getItem(`orbit-best-${index}`) ?? "0"); return !level.holiday && !level.secret && !level.prestige && localStorage.getItem(`orbit-level-complete-${index}`) === "1" && bestTime > 0 && bestTime <= goldenTimeLimitMs; }).length; }
+function isNormalLevel(level: Level) { return !level.holiday && !level.secret && !level.prestige && !level.customId && !level.localOnly; }
+function getNormalLevelIndices() { return levels.flatMap((level, index) => isNormalLevel(level) ? [index] : []); }
+function getNormalRouteCount() { return getNormalLevelIndices().length; }
+function getNormalRouteCompletionCount() { return getNormalLevelIndices().filter((index) => localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
+function getNormalCompletedLevelCount() { return getNormalLevelIndices().filter((index) => { const bestTime = Number(localStorage.getItem(`orbit-best-${index}`) ?? "0"); return localStorage.getItem(`orbit-level-complete-${index}`) === "1" && (localStorage.getItem(`orbit-golden-level-${index}`) === "1" || bestTime > 0 && bestTime <= goldenTimeLimitMs); }).length; }
 function getCompletedLevelCount() { return levels.filter((level, index) => !level.holiday && localStorage.getItem(`orbit-level-complete-${index}`) === "1").length; }
 function isChristmasTitle(title: ProfileTitle) { return CHRISTMAS_TITLES.some((holidayTitle) => holidayTitle.id === title.id); }
 function isProfileTitleUnlocked(title: ProfileTitle) {
@@ -7608,15 +7646,13 @@ function isProfileTitleUnlocked(title: ProfileTitle) {
     if (requirement.type === "roulette") return false;
     return getCompletedLevelCount() >= requirement.amount;
 }
-function hasClearedPrestigeGate() { return localStorage.getItem("orbit-level-complete-prestige-gate") === "1" || levels.some((level, index) => level.secretId === "prestige-gate" && localStorage.getItem(`orbit-level-complete-${index}`) === "1"); }
-function getPrestigeGateAccessError() {
+function getPrestigeAccessError() {
     const normalComplete = getNormalRouteCompletionCount();
     if (prestigeLevel >= prestigeMax) return "You have reached the configured prestige limit.";
     if (normalComplete < getNormalRouteCount()) return `Clear every normal route (${normalComplete}/${getNormalRouteCount()} complete).`;
-    if (!hasClearedPrestigeGate()) return "Clear the Prestige Gate in Secret Space before claiming prestige.";
     return "";
 }
-function canClaimPrestige() { return !hasOwnerAccess() && !getPrestigeGateAccessError(); }
+function canClaimPrestige() { return !hasOwnerAccess() && !getPrestigeAccessError(); }
 function getPrestigeDifficultyMultiplier() { return Math.min(2, 1 + 0.05 * Math.max(0, prestigeLevel)); }
 
 function getNextRouteIndex(currentIndex: number) {
@@ -7639,54 +7675,65 @@ function getNextRouteIndex(currentIndex: number) {
 function showPrestigeConfirmation() {
     const screen = document.createElement("main");
     screen.className = "win-screen prestige-confirmation";
-    screen.innerHTML = `<p class="eyebrow">PRESTIGE / CONFIRM RESET</p><h1>Begin a <em>new run?</em></h1><p class="menu-copy">This can't be undone. Your skins, asteroids, power-ups, and level unlocks will reset. Claimed secret portals and cooldowns will remain.</p>`;
-    const confirm = createMenuButton("Confirm prestige", () => {
-        const error = getPrestigeGateAccessError();
+    screen.innerHTML = `<p class="eyebrow">PRESTIGE / CONFIRM RESET</p><h1>Begin a <em>new run?</em></h1><p class="menu-copy">This resets your normal and special asteroid balances and normal level progress. Secret and prestige level progress, cosmetics, and power-ups stay.</p>`;
+    const status = document.createElement("p");
+    status.className = "menu-copy online-service-status";
+    status.setAttribute("role", "status");
+    const confirm = createMenuButton("Confirm prestige", async () => {
+        const error = getPrestigeAccessError();
         if (error) {
-            showLevelMenu();
+            status.textContent = error;
             return;
         }
-        if (tryPrestige()) showMenu();
-        else showLevelMenu();
+        confirm.disabled = true;
+        status.textContent = "Saving your prestige reset...";
+        try {
+            if (await tryPrestige()) showMenu();
+            else {
+                status.textContent = getPrestigeAccessError() || "Prestige could not be completed.";
+                confirm.disabled = false;
+            }
+        } catch (saveError) {
+            status.textContent = `Prestige was not saved: ${saveError instanceof Error ? saveError.message : "online service error"}`;
+            confirm.disabled = false;
+        }
     });
     confirm.disabled = !canClaimPrestige();
-    screen.append(confirm, createTextButton("Cancel", showLevelMenu));
+    screen.append(confirm, status, createTextButton("Cancel", showLevelMenu));
     document.body.replaceChildren(screen);
 }
 
-function tryPrestige() {
+async function tryPrestige() {
     if (!canClaimPrestige()) return false;
+    const previousProgress = getLocalAccountProgress();
+    const normalLevelIndices = getNormalLevelIndices();
+    const resetKeys = new Set(["orbit-claims", "orbit-special-claims", "orbit-prestige", "orbit-prestige-world-unlocked"]);
+    normalLevelIndices.forEach((index) => {
+        for (const prefix of ["orbit-level-", "orbit-level-complete-", "orbit-level-claims-", "orbit-asteroids-", "orbit-best-", "orbit-golden-level-"]) {
+            const key = `${prefix}${index}`;
+            resetKeys.add(key);
+            localStorage.removeItem(key);
+        }
+    });
     prestigeLevel++;
     localStorage.setItem("orbit-claims", "0");
     localStorage.setItem("orbit-special-claims", "0");
     localStorage.setItem("orbit-prestige", String(prestigeLevel));
     localStorage.setItem("orbit-prestige-world-unlocked", "1");
     localStorage.setItem("orbit-level-0", "1");
-    levels.forEach((_level, index) => {
-        localStorage.removeItem(`orbit-level-${index}`);
-        localStorage.removeItem(`orbit-level-complete-${index}`);
-        localStorage.removeItem(`orbit-level-claims-${index}`);
-        localStorage.removeItem(`orbit-asteroids-${index}`);
-    });
-    localStorage.setItem("orbit-level-0", "1");
-    [
-        "orbit-boss-defeated",
-        "orbit-jackpot-avatar",
-        "orbit-secret-unlocked",
-        "orbit-level-complete-prestige-gate",
-        "orbit-powerups",
-        "orbit-unlock-skins",
-        "orbit-unlock-avatars",
-        "orbit-unlock-trails",
-        "orbit-skin",
-        "orbit-avatar",
-        "orbit-trail",
-    ].forEach((key) => localStorage.removeItem(key));
-    Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-        .filter((key): key is string => Boolean(key && (/^orbit-spin-(skin|trail|avatar)-\d+$/.test(key) || /^orbit-golden-level-\d+$/.test(key))))
-        .forEach((key) => localStorage.removeItem(key));
     refreshProgressStateFromStorage();
-    saveAccountProgressSoon();
+    if (currentOnlineUser) {
+        try {
+            await syncAccountProgress("save", true);
+        } catch (error) {
+            resetKeys.forEach((key) => {
+                if (Object.hasOwn(previousProgress, key)) localStorage.setItem(key, previousProgress[key]);
+                else localStorage.removeItem(key);
+            });
+            refreshProgressStateFromStorage();
+            throw error;
+        }
+    }
     return true;
 }
 function isSkinUnlocked(skin: { required: number; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean; holiday?: "christmas"; limited?: boolean }, index?: number) {
