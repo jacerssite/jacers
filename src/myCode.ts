@@ -222,6 +222,7 @@ let accountProgressLoadRetryAt = 0;
 let accountProgressLoadFailed = false;
 let accountRedemptionInFlight = false;
 let lastSyncedAccountProgress = "";
+let pendingAccountProgressConflictIdentity: string | null = null;
 let loadedAccountProgressFor: string | null = null;
 let onlineSessionVersion = 0;
 let pendingFriendRequests = 0;
@@ -686,6 +687,103 @@ function rememberProgressSnapshot(identity: string | null, progress: Record<stri
 }
 function hasAccountProgress(progress: Record<string, string>) { return Object.keys(progress).some((key) => key.startsWith("orbit-")); }
 
+function mergeAccountProgress(local: Record<string, string>, remote: Record<string, string>, baseline: Record<string, string>) {
+    const merged = { ...remote };
+    const keys = new Set([...Object.keys(local), ...Object.keys(remote), ...Object.keys(baseline)]);
+    let conflicts = 0;
+    for (const key of keys) {
+        const localChanged = local[key] !== baseline[key];
+        const remoteChanged = remote[key] !== baseline[key];
+        if (!localChanged) continue;
+        if (remoteChanged && local[key] !== remote[key]) {
+            conflicts++;
+            continue;
+        }
+        if (Object.hasOwn(local, key)) merged[key] = local[key];
+        else delete merged[key];
+    }
+    return { progress: merged, conflicts };
+}
+
+function accountConflictBackupKey(identity: string) {
+    return `jacer-progress-conflict-backup-${identity}`;
+}
+
+function saveAccountConflictBackup(identity: string, local: Record<string, string>, remote: Record<string, string>) {
+    localStorage.setItem(accountConflictBackupKey(identity), JSON.stringify({
+        format: 1,
+        createdAt: new Date().toISOString(),
+        local,
+        cloud: remote,
+    }));
+}
+
+function downloadAccountConflictBackup(identity: string) {
+    const backup = localStorage.getItem(accountConflictBackupKey(identity));
+    if (!backup) return;
+    const blob = new Blob([`${backup}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `jacer-progress-conflict-${identity}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function showAccountProgressConflictNotice(identity: string) {
+    pendingAccountProgressConflictIdentity = identity;
+    if (document.querySelector(".startup-screen")) return;
+    renderAccountProgressConflictNotice(identity);
+}
+
+function renderAccountProgressConflictNotice(identity: string) {
+    clearAccountSyncWarning();
+    const notice = document.createElement("aside");
+    notice.className = "account-sync-warning";
+    notice.setAttribute("role", "status");
+    const details = document.createElement("p");
+    details.textContent = "Progress changed on this device and in the cloud. The cloud version is active; your device's pre-merge progress is preserved in a recovery backup. Download it now if you need to compare or recover anything.";
+    const download = document.createElement("button");
+    download.type = "button";
+    download.textContent = "Download recovery backup";
+    download.addEventListener("click", () => downloadAccountConflictBackup(identity));
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.textContent = "Dismiss";
+    dismiss.addEventListener("click", () => {
+        notice.remove();
+        if (pendingAccountProgressConflictIdentity === identity) pendingAccountProgressConflictIdentity = null;
+    });
+    notice.append(details, download, dismiss);
+    document.body.append(notice);
+}
+
+async function recoverLocalProgressConflict(
+    identity: string,
+    localProgress: Record<string, string>,
+    baseline: Record<string, string>,
+    ensureSameAccount: () => void,
+) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const latest = await apiRequest<{ progress: Record<string, string> | null }>("/account/progress");
+        ensureSameAccount();
+        if (!latest.progress) throw new Error("Cloud progress is unavailable for conflict recovery.");
+        saveAccountConflictBackup(identity, localProgress, latest.progress);
+        const merged = mergeAccountProgress(localProgress, latest.progress, baseline);
+        try {
+            const result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
+                method: "PUT",
+                body: JSON.stringify({ progress: merged.progress, baseProgress: latest.progress }),
+            });
+            ensureSameAccount();
+            return { progress: result.progress, conflicts: merged.conflicts };
+        } catch (error) {
+            if (!(error instanceof ApiError) || error.status !== 409 || attempt === 2) throw error;
+        }
+    }
+    throw new Error("Progress kept changing during recovery. Your device backup is preserved; retry the sync in a moment.");
+}
+
 function refreshProgressStateFromStorage() {
     const readCount = (key: string, fallback: number, minimum: number, maximum: number) => {
         const value = Number(localStorage.getItem(key) ?? fallback);
@@ -847,6 +945,7 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
         if (!currentOnlineUser) return;
     }
     const identity = accountIdentity(currentOnlineUser);
+    if (!identity) throw new Error("The signed-in account could not be identified.");
     if (direction === "load") {
         const localOwner = localStorage.getItem("jacer-local-owner");
         if (localOwner && localOwner !== identity) clearLocalAccountData();
@@ -888,10 +987,19 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
             // same signed-in account and its local data differs from the last
             // confirmed snapshot, save it before replacing anything locally.
             if (canRecoverLocalChanges && storedSnapshot && serializeAccountProgress(localProgress) !== serializeAccountProgress(storedSnapshot)) {
-                const result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
-                    method: "PUT",
-                    body: JSON.stringify({ progress: localProgress, baseProgress: storedSnapshot }),
-                });
+                let result: { progress: Record<string, string> };
+                let conflictCount = 0;
+                try {
+                    result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
+                        method: "PUT",
+                        body: JSON.stringify({ progress: localProgress, baseProgress: storedSnapshot }),
+                    });
+                } catch (error) {
+                    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+                    const recovered = await recoverLocalProgressConflict(identity, localProgress, storedSnapshot, ensureSameAccount);
+                    result = { progress: recovered.progress };
+                    conflictCount = recovered.conflicts;
+                }
                 ensureSameAccount();
                 applySyncedProgress(localProgress, result.progress);
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
@@ -899,16 +1007,26 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 loadedAccountProgressFor = identity;
                 accountProgressLoadRetryAt = 0;
                 accountProgressLoadFailed = false;
-                clearAccountSyncWarning();
+                if (conflictCount) showAccountProgressConflictNotice(identity);
+                else clearAccountSyncWarning();
                 return;
             }
             // Older accounts may not have a device snapshot yet. A completely
             // empty cloud record must never erase progress from that same device.
             if (canRecoverLocalChanges && !hasAccountProgress(progress)) {
-                const result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
-                    method: "PUT",
-                    body: JSON.stringify({ progress: localProgress, baseProgress: progress }),
-                });
+                let result: { progress: Record<string, string> };
+                let conflictCount = 0;
+                try {
+                    result = await apiRequest<{ progress: Record<string, string> }>("/account/progress", {
+                        method: "PUT",
+                        body: JSON.stringify({ progress: localProgress, baseProgress: progress }),
+                    });
+                } catch (error) {
+                    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+                    const recovered = await recoverLocalProgressConflict(identity, localProgress, progress, ensureSameAccount);
+                    result = { progress: recovered.progress };
+                    conflictCount = recovered.conflicts;
+                }
                 ensureSameAccount();
                 applySyncedProgress(localProgress, result.progress);
                 lastSyncedAccountProgress = serializeAccountProgress(result.progress);
@@ -916,7 +1034,8 @@ async function syncAccountProgress(direction: "load" | "save", force = false) {
                 loadedAccountProgressFor = identity;
                 accountProgressLoadRetryAt = 0;
                 accountProgressLoadFailed = false;
-                clearAccountSyncWarning();
+                if (conflictCount) showAccountProgressConflictNotice(identity);
+                else clearAccountSyncWarning();
                 return;
             }
             Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -1028,9 +1147,9 @@ async function refreshRemoteProgressIfChanged() {
         if (!lastSyncedAccountProgress || remote === lastSyncedAccountProgress) return;
         const local = getLocalAccountProgress();
         // Do not discard a just-finished local level. Its explicit save will
-        // either succeed or report a safe conflict instead of losing data.
+        // either succeed or reconcile concurrent changes without discarding either snapshot.
         if (serializeAccountProgress(local) !== lastSyncedAccountProgress) {
-            saveAccountProgressSoon();
+            await syncAccountProgress("load");
             return;
         }
         applySyncedProgress(local, progress);
@@ -1262,6 +1381,7 @@ export function startApp() {
                 if (currentOnlineUser && loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) {
                     showAccountProgressLoadWarning("Your account progress could not be loaded, so gameplay is paused to protect your saved data. Retry the account sync.");
                 }
+                if (pendingAccountProgressConflictIdentity) renderAccountProgressConflictNotice(pendingAccountProgressConflictIdentity);
             }
         });
     void refreshOnlineState(false)

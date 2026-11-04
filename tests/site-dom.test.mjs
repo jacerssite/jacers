@@ -399,6 +399,52 @@ test("startup keeps the game behind the loading screen until cloud progress is r
   }
 });
 
+test("startup reconciles concurrent account changes and preserves a recovery backup", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  const baseline = { "orbit-claims": "5", "orbit-last-level": "Vega Outpost", "orbit-ship-color": "#000000" };
+  const remote = { "orbit-claims": "8", "orbit-last-level": "Vega Outpost", "orbit-ship-color": "#abcdef" };
+  let getRequests = 0;
+  let putRequests = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": () => {
+      getRequests++;
+      return { progress: remote };
+    },
+    "PUT /api/account/progress": ({ init }) => {
+      putRequests++;
+      const body = JSON.parse(init.body);
+      if (putRequests === 1) return { status: 409, json: { error: "Progress changed on another device." } };
+      assert.deepEqual(body.baseProgress, remote);
+      assert.equal(body.progress["orbit-claims"], "8", "Cloud value should win a same-field conflict");
+      assert.equal(body.progress["orbit-last-level"], "Emberline Run", "Local-only change should be merged");
+      assert.equal(body.progress["orbit-ship-color"], "#abcdef", "Remote-only change should be preserved");
+      return { progress: body.progress };
+    },
+  }, {
+    "orbit-claims": "10",
+    "orbit-last-level": "Emberline Run",
+    "orbit-ship-color": "#000000",
+    "jacer-local-owner": "pilot_7",
+    "jacer-progress-snapshot-pilot_7": JSON.stringify(baseline),
+  });
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home did not load after progress reconciliation");
+    await waitFor(() => document.querySelector(".account-sync-warning"), "Concurrent progress warning was not shown");
+    assert.equal(getRequests, 2);
+    assert.equal(putRequests, 2);
+    assert.equal(window.localStorage.getItem("orbit-claims"), "8");
+    assert.equal(window.localStorage.getItem("orbit-last-level"), "Emberline Run");
+    assert.equal(window.localStorage.getItem("orbit-ship-color"), "#abcdef");
+    const backup = JSON.parse(window.localStorage.getItem("jacer-progress-conflict-backup-pilot_7"));
+    assert.equal(backup.local["orbit-claims"], "10");
+    assert.equal(backup.cloud["orbit-claims"], "8");
+    assert.ok(document.querySelector(".account-sync-warning button").textContent.includes("Download recovery backup"));
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("leaderboard profiles show the player's presence and character", async () => {
   const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Vega Outpost", timeMs: 12000, abilities: [] };
   const player = { username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1, title: "Cadet" };
@@ -663,7 +709,7 @@ test("a concurrent currency conflict keeps local progress and warns that cloud s
     "GET /api/account/progress": { progress: { "orbit-claims": "100" } },
     "PUT /api/account/progress": () => {
       progressWrites++;
-      return { status: 409, json: { error: "Progress changed on another device. Cloud saving is paused; signing in again will replace unsaved local changes with cloud progress." } };
+      return { status: 409, json: { error: "Progress changed on another device. Your local progress is still on this device; reload to reconcile the latest cloud progress before saving again." } };
     },
   });
   try {
@@ -674,7 +720,7 @@ test("a concurrent currency conflict keeps local progress and warns that cloud s
     form.querySelector("input").value = "REWARD";
     form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     await waitFor(() => document.querySelector(".account-sync-warning"), "Conflict warning was not shown");
-    assert.match(document.querySelector(".account-sync-warning").textContent, /unsaved local changes/);
+    assert.match(document.querySelector(".account-sync-warning").textContent, /your local progress is still on this device/i);
     await delay(2600);
     assert.equal(progressWrites, 1);
     assert.equal(window.localStorage.getItem("orbit-claims"), "105");
@@ -686,12 +732,15 @@ test("a concurrent currency conflict keeps local progress and warns that cloud s
 test("background save failures are visible and the warning clears after a successful retry", async () => {
   const user = { username: "Pilot_7", role: "player", appearOffline: false };
   let progressWrites = 0;
+  let releaseRetry;
+  const retryGate = new Promise((resolve) => { releaseRetry = resolve; });
   const { dom, document, window } = await createPage({
     "/api/auth/session": { user },
     "GET /api/account/progress": { progress: { "orbit-claims": "100" } },
-    "PUT /api/account/progress": ({ init }) => {
+    "PUT /api/account/progress": async ({ init }) => {
       progressWrites++;
       if (progressWrites === 1) return { status: 503, json: { error: "Progress service unavailable" } };
+      if (progressWrites === 2) await retryGate;
       return { progress: JSON.parse(init.body).progress };
     },
   });
@@ -701,9 +750,11 @@ test("background save failures are visible and the warning clears after a succes
     await waitFor(() => document.querySelector(".account-sync-warning"), "Failed background save was not shown", 3000);
     assert.match(document.querySelector(".account-sync-warning").textContent, /saved on this device but have not been confirmed online/i);
     assert.equal(window.localStorage.getItem("orbit-claims"), "105");
+    releaseRetry();
     await waitFor(() => progressWrites >= 2 && !document.querySelector(".account-sync-warning"), "Save retry did not clear the warning", 4000);
     assert.equal(window.localStorage.getItem("orbit-claims"), "105");
   } finally {
+    releaseRetry();
     dom.window.close();
   }
 });

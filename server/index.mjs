@@ -1518,7 +1518,7 @@ app.put("/api/account/progress", requireSameOrigin, progressWriteLimiter, requir
       return res.status(403).json({ error: "This progress update was blocked by server-side anti-cheat protection." });
     }
     if (!result.progress) return res.status(result.conflict ? 409 : 400).json({
-      error: result.conflict ? "Progress changed on another device. Cloud saving is paused; signing in again will replace unsaved local changes with cloud progress." : "Player progress exceeds the allowed size.",
+      error: result.conflict ? "Progress changed on another device. Your local progress is still on this device; reload to reconcile the latest cloud progress before saving again." : "Player progress exceeds the allowed size.",
     });
     const deletionReason = await deleteAbusiveNewAccount(db, req.user, result.progress);
     if (deletionReason) {
