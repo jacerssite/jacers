@@ -7474,10 +7474,10 @@ function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) ret
 function createTrail(visible = true) {
     const trail = trails[selectedTrail] ?? trails[0];
     if (trailElement.length === 0) {
-        const particleCount = trail.name === "Snowfall Wake" ? 9 : 5;
+        const particleCount = trail.name === "Snowfall Wake" ? 9 : trail.name === "Holly Ribbon" || trail.name === "Jackpot Spark" ? 7 : 5;
         trailElement = Array.from({ length: particleCount }, (_, index) => {
             const element = document.createElement("i");
-            element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""} ${index === 0 ? "trail-head" : ""}`;
+            element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}${trail.name === "Jackpot Spark" ? " trail-jackpot-spark" : ""} ${index === 0 ? "trail-head" : ""}`;
             element.style.setProperty("--trail-delay", `${index * 60}ms`);
             element.style.opacity = "0";
             world.append(element);

@@ -120,7 +120,7 @@ export function createCustomization(context: CustomizationContext) {
             const unlocked = isTrailUnlocked(trails[trail.originalIndex]);
             const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}${unlocked ? "" : " is-locked"}`; button.disabled = !unlocked; button.dataset.trailIndex = String(trail.originalIndex);
             const icon = document.createElement("span");
-            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}`;
+            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}${trail.name === "Jackpot Spark" ? " trail-jackpot-spark" : ""}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
             if (trail.secondaryColor) icon.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             icon.setAttribute("aria-hidden", "true");
@@ -178,9 +178,10 @@ export function createCustomization(context: CustomizationContext) {
         scene.className = "trail-preview-scene";
         scene.style.setProperty("--trail-color", trail.color);
         if (trail.secondaryColor) scene.style.setProperty("--trail-secondary-color", trail.secondaryColor);
-        const particleElements = Array.from({ length: 5 }, (_, index) => {
+        const particleCount = trail.name === "Snowfall Wake" ? 9 : trail.name === "Holly Ribbon" || trail.name === "Jackpot Spark" ? 7 : 5;
+        const particleElements = Array.from({ length: particleCount }, (_, index) => {
             const particle = document.createElement("i");
-            particle.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""} ${index === 0 ? "trail-head" : ""}`;
+            particle.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}${trail.name === "Jackpot Spark" ? " trail-jackpot-spark" : ""} ${index === 0 ? "trail-head" : ""}`;
             particle.style.setProperty("--trail-delay", `${index * 60}ms`);
             if (trail.secondaryColor) particle.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             scene.append(particle);

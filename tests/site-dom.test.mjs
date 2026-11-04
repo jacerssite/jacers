@@ -137,6 +137,40 @@ test("main menus, customization, settings, and a mission respond to player actio
   }
 });
 
+test("holiday ships and named trails use distinct recognizable preview art", async () => {
+  const { dom, document, window } = await createPage({}, {
+    "orbit-secret-unlocked": "1",
+    "orbit-christmas-unlock-avatar-16": "1",
+    "orbit-christmas-unlock-avatar-17": "1",
+    "orbit-christmas-unlock-trail-11": "1",
+    "orbit-christmas-unlock-trail-22": "1",
+    "orbit-christmas-unlock-trail-23": "1",
+  });
+  try {
+    const style = document.createElement("style");
+    style.textContent = siteStyles;
+    document.head.append(style);
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(document, "Customization");
+    await waitFor(() => document.querySelector(".customization-screen"), "Customization did not open");
+    document.querySelector('[data-avatar-index="17"]').click();
+    assert.ok(document.querySelector(".ship-sleigh-art svg path"), "Sleigh should render its runner-and-hull artwork");
+
+    for (const [index, className, count] of [
+      ["11", "trail-jackpot-spark", 7],
+      ["23", "trail-holly-ribbon", 7],
+      ["22", "trail-snowfall-wake", 9],
+    ]) {
+      document.querySelector(`[data-trail-index="${index}"]`).click();
+      await waitFor(() => window.localStorage.getItem("orbit-trail") === index, `Trail ${index} was not selected`);
+      const particles = document.querySelectorAll(`.trail-preview-scene .${className}`);
+      assert.equal(particles.length, count, `${className} should have a distinct, readable particle trail`);
+    }
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("Winter Orbit shows live cooldowns and respawns presents when they expire", async () => {
   const now = Date.now();
   const expiry = now + 5000;
