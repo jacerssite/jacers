@@ -137,6 +137,47 @@ test("main menus, customization, settings, and a mission respond to player actio
   }
 });
 
+test("Winter Orbit shows live cooldowns and respawns presents when they expire", async () => {
+  const now = Date.now();
+  const expiry = now + 5000;
+  const progress = {
+    "orbit-christmas-server-cooldown-24": String(expiry),
+    "orbit-asteroids-24": "[0,1]",
+    "orbit-level-claims-24": "2",
+  };
+  let respawns = 0;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user: { id: "owner1", username: "Owner_1", role: "owner" } },
+    "/api/account/progress": { progress },
+    "POST /api/holiday/christmas-routes/24/respawn": () => {
+      respawns++;
+      return { progress: { "orbit-level-complete-24": "1" } };
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector('[aria-label="Account: Owner_1"]'), "Owner session was not restored");
+    clickButton(document, "Flight settings");
+    clickButton(document, "Open");
+    await waitFor(() => document.querySelector('.tester-sidebar [data-section="rewards"]'), "Control center did not load");
+    clickButton(document, "Holiday updates");
+    clickButton(document, "Try Winter Orbit");
+    await waitFor(() => document.querySelector(".christmas-event-screen"), "Winter Orbit did not open");
+    const route = [...document.querySelectorAll(".christmas-level")].find((button) => button.textContent.includes("Frostbound Passage"));
+    assert.ok(route);
+    assert.equal(route.disabled, true);
+    assert.match(route.querySelector("small").textContent, /COOLDOWN 00:0[0-5]/);
+
+    window.Date.now = () => expiry + 1;
+    await waitFor(() => respawns === 1, "Expired route presents were not respawned automatically", 2500);
+    await waitFor(() => !route.disabled, "Route did not become claimable after presents respawned");
+    assert.match(route.querySelector("small").textContent, /Collect 5 presents/);
+    assert.equal(window.localStorage.getItem("orbit-asteroids-24"), null);
+    assert.equal(window.localStorage.getItem("orbit-level-claims-24"), null);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("Backspace returns to the previous in-app screen", async () => {
   const { dom, document, window, errors } = await createPage();
   try {

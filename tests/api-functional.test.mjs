@@ -302,7 +302,16 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     assert.equal(progressRecord.data["orbit-christmas-presents"], "24");
     assert.equal(rewardEventRecords.length, 1);
 
-    progressRecord.data["orbit-asteroids-24"] = "[0,1,2,3,4]";
+    progressRecord.data["orbit-asteroids-24"] = "[0,1]";
+    delete progressRecord.data["orbit-level-complete-24"];
+    const incompleteRouteResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-routes/24/complete`, {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(incompleteRouteResponse.status, 409);
+
+    progressRecord.data["orbit-level-complete-24"] = "1";
     const completeRouteResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-routes/24/complete`, {
       method: "POST",
       headers: { cookie, origin, "content-type": "application/json" },
@@ -311,7 +320,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     assert.equal(completeRouteResponse.status, 200);
     const completedRoute = await completeRouteResponse.json();
     assert.ok(completedRoute.expiresAt > Date.now());
-    assert.equal(completedRoute.progress["orbit-asteroids-24"], "[0,1,2,3,4]");
+    assert.equal(completedRoute.progress["orbit-asteroids-24"], "[0,1]");
 
     progressRecord.data["orbit-christmas-server-cooldown-24"] = String(Date.now() - 1);
     const respawnResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-routes/24/respawn`, {

@@ -1614,18 +1614,6 @@ function christmasRouteForIndex(levelIndex) {
   return typeof name === "string" ? getTrustedLevelReward(name, levelIndex) : null;
 }
 
-function hasEveryTrustedCollectible(progress, route) {
-  try {
-    const claimed = JSON.parse(progress[`orbit-asteroids-${route.index}`] ?? "[]");
-    return Array.isArray(claimed)
-      && claimed.length === route.asteroidCount
-      && new Set(claimed).size === route.asteroidCount
-      && claimed.every((index) => Number.isSafeInteger(index) && index >= 0 && index < route.asteroidCount);
-  } catch {
-    return false;
-  }
-}
-
 function christmasRouteCooldownKey(levelIndex) {
   return `orbit-christmas-server-cooldown-${levelIndex}`;
 }
@@ -1644,8 +1632,8 @@ app.post("/api/holiday/christmas-routes/:levelIndex/complete", requireSameOrigin
       const result = await session.withTransaction(async () => {
         const record = await collection.findOne({ _id: req.user.id }, { session });
         const progress = validatePlayerProgress(record?.data ?? {});
-        if (!progress || !hasEveryTrustedCollectible(progress, route)) {
-          throw Object.assign(new Error("Secure every present in this route before its cooldown can begin."), { statusCode: 409 });
+        if (!progress || progress[`orbit-level-complete-${route.index}`] !== "1") {
+          throw Object.assign(new Error("Complete this Winter Orbit route before its cooldown can begin."), { statusCode: 409 });
         }
         const key = christmasRouteCooldownKey(route.index);
         const existingExpiry = Number(progress[key] ?? 0);
@@ -1660,7 +1648,10 @@ app.post("/api/holiday/christmas-routes/:levelIndex/complete", requireSameOrigin
       });
       res.json(result);
     } finally { await session.endSession(); }
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
 });
 
 app.post("/api/holiday/christmas-routes/:levelIndex/respawn", requireSameOrigin, requireUser, async (req, res, next) => {
@@ -1676,7 +1667,8 @@ app.post("/api/holiday/christmas-routes/:levelIndex/respawn", requireSameOrigin,
         const progress = validatePlayerProgress(record?.data ?? {});
         if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
         const key = christmasRouteCooldownKey(route.index);
-        const expiresAt = Number(progress[key] ?? 0);
+        const legacyKey = `orbit-christmas-cooldown-${route.index}`;
+        const expiresAt = Number(progress[key] ?? progress[legacyKey] ?? 0);
         if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) throw Object.assign(new Error("This Winter Orbit route is not waiting for a respawn."), { statusCode: 409 });
         if (expiresAt > Date.now()) throw Object.assign(new Error("This Winter Orbit route is still cooling down."), { statusCode: 409, expiresAt });
         const nextProgress = { ...progress };

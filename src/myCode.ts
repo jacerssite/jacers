@@ -2174,6 +2174,14 @@ function showChristmasEvent() {
     presents.textContent = `🎁 ${getChristmasPresents().toLocaleString()} presents`;
     const levelsList = document.createElement("div");
     levelsList.className = "level-list christmas-level-list";
+    const routeButtons: Array<{
+        index: number;
+        button: HTMLButtonElement;
+        status: HTMLElement;
+        waitingForRespawn: boolean;
+        respawnInFlight: boolean;
+        retryAt: number;
+    }> = [];
     levels.forEach((level, index) => {
         if (!isChristmasLevel(level)) return;
         const until = getChristmasCooldownUntil(index);
@@ -2182,12 +2190,72 @@ function showChristmasEvent() {
         button.type = "button";
         button.className = `level-button christmas-level${remaining ? " locked" : ""}`;
         button.disabled = remaining > 0;
-        button.innerHTML = `<span><b>🎄</b> ${level.name}</span><small>${remaining ? `READY IN ${formatCooldown(remaining)}` : `Collect ${getChristmasLevelPresentCount(index)} presents / ${level.briefing}`}</small>`;
-        if (!button.disabled) button.addEventListener("click", () => startGame(index));
+        button.innerHTML = `<span><b>🎄</b> ${level.name}</span><small></small>`;
+        const status = button.querySelector("small");
+        if (!status) return;
+        button.addEventListener("click", () => startGame(index));
         levelsList.append(button);
+        routeButtons.push({
+            index,
+            button,
+            status,
+            waitingForRespawn: until > 0,
+            respawnInFlight: false,
+            retryAt: 0,
+        });
     });
     menu.append(presents, levelsList, createMenuButton("Open present wheel", showChristmasWheel), createTextButton("Advent calendar", showChristmasAdventCalendar), createTextButton("Main menu", showMenu), createPageCounter());
     document.body.replaceChildren(menu);
+    const updateRouteCooldowns = () => {
+        if (!menu.isConnected) return;
+        const now = Date.now();
+        routeButtons.forEach((route) => {
+            const until = getChristmasCooldownUntil(route.index);
+            const remaining = until - now;
+            if (route.respawnInFlight) {
+                route.button.disabled = true;
+                route.button.classList.add("locked");
+                route.status.textContent = "RESPAWNING PRESENTS...";
+                return;
+            }
+            if (route.waitingForRespawn && remaining <= 0) {
+                route.button.disabled = true;
+                route.button.classList.add("locked");
+                if (now < route.retryAt) return;
+                route.respawnInFlight = true;
+                route.status.textContent = "RESPAWNING PRESENTS...";
+                void refreshChristmasRoutePresents(route.index).then(() => {
+                    route.waitingForRespawn = false;
+                    route.retryAt = 0;
+                }).catch((error: unknown) => {
+                    route.retryAt = Date.now() + 5000;
+                    route.status.textContent = `RESPAWN FAILED: ${error instanceof Error ? error.message : "online service error"}`;
+                    console.error(`Could not respawn Winter Orbit route ${route.index}:`, error);
+                }).finally(() => {
+                    route.respawnInFlight = false;
+                    updateRouteCooldowns();
+                });
+                return;
+            }
+            if (remaining > 0) {
+                route.button.disabled = true;
+                route.button.classList.add("locked");
+                route.status.textContent = `COOLDOWN ${formatCooldown(remaining)}`;
+            } else {
+                route.button.disabled = false;
+                route.button.classList.remove("locked");
+                route.status.textContent = `Collect ${getChristmasLevelPresentCount(route.index)} presents / ${levels[route.index].briefing}`;
+            }
+        });
+    };
+    updateRouteCooldowns();
+    const cooldownTimer = globalThis.setInterval(() => {
+        if (!menu.isConnected) {
+            globalThis.clearInterval(cooldownTimer);
+            return;
+        }
+        updateRouteCooldowns();
+    }, 1000);
 }
 
 function getChristmasLevelPresentCount(levelIndex: number) {
@@ -6571,13 +6639,13 @@ function showWinScreen() {
     if (nextLevel >= 0) localStorage.setItem(`orbit-level-${nextLevel}`, "1");
     if (levels[currentLevel].boss) localStorage.setItem("orbit-boss-defeated", "1");
     const presentsCollected = levelAsteroids.filter((asteroid) => asteroid.claimed).length;
-    const collectedEveryPresent = isChristmasLevel(level) && presentsCollected === levelAsteroids.length;
+    const isChristmasRoute = isChristmasLevel(level);
     const progressSaveStatus = document.createElement("p");
     progressSaveStatus.className = "menu-copy online-service-status";
     progressSaveStatus.setAttribute("role", "status");
     if (currentOnlineUser) {
-        progressSaveStatus.textContent = collectedEveryPresent ? "Saving presents and route progress..." : "Saving your route progress...";
-        if (!collectedEveryPresent) {
+        progressSaveStatus.textContent = isChristmasRoute ? "Saving presents and route progress..." : "Saving your route progress...";
+        if (!isChristmasRoute) {
             void (async () => {
                 await flushPendingAsteroidRewards(level.name);
                 await syncAccountProgress("save", true);
@@ -6591,9 +6659,7 @@ function showWinScreen() {
     const screen = document.createElement("main");
     screen.className = "win-screen win-screen-animation";
     const reward = isChristmasLevel(level)
-        ? collectedEveryPresent
-            ? `Holiday flight complete! You collected every present: ${presentsCollected}/${levelAsteroids.length}. Starting this route's 15-minute cooldown.`
-            : `Holiday flight complete! You collected ${presentsCollected}/${levelAsteroids.length} presents. Collect every present in one run to begin the cooldown.`
+        ? `Holiday flight complete! You collected ${presentsCollected}/${levelAsteroids.length} presents. This route's 15-minute cooldown starts now; all presents return when it ends.`
         : `${level.secret ? "Special asteroids" : "Asteroids"} collected: ${presentsCollected}/${levelAsteroids.length}. Fleet balance: ${level.secret ? specialAsteroids : asteroidsClaimed}.`;
     screen.innerHTML = `<p class="eyebrow">BEACON REACHED / ${levels[currentLevel].secret ? "SECRET" : `SECTOR 0${currentLevel + 1}`}</p><h1>Claim <em>complete</em></h1><p class="time-result">${formatTime(elapsedMilliseconds)}</p><p class="menu-copy">${reward}</p>`;
     if (currentOnlineUser) screen.append(progressSaveStatus);
@@ -6627,21 +6693,33 @@ function showWinScreen() {
     if (isChristmasLevel(level)) {
         const cooldownStatus = document.createElement("p");
         cooldownStatus.className = "menu-copy online-service-status";
-        if (!collectedEveryPresent) cooldownStatus.textContent = "No cooldown started yet — missed presents remain unclaimed until you replay the route.";
-        else if (currentOnlineUser) {
+        const showCooldown = (expiresAt: number) => {
+            cooldownStatus.textContent = `You collected ${presentsCollected}/${levelAsteroids.length} presents. Ready again in ${formatCooldown(Math.max(0, expiresAt - Date.now()))}.`;
+            const timer = globalThis.setInterval(() => {
+                if (!cooldownStatus.isConnected) {
+                    globalThis.clearInterval(timer);
+                    return;
+                }
+                cooldownStatus.textContent = `You collected ${presentsCollected}/${levelAsteroids.length} presents. Ready again in ${formatCooldown(Math.max(0, expiresAt - Date.now()))}.`;
+            }, 1000);
+        };
+        if (currentOnlineUser) {
             cooldownStatus.textContent = "Saving your collected presents and starting the 15-minute cooldown...";
             void completeChristmasRoute(currentLevel).then((expiresAt) => {
+                if (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+                    throw new Error("The server did not return a valid cooldown expiry.");
+                }
                 progressSaveStatus.textContent = "Presents and route progress saved to your account.";
-                cooldownStatus.textContent = `All ${presentsCollected} presents were saved. Ready again in ${formatCooldown(Math.max(0, Number(expiresAt ?? Date.now()) - Date.now()))}.`;
+                showCooldown(expiresAt);
             }).catch((error: unknown) => {
                 progressSaveStatus.textContent = "Presents or route progress could not be saved.";
-                cooldownStatus.textContent = `Presents were collected, but the cooldown could not start: ${error instanceof Error ? error.message : "online service error"}`;
+                cooldownStatus.textContent = `Route progress was saved, but the cooldown could not start: ${error instanceof Error ? error.message : "online service error"}`;
                 console.error("Could not start Winter Orbit cooldown:", error);
             });
         } else {
             const expiresAt = Date.now() + 15 * 60 * 1000;
             localStorage.setItem(`orbit-christmas-cooldown-${currentLevel}`, String(expiresAt));
-            cooldownStatus.textContent = `All ${presentsCollected} presents were collected. Ready again in ${formatCooldown(expiresAt - Date.now())}.`;
+            showCooldown(expiresAt);
         }
         screen.append(cooldownStatus);
         screen.append(createMenuButton("Back to Christmas event", showChristmasEvent));
