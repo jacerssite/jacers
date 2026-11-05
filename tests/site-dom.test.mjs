@@ -139,7 +139,8 @@ test("main menus, customization, settings, and a mission respond to player actio
 
 test("holiday ships and named trails use distinct recognizable preview art", async () => {
   const requirementsPage = await createPage({}, {
-    "orbit-claims": "0",
+    "orbit-claims": "200",
+    "orbit-enemies-killed": "0",
     "orbit-christmas-unlock-trail-21": "1",
     "orbit-christmas-unlock-trail-22": "1",
     "orbit-christmas-unlock-trail-23": "1",
@@ -159,7 +160,7 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
       "Supernova Spark", "Present Parade", "Frost Shards", "Mistletoe Drift",
     ].forEach((name, index) => assert.equal(trailName(index), name));
     for (const [index, required] of [[1, 8], [2, 18], [3, 30], [6, 44], [7, 58], [9, 78], [10, 96]]) {
-      assert.equal(trailCard(index).querySelector("small").textContent, `${required} ASTEROIDS`);
+      assert.equal(trailCard(index).querySelector("small").textContent, `${required} ENEMIES DEFEATED`);
     }
     assert.equal(trailCard(4).querySelector("small").textContent, "BOSS DEFEATED");
     assert.equal(trailCard(5).querySelector("small").textContent, "SECRET ROUTE");
@@ -171,6 +172,25 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
     requirementsPage.dom.window.close();
   }
 
+  const enemyUnlockPage = await createPage({}, {
+    "orbit-claims": "200",
+    "orbit-enemies-killed": "8",
+  });
+  try {
+    await waitFor(() => enemyUnlockPage.document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(enemyUnlockPage.document, "Customization");
+    await waitFor(() => enemyUnlockPage.document.querySelector(".customization-screen"), "Customization did not open");
+    assert.equal(enemyUnlockPage.document.querySelector('[data-trail-index="1"] small').textContent, "READY");
+    assert.equal(enemyUnlockPage.document.querySelector('[data-trail-index="2"] small').textContent, "18 ENEMIES DEFEATED");
+    enemyUnlockPage.document.querySelectorAll("[data-avatar-index]").forEach((card) => {
+      if (card.querySelector("small").textContent !== "READY") {
+        assert.match(card.querySelector("small").textContent, /ROULETTE/, `${card.children[1].textContent} should show its roulette unlock path`);
+      }
+    });
+  } finally {
+    enemyUnlockPage.dom.window.close();
+  }
+
   const { dom, document, window } = await createPage({}, {
     "orbit-secret-unlocked": "1",
     "orbit-unlock-trails": "1",
@@ -180,6 +200,9 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
     "orbit-christmas-unlock-trail-21": "1",
     "orbit-christmas-unlock-trail-22": "1",
     "orbit-christmas-unlock-trail-23": "1",
+    "orbit-christmas-unlock-skin-26": "1",
+    "orbit-christmas-unlock-skin-27": "1",
+    "orbit-christmas-unlock-skin-28": "1",
   });
   try {
     const style = document.createElement("style");
@@ -190,6 +213,18 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
     await waitFor(() => document.querySelector(".customization-screen"), "Customization did not open");
     document.querySelector('[data-avatar-index="17"]').click();
     assert.ok(document.querySelector(".ship-sleigh-art svg path"), "Sleigh should render its runner-and-hull artwork");
+    for (const [selector, expected] of [
+      ['[data-trail-index="21"]', "trail-present-parade"],
+      ['[data-trail-index="22"]', "trail-snowfall-wake"],
+      ['[data-trail-index="23"]', "trail-holly-ribbon"],
+      ['[data-avatar-index="16"]', "avatar-north-star"],
+      ['[data-avatar-index="17"]', "avatar-sleigh"],
+    ]) {
+      const card = document.querySelector(selector);
+      assert.ok(card.classList.contains("limited-cosmetic-card"));
+      assert.equal(card.dataset.limitedCosmetic, expected);
+    }
+    assert.equal(document.querySelectorAll('.limited-cosmetic-card[data-limited-cosmetic^="skin-"]').length, 3);
 
     for (const [index, className, count] of [
       ["0", "trail-cinder-wake", 8],
