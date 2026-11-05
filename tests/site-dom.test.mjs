@@ -138,9 +138,42 @@ test("main menus, customization, settings, and a mission respond to player actio
 });
 
 test("holiday ships and named trails use distinct recognizable preview art", async () => {
+  const requirementsPage = await createPage({}, {
+    "orbit-claims": "0",
+    "orbit-christmas-unlock-trail-21": "1",
+    "orbit-christmas-unlock-trail-22": "1",
+    "orbit-christmas-unlock-trail-23": "1",
+  });
+  try {
+    await waitFor(() => requirementsPage.document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(requirementsPage.document, "Customization");
+    await waitFor(() => requirementsPage.document.querySelector(".customization-screen"), "Customization did not open");
+    const trailCard = (index) => requirementsPage.document.querySelector(`[data-trail-index="${index}"]`);
+    const trailName = (index) => trailCard(index).children[1].textContent;
+    [
+      "Cinder Wake", "Verdant Comet", "Gilded Stardust", "Nebula Veil",
+      "Titan Breaker", "Eclipse Veil", "Ion Afterburn", "Prismatic Wake",
+      "Voidfire Trail", "Meteor Streak", "Aurora Loop", "Jackpot Spark",
+      "Golden Halo", "Solar Arc", "Quantum Tide", "Nova Pulse",
+      "Event Horizon", "Eclipse Orbit", "Silver Meteor", "Astral Ribbon",
+      "Supernova Spark", "Present Parade", "Frost Shards", "Mistletoe Drift",
+    ].forEach((name, index) => assert.equal(trailName(index), name));
+    for (const [index, required] of [[1, 8], [2, 18], [3, 30], [6, 44], [7, 58], [9, 78], [10, 96]]) {
+      assert.equal(trailCard(index).querySelector("small").textContent, `${required} ASTEROIDS`);
+    }
+    assert.equal(trailCard(4).querySelector("small").textContent, "BOSS DEFEATED");
+    assert.equal(trailCard(5).querySelector("small").textContent, "SECRET ROUTE");
+    assert.equal(trailCard(12).querySelector("small").textContent, "ALL NORMAL ROUTES");
+    assert.equal(trailCard(13).querySelector("small").textContent, "PRESTIGE 1");
+    assert.equal(trailCard(16).querySelector("small").textContent, "PRESTIGE 2");
+    assert.equal(trailCard(19).querySelector("small").textContent, "PRESTIGE 3");
+  } finally {
+    requirementsPage.dom.window.close();
+  }
+
   const { dom, document, window } = await createPage({}, {
     "orbit-secret-unlocked": "1",
-    "orbit-claims": "0",
+    "orbit-unlock-trails": "1",
     "orbit-christmas-unlock-avatar-16": "1",
     "orbit-christmas-unlock-avatar-17": "1",
     "orbit-christmas-unlock-trail-11": "1",
@@ -155,27 +188,34 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
     await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
     clickButton(document, "Customization");
     await waitFor(() => document.querySelector(".customization-screen"), "Customization did not open");
-    const trailCard = (index) => document.querySelector(`[data-trail-index="${index}"]`);
-    const trailName = (index) => trailCard(index).children[1].textContent;
-    [
-      "Cinder Wake", "Verdant Comet", "Gilded Stardust", "Nebula Veil",
-      "Titan Breaker", "Eclipse Veil", "Ion Afterburn", "Prismatic Wake",
-      "Voidfire Trail", "Meteor Streak", "Aurora Loop", "Jackpot Spark",
-      "Golden Halo", "Solar Arc", "Quantum Tide", "Nova Pulse",
-      "Event Horizon", "Eclipse Orbit", "Silver Meteor", "Astral Ribbon",
-      "Supernova Spark", "Present Parade", "Frost Shards", "Mistletoe Drift",
-    ].forEach((name, index) => assert.equal(trailName(index), name));
-    for (const [index, required] of [[1, 8], [2, 18], [3, 30], [6, 44], [7, 58], [9, 78], [10, 96]]) {
-      assert.equal(trailCard(index).querySelector("small").textContent, `${required} ASTEROIDS`);
-    }
-    assert.equal(trailCard(4).querySelector("small").textContent, "BOSS DEFEATED");
     document.querySelector('[data-avatar-index="17"]').click();
     assert.ok(document.querySelector(".ship-sleigh-art svg path"), "Sleigh should render its runner-and-hull artwork");
 
     for (const [index, className, count] of [
+      ["0", "trail-cinder-wake", 8],
+      ["1", "trail-verdant-comet", 8],
+      ["2", "trail-gilded-dust", 9],
+      ["3", "trail-nebula-veil", 8],
+      ["4", "trail-titan-breaker", 8],
+      ["5", "trail-eclipse-veil", 8],
+      ["6", "trail-ion-afterburn", 8],
+      ["7", "trail-prismatic-wake", 8],
+      ["8", "trail-voidfire-trail", 8],
+      ["9", "trail-meteor-streak", 8],
+      ["10", "trail-aurora-loop", 8],
       ["11", "trail-jackpot-spark", 7],
-      ["23", "trail-holly-ribbon", 7],
-      ["22", "trail-snowfall-wake", 9],
+      ["12", "trail-golden-halo", 8],
+      ["13", "trail-solar-arc", 8],
+      ["14", "trail-quantum-tide", 8],
+      ["15", "trail-nova-pulse", 9],
+      ["16", "trail-event-horizon", 8],
+      ["17", "trail-eclipse-orbit", 8],
+      ["18", "trail-silver-meteor", 8],
+      ["19", "trail-astral-ribbon", 8],
+      ["20", "trail-supernova-spark", 9],
+      ["21", "trail-present-parade", 5],
+      ["22", "trail-snowfall-wake", 10],
+      ["23", "trail-holly-ribbon", 9],
     ]) {
       document.querySelector(`[data-trail-index="${index}"]`).click();
       await waitFor(() => window.localStorage.getItem("orbit-trail") === index, `Trail ${index} was not selected`);

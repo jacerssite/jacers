@@ -76,9 +76,16 @@ export const trails: TrailStyle[] = [
 
 export function getTrailVisualClass(trail: TrailStyle) { return `trail-${trail.visual}`; }
 export function getTrailParticleCount(trail: TrailStyle) {
-    if (trail.visual === "snowfall-wake") return 9;
-    if (trail.visual === "holly-ribbon" || trail.visual === "jackpot-spark") return 7;
-    return 5;
+    switch (trail.visual) {
+        case "present-parade": return 5;
+        case "jackpot-spark": return 7;
+        case "snowfall-wake": return 10;
+        case "holly-ribbon":
+        case "gilded-dust":
+        case "nova-pulse":
+        case "supernova-spark": return 9;
+        default: return 8;
+    }
 }
 export const avatars: AvatarStyle[] = [
     { name: "Classic", color: "#ed7657", shape: "classic", required: 0, defaultSkin: 0 },
