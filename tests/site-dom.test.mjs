@@ -140,9 +140,11 @@ test("main menus, customization, settings, and a mission respond to player actio
 test("holiday ships and named trails use distinct recognizable preview art", async () => {
   const { dom, document, window } = await createPage({}, {
     "orbit-secret-unlocked": "1",
+    "orbit-claims": "0",
     "orbit-christmas-unlock-avatar-16": "1",
     "orbit-christmas-unlock-avatar-17": "1",
     "orbit-christmas-unlock-trail-11": "1",
+    "orbit-christmas-unlock-trail-21": "1",
     "orbit-christmas-unlock-trail-22": "1",
     "orbit-christmas-unlock-trail-23": "1",
   });
@@ -153,6 +155,20 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
     await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
     clickButton(document, "Customization");
     await waitFor(() => document.querySelector(".customization-screen"), "Customization did not open");
+    const trailCard = (index) => document.querySelector(`[data-trail-index="${index}"]`);
+    const trailName = (index) => trailCard(index).children[1].textContent;
+    [
+      "Cinder Wake", "Verdant Comet", "Gilded Stardust", "Nebula Veil",
+      "Titan Breaker", "Eclipse Veil", "Ion Afterburn", "Prismatic Wake",
+      "Voidfire Trail", "Meteor Streak", "Aurora Loop", "Jackpot Spark",
+      "Golden Halo", "Solar Arc", "Quantum Tide", "Nova Pulse",
+      "Event Horizon", "Eclipse Orbit", "Silver Meteor", "Astral Ribbon",
+      "Supernova Spark", "Present Parade", "Frost Shards", "Mistletoe Drift",
+    ].forEach((name, index) => assert.equal(trailName(index), name));
+    for (const [index, required] of [[1, 8], [2, 18], [3, 30], [6, 44], [7, 58], [9, 78], [10, 96]]) {
+      assert.equal(trailCard(index).querySelector("small").textContent, `${required} ASTEROIDS`);
+    }
+    assert.equal(trailCard(4).querySelector("small").textContent, "BOSS DEFEATED");
     document.querySelector('[data-avatar-index="17"]').click();
     assert.ok(document.querySelector(".ship-sleigh-art svg path"), "Sleigh should render its runner-and-hull artwork");
 

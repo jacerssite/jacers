@@ -1,6 +1,6 @@
 import type { Box, Obstacle, Asteroid, Hazard, Enemy, Projectile, PowerupKind, Powerup, LevelKey, Boss, MiniBoss, TrailStyle, AvatarStyle, UnflippedRouteSnapshot, Level, LevelMakerDraft, ControlAction, Rarity, CosmeticGroup, OnlineUser, OnlineLeaderboardEntry, RouletteTier, RouletteWheelPocket, UpdateLogEntry, RouletteReward, OnlineSettings, WorldGameConfig, GameConfig, ProfileTitle, CodeReward, HolidayEventSettings } from "./types";
 import { TILE_WIDTH, PORTAL_Y, PORTAL_SIZE, SECRET_LEVEL_COOLDOWN_MS, COOLDOWN_RESET_COST, CEILING_Y, FLOOR_Y, FLIPPED_WORLD_HEIGHT, SECRET_BOSS_HEIGHT, RARITY_ORDER, DEFAULT_GAME_CONFIG, DEFAULT_ROULETTE_TIERS, PROFILE_TITLES, powerupPrices, powerupLabels } from "./game-config";
-import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity } from "./cosmetics";
+import { STARTER_SHIP_COLORS, ROULETTE_SHIP_COLORS, skins, trails, avatars, getCosmeticRarity, getTrailParticleCount, getTrailVisualClass } from "./cosmetics";
 import { levels, normalizeNonPrestigeLevels, normalizePrestigeLevels, refreshBuiltInLevelBriefings } from "./levels";
 import { ApiError, apiRequest, setApiLocalOnlyMode } from "./api";
 import { createMenuButton, createPasswordField, createTextButton, showActionDialog } from "./ui";
@@ -4943,7 +4943,7 @@ async function showTesterPanel(selectedWorld: "normal" | "prestige" = activePlan
         status.setAttribute("role", "status");
         const rewards = document.createElement("p");
         rewards.className = "menu-copy";
-        rewards.textContent = "Limited rewards: Holly Comet, Snowglobe, Evergreen Blade, North Star, Sleigh, Present Parade, Snowfall Wake, Holly Ribbon, and four Christmas titles with new snowfall, winter glow, and candy-cane animations.";
+        rewards.textContent = "Limited rewards: Holly Comet, Snowglobe, Evergreen Blade, North Star, Sleigh, Present Parade, Frost Shards, Mistletoe Drift, and four Christmas titles with new snowfall, winter glow, and candy-cane animations.";
         const testTools = document.createElement("div");
         testTools.className = "title-management-actions";
         const presentAmount = document.createElement("input");
@@ -7474,10 +7474,10 @@ function fireMiniBossProjectile(miniBoss: MiniBoss) { if (miniBoss.defeated) ret
 function createTrail(visible = true) {
     const trail = trails[selectedTrail] ?? trails[0];
     if (trailElement.length === 0) {
-        const particleCount = trail.name === "Snowfall Wake" ? 9 : trail.name === "Holly Ribbon" || trail.name === "Jackpot Spark" ? 7 : 5;
+        const particleCount = getTrailParticleCount(trail);
         trailElement = Array.from({ length: particleCount }, (_, index) => {
             const element = document.createElement("i");
-            element.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}${trail.name === "Jackpot Spark" ? " trail-jackpot-spark" : ""} ${index === 0 ? "trail-head" : ""}`;
+            element.className = `trail-particle trail-effect-${trail.effect} ${getTrailVisualClass(trail)}${trail.secondaryColor ? " trail-duotone" : ""} ${index === 0 ? "trail-head" : ""}`;
             element.style.setProperty("--trail-delay", `${index * 60}ms`);
             element.style.opacity = "0";
             world.append(element);
@@ -7501,7 +7501,7 @@ function updateTrail(visible = trailActive) {
     if (!visible) {
         trailActive = false;
         const selectedTrailStyle = trails[selectedTrail] ?? trails[0];
-        if (selectedTrailStyle.name === "Snowfall Wake" && !snowfallTrailSettling && trailElement.length) {
+        if (selectedTrailStyle.visual === "snowfall-wake" && !snowfallTrailSettling && trailElement.length) {
             snowfallTrailSettling = true;
             trailElement.forEach((element, index) => {
                 element.classList.remove("trail-active");

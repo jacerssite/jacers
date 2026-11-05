@@ -47,32 +47,39 @@ export const skins: SkinStyle[] = [
 ];
 
 export const trails: TrailStyle[] = [
-    { name: "Ember", color: "#ed7657", required: 0, effect: "ember" },
-    { name: "Mint Comet", color: "#62d6b2", required: 5, effect: "comet" },
-    { name: "Gold Dust", color: "#b8843f", secondaryColor: "#e3aa55", required: 10, effect: "spark" },
-    { name: "Nebula", color: "#b991ff", required: 16, effect: "ribbon" },
-    { name: "Titan Sparks", color: "#c92f48", secondaryColor: "#ff805c", required: 24, effect: "spark", boss: true },
-    { name: "Eclipse Ribbon", color: "#f58bff", required: 0, effect: "ribbon", secret: true },
-    { name: "Ion Beam", color: "#8de7ff", required: 30, effect: "comet" },
-    { name: "Prism Wake", color: "#ff8fbd", required: 38, effect: "ribbon" },
-    { name: "Void Flame", color: "#8b7dff", required: 46, effect: "ember", boss: true },
-    { name: "Comet Line", color: "#f29d68", required: 86, effect: "comet" },
-    { name: "Prism Arc", color: "#8de7ff", secondaryColor: "#ff8fbd", required: 98, effect: "arc" },
-    { name: "Jackpot Spark", color: "#ffe36e", required: 0, effect: "spark", secret: true, jackpot: true },
-    { name: "Golden Trail", color: "#fff0a1", secondaryColor: "#f6c46e", required: 0, effect: "arc", golden: true },
+    { name: "Cinder Wake", color: "#ed7657", required: 0, effect: "ember", visual: "cinder-wake" },
+    { name: "Verdant Comet", color: "#62d6b2", required: 8, effect: "comet", visual: "verdant-comet" },
+    { name: "Gilded Stardust", color: "#b8843f", secondaryColor: "#e3aa55", required: 18, effect: "spark", visual: "gilded-dust" },
+    { name: "Nebula Veil", color: "#b991ff", required: 30, effect: "ribbon", visual: "nebula-veil" },
+    { name: "Titan Breaker", color: "#c92f48", secondaryColor: "#ff805c", required: 24, effect: "spark", visual: "titan-breaker", boss: true },
+    { name: "Eclipse Veil", color: "#f58bff", required: 0, effect: "ribbon", visual: "eclipse-veil", secret: true },
+    { name: "Ion Afterburn", color: "#8de7ff", required: 44, effect: "comet", visual: "ion-afterburn" },
+    { name: "Prismatic Wake", color: "#ff8fbd", required: 58, effect: "ribbon", visual: "prismatic-wake" },
+    { name: "Voidfire Trail", color: "#8b7dff", required: 46, effect: "ember", visual: "voidfire-trail", boss: true },
+    { name: "Meteor Streak", color: "#f29d68", required: 78, effect: "comet", visual: "meteor-streak" },
+    { name: "Aurora Loop", color: "#8de7ff", secondaryColor: "#ff8fbd", required: 96, effect: "arc", visual: "aurora-loop" },
+    { name: "Jackpot Spark", color: "#ffe36e", required: 0, effect: "spark", visual: "jackpot-spark", secret: true, jackpot: true },
+    { name: "Golden Halo", color: "#fff0a1", secondaryColor: "#f6c46e", required: 0, effect: "arc", visual: "golden-halo", golden: true },
     // Prestige-exclusive trails from special rolls
-    { name: "Stellar Beam", color: "#ffcc33", secondaryColor: "#fff3bd", required: 0, effect: "arc", prestige: 1 },
-    { name: "Quantum Wave", color: "#b24bff", required: 0, effect: "ribbon", prestige: 1 },
-    { name: "Cosmic Spark", color: "#00ffcc", required: 0, effect: "spark", prestige: 1 },
-    { name: "Void Ribbon", color: "#ff0099", required: 0, effect: "ribbon", prestige: 2 },
-    { name: "Eclipse Arc", color: "#9933ff", secondaryColor: "#f58bff", required: 0, effect: "arc", prestige: 2 },
-    { name: "Infinite Comet", color: "#e0e0e0", required: 0, effect: "comet", prestige: 2 },
-    { name: "Stellar Ribbon", color: "#00ff66", required: 0, effect: "ribbon", prestige: 3 },
-    { name: "Infinity Spark", color: "#ff6600", required: 0, effect: "spark", prestige: 3 },
-    { name: "Present Parade", color: "#e63946", secondaryColor: "#f6c46e", required: 0, effect: "spark", holiday: "christmas", limited: true },
-    { name: "Snowfall Wake", color: "#e9fbff", secondaryColor: "#8fd7e4", required: 0, effect: "comet", holiday: "christmas", limited: true },
-    { name: "Holly Ribbon", color: "#138a55", secondaryColor: "#e63946", required: 0, effect: "ribbon", holiday: "christmas", limited: true },
+    { name: "Solar Arc", color: "#ffcc33", secondaryColor: "#fff3bd", required: 0, effect: "arc", visual: "solar-arc", prestige: 1 },
+    { name: "Quantum Tide", color: "#b24bff", required: 0, effect: "ribbon", visual: "quantum-tide", prestige: 1 },
+    { name: "Nova Pulse", color: "#00ffcc", required: 0, effect: "spark", visual: "nova-pulse", prestige: 1 },
+    { name: "Event Horizon", color: "#ff0099", required: 0, effect: "ribbon", visual: "event-horizon", prestige: 2 },
+    { name: "Eclipse Orbit", color: "#9933ff", secondaryColor: "#f58bff", required: 0, effect: "arc", visual: "eclipse-orbit", prestige: 2 },
+    { name: "Silver Meteor", color: "#e0e0e0", required: 0, effect: "comet", visual: "silver-meteor", prestige: 2 },
+    { name: "Astral Ribbon", color: "#00ff66", required: 0, effect: "ribbon", visual: "astral-ribbon", prestige: 3 },
+    { name: "Supernova Spark", color: "#ff6600", required: 0, effect: "spark", visual: "supernova-spark", prestige: 3 },
+    { name: "Present Parade", color: "#e63946", secondaryColor: "#f6c46e", required: 0, effect: "spark", visual: "present-parade", holiday: "christmas", limited: true },
+    { name: "Frost Shards", color: "#e9fbff", secondaryColor: "#8fd7e4", required: 0, effect: "comet", visual: "snowfall-wake", holiday: "christmas", limited: true },
+    { name: "Mistletoe Drift", color: "#138a55", secondaryColor: "#e63946", required: 0, effect: "ribbon", visual: "holly-ribbon", holiday: "christmas", limited: true },
 ];
+
+export function getTrailVisualClass(trail: TrailStyle) { return `trail-${trail.visual}`; }
+export function getTrailParticleCount(trail: TrailStyle) {
+    if (trail.visual === "snowfall-wake") return 9;
+    if (trail.visual === "holly-ribbon" || trail.visual === "jackpot-spark") return 7;
+    return 5;
+}
 export const avatars: AvatarStyle[] = [
     { name: "Classic", color: "#ed7657", shape: "classic", required: 0, defaultSkin: 0 },
     { name: "Dart", color: "#62d6b2", shape: "dart", required: 0, image: dartShipImage, defaultSkin: 1 },

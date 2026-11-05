@@ -10,7 +10,8 @@ export type LevelKey = { id: string; x: number; y: number; collected: boolean; r
 export type Boss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean; attackTimer?: number };
 export type MiniBoss = { x: number; y: number; health: number; maxHealth: number; defeated: boolean; attackTimer?: number };
 export type SkinStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; boss?: boolean; secret?: boolean; prestige?: number; golden?: boolean; holiday?: "christmas"; limited?: boolean };
-export type TrailStyle = { name: string; color: string; secondaryColor?: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; secret?: boolean; boss?: boolean; golden?: boolean; jackpot?: boolean; prestige?: number; holiday?: "christmas"; limited?: boolean };
+export type TrailVisual = "cinder-wake" | "verdant-comet" | "gilded-dust" | "nebula-veil" | "titan-breaker" | "eclipse-veil" | "ion-afterburn" | "prismatic-wake" | "voidfire-trail" | "meteor-streak" | "aurora-loop" | "golden-halo" | "solar-arc" | "quantum-tide" | "nova-pulse" | "event-horizon" | "eclipse-orbit" | "silver-meteor" | "astral-ribbon" | "supernova-spark" | "snowfall-wake" | "holly-ribbon" | "jackpot-spark" | "present-parade";
+export type TrailStyle = { name: string; color: string; secondaryColor?: string; required: number; effect: "ember" | "comet" | "spark" | "ribbon" | "arc"; visual: TrailVisual; secret?: boolean; boss?: boolean; golden?: boolean; jackpot?: boolean; prestige?: number; holiday?: "christmas"; limited?: boolean };
 export type PrestigeShipArt = "stellar-guard" | "quantum-dancer" | "cosmic-queen" | "void-knight" | "eclipse-oracle" | "infinity-pilot" | "stellar-legend" | "north-star" | "sleigh";
 export type AvatarStyle = { name: string; color: string; shape: "classic" | "dart" | "ring" | "blade"; required: number; image?: string; cssArt?: PrestigeShipArt; defaultSkin: number; prestige?: number; golden?: boolean; jackpot?: boolean; holiday?: "christmas"; limited?: boolean };
 export type FlippedRoute = { walls: number[]; enemies: number[]; spikes: number[]; gravity: number[]; powerups?: { index: number; kind: PowerupKind }[]; key?: number };
@@ -177,4 +178,3 @@ export type GameConfig = {
         };
     };
 };
-

@@ -1,5 +1,5 @@
 import type { AvatarStyle, CosmeticGroup, Rarity, TrailStyle } from "./types";
-import { avatars, createRarityBadge, getCosmeticRarity, ROULETTE_SHIP_COLORS, skins, STARTER_SHIP_COLORS, trails } from "./cosmetics";
+import { avatars, createRarityBadge, getCosmeticRarity, getTrailParticleCount, getTrailVisualClass, ROULETTE_SHIP_COLORS, skins, STARTER_SHIP_COLORS, trails } from "./cosmetics";
 import { createCssShipArtMarkup, createShipArtMarkup } from "./ship-art";
 import { drawTrailParticles } from "./trail";
 import { createTextButton } from "./ui";
@@ -120,7 +120,7 @@ export function createCustomization(context: CustomizationContext) {
             const unlocked = isTrailUnlocked(trails[trail.originalIndex]);
             const button = document.createElement("button"); button.className = `cosmetic-card-choice ${selectedTrail === trail.originalIndex ? "selected" : ""}${unlocked ? "" : " is-locked"}`; button.disabled = !unlocked; button.dataset.trailIndex = String(trail.originalIndex);
             const icon = document.createElement("span");
-            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}${trail.name === "Jackpot Spark" ? " trail-jackpot-spark" : ""}`;
+            icon.className = `cosmetic-icon trail-choice-icon trail-effect-${trail.effect} ${getTrailVisualClass(trail)}${trail.secondaryColor ? " trail-duotone" : ""}`;
             icon.style.setProperty("--trail-icon-color", trail.color);
             if (trail.secondaryColor) icon.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             icon.setAttribute("aria-hidden", "true");
@@ -128,7 +128,7 @@ export function createCustomization(context: CustomizationContext) {
             button.append(icon, label);
             button.insertAdjacentHTML("beforeend", createRarityBadge(rarity));
             const status = document.createElement("small");
-            status.textContent = unlocked ? "READY" : trail.prestige ? `PRESTIGE ${trail.prestige}` : trail.golden ? "20 ROUTES" : trail.jackpot ? "JACKPOT" : trail.secret ? "SECRET" : trail.boss ? "BOSS" : `${trail.required} ASTEROIDS`;
+            status.textContent = unlocked ? "READY" : trail.prestige ? `PRESTIGE ${trail.prestige}` : trail.golden ? "ALL NORMAL ROUTES" : trail.jackpot ? "JACKPOT WIN" : trail.secret ? "SECRET ROUTE" : trail.boss ? "BOSS DEFEATED" : `${trail.required} ASTEROIDS`;
             button.append(status);
             button.addEventListener("click", () => { setLoadout({ trail: trail.originalIndex }); refreshCustomization(); }); return button;
         });
@@ -178,10 +178,10 @@ export function createCustomization(context: CustomizationContext) {
         scene.className = "trail-preview-scene";
         scene.style.setProperty("--trail-color", trail.color);
         if (trail.secondaryColor) scene.style.setProperty("--trail-secondary-color", trail.secondaryColor);
-        const particleCount = trail.name === "Snowfall Wake" ? 9 : trail.name === "Holly Ribbon" || trail.name === "Jackpot Spark" ? 7 : 5;
+        const particleCount = getTrailParticleCount(trail);
         const particleElements = Array.from({ length: particleCount }, (_, index) => {
             const particle = document.createElement("i");
-            particle.className = `trail-particle trail-effect-${trail.effect}${trail.secondaryColor ? " trail-duotone" : ""}${trail.name === "Present Parade" ? " trail-present-parade" : ""}${trail.name === "Snowfall Wake" ? " trail-snowfall-wake" : ""}${trail.name === "Holly Ribbon" ? " trail-holly-ribbon" : ""}${trail.name === "Jackpot Spark" ? " trail-jackpot-spark" : ""} ${index === 0 ? "trail-head" : ""}`;
+            particle.className = `trail-particle trail-effect-${trail.effect} ${getTrailVisualClass(trail)}${trail.secondaryColor ? " trail-duotone" : ""} ${index === 0 ? "trail-head" : ""}`;
             particle.style.setProperty("--trail-delay", `${index * 60}ms`);
             if (trail.secondaryColor) particle.style.setProperty("--trail-secondary-color", trail.secondaryColor);
             scene.append(particle);
