@@ -506,17 +506,21 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 .cosmetic-card-choice.limited-cosmetic-card { position: relative; overflow: hidden; grid-template-columns: 46px minmax(0, 1fr); min-height: 76px; }
 .cosmetic-card-choice.limited-cosmetic-card .cosmetic-icon { width: 42px; height: 40px; }
 .cosmetic-card-choice.limited-cosmetic-card::after { position: absolute; top: 0; right: 0; width: 27px; padding: 2px 0; color: #10202b; content: "EVENT"; font: 700 .38rem 'DM Mono', monospace; text-align: center; transform: translate(7px, 5px) rotate(35deg); }
-.cosmetic-card-choice[data-limited-cosmetic="trail-frost-shards"] { border-color: #75cfe0; background: linear-gradient(135deg, #173750, #10243a 72%); box-shadow: inset 0 0 18px #75cfe022, 0 0 10px #75cfe022; }
-.cosmetic-card-choice[data-limited-cosmetic="trail-frost-shards"]::after, .cosmetic-card-choice[data-limited-cosmetic="skin-snowglobe"]::after, .cosmetic-card-choice[data-limited-cosmetic="avatar-north-star"]::after { background: #a9f0ff; }
-.cosmetic-card-choice[data-limited-cosmetic="trail-mistletoe-drift"] { border-color: #6ea96c; background: linear-gradient(135deg, #193c32, #102b2b 72%); box-shadow: inset 0 0 18px #83c87822, 0 0 10px #83c87822; }
-.cosmetic-card-choice[data-limited-cosmetic="trail-mistletoe-drift"]::after, .cosmetic-card-choice[data-limited-cosmetic="skin-evergreen-blade"]::after, .cosmetic-card-choice[data-limited-cosmetic="avatar-sleigh"]::after { background: #c1e49a; }
+.cosmetic-card-choice[data-limited-cosmetic="trail-snowfall-wake"] { border-color: #75cfe0; background: linear-gradient(135deg, #173750, #10243a 72%); box-shadow: inset 0 0 18px #75cfe022, 0 0 10px #75cfe022; }
+.cosmetic-card-choice[data-limited-cosmetic="trail-snowfall-wake"]::after, .cosmetic-card-choice[data-limited-cosmetic="skin-snowglobe"]::after, .cosmetic-card-choice[data-limited-cosmetic="avatar-north-star"]::after { background: #a9f0ff; }
+.cosmetic-card-choice[data-limited-cosmetic="trail-holly-ribbon"] { border-color: #6ea96c; background: linear-gradient(135deg, #193c32, #102b2b 72%); box-shadow: inset 0 0 18px #83c87822, 0 0 10px #83c87822; }
+.cosmetic-card-choice[data-limited-cosmetic="trail-holly-ribbon"]::after, .cosmetic-card-choice[data-limited-cosmetic="skin-evergreen-blade"]::after, .cosmetic-card-choice[data-limited-cosmetic="avatar-sleigh"]::after { background: #c1e49a; }
 .cosmetic-card-choice[data-limited-cosmetic="trail-present-parade"] { border-color: #d67569; background: linear-gradient(135deg, #48242d, #291e2b 72%); box-shadow: inset 0 0 18px #e6394622, 0 0 10px #e6394622; }
 .cosmetic-card-choice[data-limited-cosmetic="trail-present-parade"]::after, .cosmetic-card-choice[data-limited-cosmetic="skin-holly-comet"]::after { background: #f6c46e; }
 .cosmetic-card-choice[data-limited-cosmetic="avatar-north-star"] { border-color: #d5bd71; background: linear-gradient(135deg, #403a29, #232839 72%); box-shadow: inset 0 0 18px #f6c46e22, 0 0 10px #f6c46e22; }
 .cosmetic-card-choice[data-limited-cosmetic="avatar-sleigh"] { border-color: #d67569; background: linear-gradient(135deg, #48242d, #291e2b 72%); box-shadow: inset 0 0 18px #e6394622, 0 0 10px #e6394622; }
 .ship-color-choice.limited-cosmetic-card { border-color: #f6c46e; box-shadow: 0 0 0 2px #f6c46e44, 0 0 12px var(--ship-color-choice); }
+.ship-color-choice.limited-cosmetic-card::before { position: absolute; z-index: 2; top: -5px; right: -9px; width: 28px; padding: 2px 0; color: #10202b; content: "EVENT"; background: #f6c46e; font: 700 .34rem 'DM Mono', monospace; text-align: center; transform: rotate(35deg); text-shadow: none; }
 .ship-color-choice.limited-cosmetic-card[data-limited-cosmetic="skin-snowglobe"] { border-color: #a9f0ff; box-shadow: 0 0 0 2px #a9f0ff55, 0 0 12px #a9f0ff; }
+.ship-color-choice.limited-cosmetic-card[data-limited-cosmetic="skin-snowglobe"]::before { background: #a9f0ff; }
 .ship-color-choice.limited-cosmetic-card[data-limited-cosmetic="skin-evergreen-blade"] { border-color: #c1e49a; box-shadow: 0 0 0 2px #c1e49a55, 0 0 12px #138a55; }
+.ship-color-choice.limited-cosmetic-card[data-limited-cosmetic="skin-evergreen-blade"]::before { background: #c1e49a; }
+.ship-color-choice.limited-cosmetic-card[data-limited-cosmetic="skin-holly-comet"]::before { background: #f6c46e; }
 .trail-choice-icon:not(.trail-jackpot-spark):not(.trail-present-parade) { filter: drop-shadow(0 0 5px var(--trail-icon-color)); animation: trail-icon-hover 1.8s ease-in-out infinite alternate; }
 .trail-choice-icon.trail-cinder-wake::before { left: 10px; top: 3px; width: 15px; height: 26px; background: linear-gradient(180deg, #fff 0 8%, #fff0a1 20%, #ff9a42 52%, #ed7657 80%, transparent); clip-path: polygon(50% 100%, 8% 72%, 28% 54%, 4% 45%, 36% 0, 43% 36%, 69% 12%, 64% 48%, 100% 29%, 79% 74%); filter: drop-shadow(0 0 6px #ff8e45); animation: trail-icon-fire .46s ease-in-out infinite alternate; }
 .trail-choice-icon.trail-cinder-wake::after { left: 23px; top: 7px; width: 4px; height: 4px; border-radius: 50%; background: #fff3bd; box-shadow: -19px 16px 0 #ffb13b, -12px 23px 0 #ed7657; }

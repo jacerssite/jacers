@@ -224,7 +224,15 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
       assert.ok(card.classList.contains("limited-cosmetic-card"));
       assert.equal(card.dataset.limitedCosmetic, expected);
     }
-    assert.equal(document.querySelectorAll('.limited-cosmetic-card[data-limited-cosmetic^="skin-"]').length, 3);
+    assert.match(siteStyles, /\.cosmetic-card-choice\.limited-cosmetic-card::after\s*\{[^}]*content:\s*"EVENT"/);
+    assert.match(siteStyles, /\.ship-color-choice\.limited-cosmetic-card::before\s*\{[^}]*content:\s*"EVENT"/);
+    assert.equal(window.getComputedStyle(document.querySelector('[data-trail-index="22"]')).borderTopColor, "rgb(117, 207, 224)");
+    assert.equal(window.getComputedStyle(document.querySelector('[data-trail-index="23"]')).borderTopColor, "rgb(110, 169, 108)");
+    const limitedSkins = [...document.querySelectorAll('.limited-cosmetic-card[data-limited-cosmetic^="skin-"]')];
+    assert.equal(limitedSkins.length, 3);
+    limitedSkins.forEach((card) => {
+      assert.match(card.getAttribute("aria-label"), /Christmas event/);
+    });
 
     for (const [index, className, count] of [
       ["0", "trail-cinder-wake", 8],

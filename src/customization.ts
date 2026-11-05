@@ -106,7 +106,7 @@ export function createCustomization(context: CustomizationContext) {
                 button.dataset.limitedCosmetic = `skin-${option.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
             }
             button.title = unlocked ? `${option.name} / ${option.color}` : option.source === "roulette" ? "Unlock this color from the roulette wheel" : `Unlock the ${option.name} skin to use this color`;
-            button.setAttribute("aria-label", `Ship color ${option.name}${unlocked ? "" : ", locked"}`);
+            button.setAttribute("aria-label", `Ship color ${option.name}${option.source === "skin" && option.limited ? ", Christmas event" : ""}${unlocked ? "" : ", locked"}`);
             button.setAttribute("aria-pressed", String(selected));
             button.style.setProperty("--ship-color-choice", option.color);
             button.addEventListener("click", () => {
