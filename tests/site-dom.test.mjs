@@ -307,13 +307,15 @@ test("holiday ships and named trails use distinct recognizable preview art", asy
       ["20", "trail-supernova-spark", 9],
       ["21", "trail-present-parade", 5],
       ["22", "trail-snowfall-wake", 10],
-      ["23", "trail-holly-ribbon", 9],
+      ["23", "trail-holly-ribbon", 6],
     ]) {
       document.querySelector(`[data-trail-index="${index}"]`).click();
       await waitFor(() => window.localStorage.getItem("orbit-trail") === index, `Trail ${index} was not selected`);
       const particles = document.querySelectorAll(`.trail-preview-scene .${className}`);
       assert.equal(particles.length, count, `${className} should have a distinct, readable particle trail`);
     }
+    assert.match(siteStyles, /\.trail-holly-ribbon\s*\{[^}]*width:\s*17px[^}]*height:\s*13px/);
+    assert.match(siteStyles, /\.trail-choice-icon\.trail-holly-ribbon\s*\{[^}]*width:\s*30px[^}]*height:\s*26px/);
   } finally {
     dom.window.close();
   }

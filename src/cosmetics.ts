@@ -80,10 +80,10 @@ export function getTrailParticleCount(trail: TrailStyle) {
         case "present-parade": return 5;
         case "jackpot-spark": return 7;
         case "snowfall-wake": return 10;
-        case "holly-ribbon":
         case "gilded-dust":
         case "nova-pulse":
         case "supernova-spark": return 9;
+        case "holly-ribbon": return 6;
         default: return 8;
     }
 }
