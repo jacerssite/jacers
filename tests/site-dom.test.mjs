@@ -137,6 +137,55 @@ test("main menus, customization, settings, and a mission respond to player actio
   }
 });
 
+test("power-ups have configurable keyboard shortcuts that activate inventory and stay visible in game", async () => {
+  const config = structuredClone(DEFAULT_GAME_CONFIG);
+  config.powerupRules.oneActiveAtATime = false;
+  const inventory = { shield: 2, boost: 2, rapid: 2, cannon: 2, star: 0 };
+  const { dom, document, window, errors } = await createPage({
+    "/api/game-config": { config },
+  }, {
+    "orbit-powerups": JSON.stringify(inventory),
+  });
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(document, "Flight settings");
+    const shieldBinding = [...document.querySelectorAll(".custom-controls-settings button")]
+      .find((button) => button.textContent.startsWith("Use Shield power-up:"));
+    assert.ok(shieldBinding, "Shield shortcut should be listed in keyboard controls");
+    assert.match(shieldBinding.textContent, /: 1$/);
+    for (const [label, key] of [
+      ["Use Boost power-up", "2"],
+      ["Use Rapid Fire power-up", "3"],
+      ["Use Cannon power-up", "4"],
+    ]) {
+      assert.match([...document.querySelectorAll(".custom-controls-settings button")]
+        .find((button) => button.textContent.startsWith(`${label}:`)).textContent, new RegExp(`: ${key}$`));
+    }
+
+    shieldBinding.click();
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { code: "Digit5", key: "5" }));
+    assert.equal(JSON.parse(window.localStorage.getItem("orbit-controls")).useShield, "digit5");
+    assert.ok([...document.querySelectorAll(".custom-controls-settings button")]
+      .some((button) => button.textContent === "Use Shield power-up: 5"));
+
+    clickButton(document, "Back");
+    clickButton(document, "Launch mission");
+    document.querySelector(".level-button:not([disabled])").click();
+    await waitFor(() => document.querySelector(".game-frame"), "Mission did not start");
+    assert.match(document.querySelector(".controls-key-hint").textContent, /Shield 5 · Boost 2 · Rapid Fire 3 · Cannon 4/);
+    for (const [key, kind] of [["Digit5", "shield"], ["Digit2", "boost"], ["Digit3", "rapid"], ["Digit4", "cannon"]]) {
+      window.dispatchEvent(new window.KeyboardEvent("keydown", { code: key, key: key.slice(-1) }));
+      const currentInventory = JSON.parse(window.localStorage.getItem("orbit-powerups"));
+      assert.equal(currentInventory[kind], inventory[kind] - 1, `${kind} shortcut should use its inventory`);
+      window.dispatchEvent(new window.KeyboardEvent("keyup", { code: key, key: key.slice(-1) }));
+      assert.match(document.querySelector(`.hud-power.${kind}`).textContent, new RegExp(`\\(${key.slice(-1)}\\)`));
+    }
+    assert.deepEqual(errors, []);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("holiday ships and named trails use distinct recognizable preview art", async () => {
   const requirementsPage = await createPage({}, {
     "orbit-claims": "200",

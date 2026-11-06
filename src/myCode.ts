@@ -201,6 +201,16 @@ const DEFAULT_CONTROL_BINDINGS: Record<ControlAction, string> = {
     back: "backspace",
     confirm: "enter",
     switchPlanet: "keyp",
+    useShield: "digit1",
+    useBoost: "digit2",
+    useRapid: "digit3",
+    useCannon: "digit4",
+};
+const POWERUP_CONTROL_ACTIONS: Partial<Record<ControlAction, PowerupKind>> = {
+    useShield: "shield",
+    useBoost: "boost",
+    useRapid: "rapid",
+    useCannon: "cannon",
 };
 function readControlBindings(): Record<ControlAction, string> {
     try {
@@ -2546,6 +2556,10 @@ function showSettings() {
         back: "Back / exit menu",
         confirm: "Select level",
         switchPlanet: "Switch normal / prestige planet",
+        useShield: "Use Shield power-up",
+        useBoost: "Use Boost power-up",
+        useRapid: "Use Rapid Fire power-up",
+        useCannon: "Use Cannon power-up",
     };
     (Object.keys(controlLabels) as ControlAction[]).forEach((action) => {
         const button = createTextButton(`${controlLabels[action]}: ${formatControlBinding(controlBindings[action])}`, () => {
@@ -3761,11 +3775,23 @@ const secondaryControlKeys: Record<ControlAction, string[]> = {
     back: [],
     confirm: [],
     switchPlanet: [],
+    useShield: [],
+    useBoost: [],
+    useRapid: [],
+    useCannon: [],
 };
 function controlKeysFor(action: ControlAction) {
     return controlBindings[action] === DEFAULT_CONTROL_BINDINGS[action]
         ? [controlBindings[action], ...secondaryControlKeys[action]]
         : [controlBindings[action]];
+}
+function getPowerupControlAction(kind: PowerupKind) {
+    return (Object.keys(POWERUP_CONTROL_ACTIONS) as ControlAction[])
+        .find((action) => POWERUP_CONTROL_ACTIONS[action] === kind);
+}
+function getPowerupControlKey(kind: PowerupKind) {
+    const action = getPowerupControlAction(kind);
+    return action ? formatControlBinding(controlBindings[action]) : "";
 }
 
 function getInventory(): Record<PowerupKind, number> {
@@ -7079,7 +7105,7 @@ function createControls() {
     controls.append(createButton("left", "←", moveLeft), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createButton("right", "→", moveRight), createHoldButton("shoot", "✦", shoot), createButton("restart", "↻", () => startGame(currentLevel)), createButton("exit", "Exit", showLevelMenu));
     const hint = document.createElement("small");
     hint.className = "controls-key-hint";
-    hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · Restart ${formatControlBinding(controlBindings.restart)} · Back ${formatControlBinding(controlBindings.back)}`;
+    hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · Restart ${formatControlBinding(controlBindings.restart)} · Back ${formatControlBinding(controlBindings.back)} · Shield ${getPowerupControlKey("shield")} · Boost ${getPowerupControlKey("boost")} · Rapid Fire ${getPowerupControlKey("rapid")} · Cannon ${getPowerupControlKey("cannon")}`;
     controls.append(hint);
     document.querySelector(".game-footer")?.append(controls);
 }
@@ -7094,6 +7120,11 @@ function createPowerupHud() {
         const button = document.createElement("button");
         button.className = `hud-power ${kind}`;
         button.type = "button";
+        const controlKey = getPowerupControlKey(kind);
+        if (controlKey) {
+            button.setAttribute("aria-label", `${powerupLabels[kind]} power-up (${controlKey})`);
+            button.title = `Press ${controlKey} to use`;
+        }
         button.addEventListener("click", () => useInventoryPowerup(kind));
         bar.append(button);
     });
@@ -7148,6 +7179,8 @@ function handleKeyDown(event: KeyboardEvent) {
     if (action === "jump") jump();
     if (action === "down") moveDown();
     if (action === "shoot") { shootingHeld = true; shoot(); }
+    const powerupKind = POWERUP_CONTROL_ACTIONS[action];
+    if (powerupKind) useInventoryPowerup(powerupKind);
 }
 function handleKeyUp(event: KeyboardEvent) {
     const targetElement = event.target instanceof HTMLElement ? event.target : null;
@@ -7876,7 +7909,9 @@ function updatePowerupHud() {
     document.querySelectorAll<HTMLButtonElement>(".hud-power").forEach((button) => { 
         const kind = button.classList.contains("shield") ? "shield" : button.classList.contains("boost") ? "boost" : button.classList.contains("rapid") ? "rapid" : button.classList.contains("star") ? "star" : "cannon" as PowerupKind; 
         const timer = kind === "shield" ? (shieldCharges ? ` x${shieldCharges}` : "") : kind === "cannon" && (cannonTimer === Number.POSITIVE_INFINITY || rapidCannonUntil > performance.now()) ? " READY" : kind === "boost" && boostTimer > 0 ? ` ${Math.ceil(boostTimer / 60)}s` : kind === "rapid" && rapidTimer > 0 ? ` ${Math.ceil(rapidTimer / 1000)}s` : kind === "star" && starPowerupActive ? ` ${Math.ceil(starPowerupTimer / 60)}s` : ""; 
-        button.textContent = `${powerupLabels[kind]} ${inventory[kind]}${timer}`; 
+        const controlKey = getPowerupControlKey(kind);
+        button.textContent = `${powerupLabels[kind]}${controlKey ? ` (${controlKey})` : ""} ${inventory[kind]}${timer}`;
+        if (controlKey) button.setAttribute("aria-label", `${powerupLabels[kind]} power-up, ${inventory[kind]} available. Press ${controlKey} to use.`);
         button.disabled = inventory[kind] < 1;
         button.classList.toggle("active", Boolean(timer)); 
     }); 

@@ -40,7 +40,7 @@ export type UnflippedRouteSnapshot = {
     playerX: number;
 };
 export type Level = { name: string; briefing: string; length: number; asteroids: number[]; walls: number[]; blocks?: number[]; enemies: number[]; spikes: number[]; gravity: number[]; portals?: number[]; secretPortals?: SecretPortal[]; flip?: number[]; flippedRoute?: FlippedRoute; powerups?: { index: number; kind: PowerupKind }[]; key?: number; secretKey?: SecretKeyPlacement; secretId?: string; specialAsteroids?: number[]; miniBosses?: number[]; boss?: boolean; bossIndex?: number; secret?: boolean; prestige?: boolean; prestigeRequirement?: number; type?: "normal" | "secret" | "prestige"; customId?: string; localOnly?: boolean; holiday?: "christmas" };
-export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "restart" | "back" | "confirm" | "switchPlanet";
+export type ControlAction = "left" | "right" | "jump" | "down" | "shoot" | "restart" | "back" | "confirm" | "switchPlanet" | "useShield" | "useBoost" | "useRapid" | "useCannon";
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
 export type CosmeticGroup = "skin" | "trail" | "avatar" | "color";
 export type UserRole = "player" | "tester" | "moderator" | "admin" | "level-maker" | "developer" | "owner";
