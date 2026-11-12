@@ -21,6 +21,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
   const runProofRecords = [];
   const codeRecords = [];
   const rewardEventRecords = [];
+  let recoveryBackupRecord = null;
   const ownerMessageRecords = [];
   let leaderboardDeletedCount = 0;
   let progressRecord = null;
@@ -72,6 +73,10 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
   const progress = {
     ...generic,
     async findOne() { return invalidProgress ? { data: { "orbit-password": "not valid" } } : progressRecord; },
+    async insertOne(document) {
+      progressRecord = document;
+      return { insertedId: document._id };
+    },
     find() { return { async toArray() { return progressRecord ? [{ ...progressRecord, data: { ...progressRecord.data } }] : []; } }; },
     async updateOne(filter, update) {
       if (!progressRecord || filter._id?.toString() !== progressRecord._id?.toString()) return { matchedCount: 0 };
@@ -89,6 +94,14 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
       });
       progressRecord.revision = (progressRecord.revision ?? 0) + (update.$inc?.revision ?? 0);
       return { matchedCount: 1 };
+    },
+  };
+  const profileBackups = {
+    ...generic,
+    async findOne(filter, options) {
+      assert.deepEqual(filter, { userId, fullProgress: true });
+      assert.deepEqual(options.sort, { createdAt: -1, _id: -1 });
+      return recoveryBackupRecord;
     },
   };
   const ownerMessages = {
@@ -162,6 +175,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
       if (name === "redemption_codes") return codes;
       if (name === "run_proofs") return runProofs;
       if (name === "reward_events") return rewardEvents;
+      if (name === "profile_backups") return profileBackups;
       return generic;
     } };
   };
@@ -399,6 +413,21 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     assert.equal(progressRecord.data["orbit-key-eclipse"], "1");
     assert.equal(progressRecord.data["orbit-golden-level-1"], "1");
     assert.equal(progressRecord.data["orbit-title-unlock-cadet"], "1");
+
+    progressRecord = null;
+    recoveryBackupRecord = {
+      userId,
+      fullProgress: true,
+      affectedProgress: { "orbit-claims": "42", "orbit-skin": "2" },
+      createdAt: new Date("2026-10-19T12:00:00Z"),
+    };
+    const recoveredResponse = await fetch(`${origin}/api/router?_route=account/progress`, { headers: { cookie } });
+    assert.equal(recoveredResponse.status, 200);
+    const recovered = await recoveredResponse.json();
+    assert.deepEqual(recovered.progress, recoveryBackupRecord.affectedProgress);
+    assert.equal(recovered.recoveredFromBackup, true);
+    assert.equal(recovered.backupCreatedAt, recoveryBackupRecord.createdAt.toISOString());
+    assert.deepEqual(progressRecord.data, recoveryBackupRecord.affectedProgress);
   } finally {
     if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     MongoClient.prototype.connect = originalConnect;

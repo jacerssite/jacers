@@ -44,13 +44,17 @@ test("the web server starts before MongoDB, survives failures, and enables the A
     async createIndex() { indexWrites++; await indexesReady; },
     async updateMany() {},
     async updateOne() {},
+    async command() {
+      if (failReads) throw new MongoNetworkError("Connection lost");
+      return { ok: 1 };
+    },
     find() {
       reads++;
       if (failReads) throw new MongoNetworkError("Connection lost");
       return { sort() { return this; }, async toArray() { return []; } };
     },
   };
-  t.mock.method(MongoClient.prototype, "db", () => ({ collection: () => collection }));
+  t.mock.method(MongoClient.prototype, "db", () => ({ collection: () => collection, command: collection.command }));
 
   try {
     const { startServer } = await import("../server/start.mjs");
@@ -59,8 +63,8 @@ test("the web server starts before MongoDB, survives failures, and enables the A
     const base = `http://127.0.0.1:${server.address().port}`;
 
     const health = await fetch(`${base}/api/health`);
-    assert.equal(health.status, 200);
-    assert.deepEqual(await health.json(), { ok: true });
+    assert.equal(health.status, 503);
+    assert.deepEqual(await health.json(), { ok: false, database: "unavailable" });
     const challenge = await fetch(`${base}/api/auth/human-challenge`);
     assert.equal(challenge.status, 200);
     await challenge.json();
@@ -92,11 +96,17 @@ test("the web server starts before MongoDB, survives failures, and enables the A
       assert.deepEqual(body, { levels: [] });
       return true;
     });
+    const healthy = await fetch(`${base}/api/health`);
+    assert.equal(healthy.status, 200);
+    assert.deepEqual(await healthy.json(), { ok: true, database: "connected" });
 
     failReads = true;
     const lostConnection = await fetch(`${base}/api/levels`);
     assert.equal(lostConnection.status, 503);
     assert.match((await lostConnection.json()).error, /temporarily unavailable/i);
+    const disconnectedHealth = await fetch(`${base}/api/health`);
+    assert.equal(disconnectedHealth.status, 503);
+    assert.match((await disconnectedHealth.json()).error, /temporarily unavailable/i);
     failReads = false;
     const reconnected = await fetch(`${base}/api/levels`);
     assert.equal(reconnected.status, 200);

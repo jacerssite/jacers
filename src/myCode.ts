@@ -45,6 +45,7 @@ function ensureChristmasLevels() {
     levels.splice(24, 0, ...CHRISTMAS_LEVELS.map((level) => structuredClone(level)));
 }
 let accountDeletionNoticeShown = false;
+let sharedRoutesNeedRecoveryNotice = false;
 let builtinLevelOverrides: Record<string, Level> = {};
 let portalAssignments: Record<string, string> = {};
 const secretPortalTargetLabels: Record<string, string> = {
@@ -1218,10 +1219,21 @@ async function refreshOnlineState(includeSession = true) {
         })(),
         (async () => {
             const sharedLevels = await apiRequest<{ levels: Level[] }>("/levels");
-            levels.splice(0, levels.length, ...levels.filter((level) => !level.customId || level.localOnly), ...sharedLevels.levels.map((level) => ({ ...level, localOnly: false })));
+            const cachedSharedLevels = readStoredLevels("orbit-global-level-cache")
+                .filter((level) => Boolean(level.customId) && !level.localOnly);
+            const keepCachedLevels = sharedLevels.levels.length === 0 && cachedSharedLevels.length > 0;
+            sharedRoutesNeedRecoveryNotice = keepCachedLevels;
+            const availableSharedLevels = keepCachedLevels ? cachedSharedLevels : sharedLevels.levels;
+            levels.splice(0, levels.length, ...levels.filter((level) => !level.customId || level.localOnly), ...availableSharedLevels.map((level) => ({ ...level, localOnly: false })));
             ensureChristmasLevels();
             applyBuiltinLevelOverrides();
-            localStorage.setItem("orbit-global-level-cache", JSON.stringify(sharedLevels.levels));
+            if (keepCachedLevels) {
+                if (document.querySelector(".home-screen")) {
+                    showAccountSyncWarning("The server returned no shared routes, so this device's cached routes were kept. Check the server database before clearing this device's data.");
+                }
+            } else {
+                localStorage.setItem("orbit-global-level-cache", JSON.stringify(sharedLevels.levels));
+            }
             configurePortalDistribution();
         })(),
     ];
@@ -2095,6 +2107,9 @@ function showMenu() {
     // do not expose a seasonal tile on the public main menu.
     menu.append(updateRail, accountRail, menuActions, secondaryActions, offlineOwnerButton);
     menu.append(createPageCounter()); document.body.replaceChildren(menu);
+    if (sharedRoutesNeedRecoveryNotice) {
+        showAccountSyncWarning("The server returned no shared routes, so this device's cached routes were kept. Check the server database before clearing this device's data.");
+    }
     if (readOfflineOwnerGrant()) {
         const updateOfflineOwnerControl = async () => {
             try {

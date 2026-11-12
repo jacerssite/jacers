@@ -104,6 +104,37 @@ test("client normal, secret, and prestige routes match the stable server reward 
   }
 });
 
+test("an empty shared-route response preserves cached routes and warns on the home screen", async () => {
+  const cachedRoute = {
+    name: "Cached Observatory",
+    briefing: "A restored shared route.",
+    length: 10,
+    asteroids: [2, 5],
+    walls: [3],
+    enemies: [7],
+    spikes: [],
+    gravity: [],
+    customId: "shared-route-1",
+    localOnly: false,
+  };
+  const { dom, document, window } = await createPage({}, {
+    "orbit-global-level-cache": JSON.stringify([cachedRoute]),
+  });
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    await waitFor(() => document.querySelector(".account-sync-warning"), "Missing shared routes should warn the player");
+    assert.match(document.querySelector(".account-sync-warning").textContent, /cached routes were kept/i);
+    clickButton(document, "Launch mission");
+    await waitFor(
+      () => [...document.querySelectorAll(".level-button")].some((button) => button.textContent.includes(cachedRoute.name)),
+      "Cached shared route was not available in mission select",
+    );
+    assert.deepEqual(JSON.parse(window.localStorage.getItem("orbit-global-level-cache")), [cachedRoute]);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("main menus, customization, settings, and a mission respond to player actions", async () => {
   const { dom, document, window, errors } = await createPage();
   try {

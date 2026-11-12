@@ -1069,7 +1069,16 @@ async function accountHandler(req, res, next, mode) {
   }
 }
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+app.get("/api/health", async (_req, res, next) => {
+  noStore(res);
+  if (!databaseReady) return res.status(503).json({ ok: false, database: "unavailable" });
+  try {
+    await (await getDatabase()).command({ ping: 1 });
+    res.json({ ok: true, database: "connected" });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/auth/human-challenge", humanChallengeLimiter, (_req, res) => {
   noStore(res);
@@ -1344,12 +1353,30 @@ app.get("/api/account/progress", requireUser, async (req, res, next) => {
   try {
     noStore(res);
     const db = await getDatabase();
-    const record = await db.collection("player_progress").findOne({ _id: req.user.id });
+    const collection = db.collection("player_progress");
+    let record = await collection.findOne({ _id: req.user.id });
+    let recoveredFromBackup = false;
+    let backupCreatedAt;
+    if (!record) {
+      const backup = await db.collection("profile_backups").findOne(
+        { userId: req.user.id, fullProgress: true },
+        { sort: { createdAt: -1, _id: -1 } },
+      );
+      const backupProgress = validatePlayerProgress(backup?.affectedProgress);
+      if (backupProgress) {
+        const restored = await initializePlayerProgress(collection, req.user.id, backupProgress);
+        if (!restored) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
+        record = { data: restored, updatedAt: new Date() };
+        recoveredFromBackup = true;
+        backupCreatedAt = backup.createdAt;
+      }
+    }
     const progress = record ? validatePlayerProgress(record.data) : null;
     if (record && !progress) return res.status(409).json({ error: "Saved player progress is invalid. Contact the owner for help." });
     res.json({
       progress,
       updatedAt: record?.updatedAt?.toISOString() ?? null,
+      ...(recoveredFromBackup ? { recoveredFromBackup: true, backupCreatedAt } : {}),
     });
   } catch (error) {
     next(error);

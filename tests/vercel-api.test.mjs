@@ -48,7 +48,7 @@ test("Vercel native MongoDB configuration initializes a fresh database and serve
   };
   MongoClient.prototype.db = function (name) {
     selectedDatabase = name ?? this.options.dbName;
-    return { collection: () => fakeCollection };
+    return { collection: () => fakeCollection, async command() { return { ok: 1 }; } };
   };
 
   let server;
@@ -61,7 +61,7 @@ test("Vercel native MongoDB configuration initializes a fresh database and serve
     const responses = await Promise.all(routes.map((route) => fetch(`${base}${route}`)));
     assert.deepEqual(responses.map((response) => response.status), [200, 200, 200, 200, 200]);
     const bodies = await Promise.all(responses.map((response) => response.json()));
-    assert.deepEqual(bodies[0], { ok: true });
+    assert.deepEqual(bodies[0], { ok: true, database: "connected" });
     assert.deepEqual(bodies[1], { levels: [] });
     assert.equal(bodies[2].user, null);
     assert.equal(bodies[3].goldenTimeLimitMs, 60000);
