@@ -361,9 +361,22 @@ test("Winter Orbit shows live cooldowns and respawns presents when they expire",
     "orbit-level-claims-24": "2",
   };
   let respawns = 0;
+  let catchUps = 0;
   const { dom, document, window } = await createPage({
     "/api/auth/session": { user: { id: "owner1", username: "Owner_1", role: "owner" } },
     "/api/account/progress": { progress },
+    "GET /api/holiday/christmas-advent": {
+      day: 3, claimedDays: [], missedDays: [1, 2], catchUpCost: 40, presents: 100, start: "12-01", end: "12-25",
+    },
+    "POST /api/holiday/christmas-advent/catch-up": () => {
+      catchUps++;
+      return {
+        progress: { ...progress, "orbit-christmas-presents": "60", "orbit-christmas-advent-1": "1", "orbit-christmas-advent-2": "1" },
+        days: [1, 2],
+        cost: 40,
+        rewards: [{ day: 1, reward: "+12 presents" }, { day: 2, reward: "+14 presents" }],
+      };
+    },
     "POST /api/holiday/christmas-routes/24/respawn": () => {
       respawns++;
       return { progress: { "orbit-level-complete-24": "1" } };
@@ -388,6 +401,26 @@ test("Winter Orbit shows live cooldowns and respawns presents when they expire",
     assert.match(route.querySelector("small").textContent, /Collect 5 presents/);
     assert.equal(window.localStorage.getItem("orbit-asteroids-24"), null);
     assert.equal(window.localStorage.getItem("orbit-level-claims-24"), null);
+
+    clickButton(document, "Advent calendar");
+    await waitFor(
+      () => [...document.querySelectorAll("button")].some((button) => button.textContent.includes("Recover 2 missed rewards")),
+      "Advent catch-up offer did not load",
+    );
+    const catchUp = [...document.querySelectorAll("button")].find((button) => button.textContent.includes("Recover 2 missed rewards"));
+    assert.ok(catchUp, "Calendar should offer a paid catch-up for missed days");
+    assert.match(catchUp.textContent, /40 presents/);
+    assert.equal(document.querySelector('[data-day="1"]').disabled, true, "Missed days should not be claimable for free");
+    assert.match(document.querySelector('[data-day="1"]').textContent, /MISSED/);
+    assert.equal(document.querySelector('[data-day="3"]').disabled, false, "Today's reward should remain free");
+    catchUp.click();
+    await waitFor(() => catchUps === 1, "Missed rewards were not recovered");
+    await waitFor(
+      () => [...document.querySelectorAll(".menu-copy")].some((copy) => copy.textContent.includes("Recovered 2 rewards for 40 presents")),
+      "Catch-up result was not shown",
+    );
+    assert.equal(document.querySelector('[data-day="1"]').textContent.includes("OPENED"), true);
+    assert.equal(document.querySelector('[data-day="2"]').textContent.includes("OPENED"), true);
   } finally {
     dom.window.close();
   }

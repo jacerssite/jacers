@@ -2005,6 +2005,18 @@ function christmasAdventDay(settings, now = new Date()) {
   return day <= 25 ? day : 0;
 }
 
+const CHRISTMAS_ADVENT_CATCH_UP_COST_PER_DAY = 20;
+const CHRISTMAS_ADVENT_CATCH_UP_COST_CAP = 200;
+
+function getMissedChristmasAdventDays(progress, currentDay) {
+  return Array.from({ length: Math.max(0, currentDay - 1) }, (_, index) => index + 1)
+    .filter((day) => progress[`orbit-christmas-advent-${day}`] !== "1");
+}
+
+function getChristmasAdventCatchUpCost(missedDays) {
+  return Math.min(CHRISTMAS_ADVENT_CATCH_UP_COST_CAP, missedDays * CHRISTMAS_ADVENT_CATCH_UP_COST_PER_DAY);
+}
+
 function applyChristmasAdventReward(progress, day) {
   const next = { ...progress, [`orbit-christmas-advent-${day}`]: "1" };
   if (day === 25) {
@@ -2043,8 +2055,79 @@ app.get("/api/holiday/christmas-advent", requireUser, async (req, res, next) => 
     const progress = validatePlayerProgress(record?.data ?? {}) ?? {};
     const claimedDays = Array.from({ length: 25 }, (_, index) => index + 1)
       .filter((day) => progress[`orbit-christmas-advent-${day}`] === "1");
-    res.json({ day: christmasAdventDay(settings), claimedDays, start: settings.adventStart, end: settings.adventEnd });
+    const day = christmasAdventDay(settings);
+    const missedDays = getMissedChristmasAdventDays(progress, day);
+    const savedPresents = Number(progress["orbit-christmas-presents"] ?? 0);
+    res.json({
+      day,
+      claimedDays,
+      missedDays,
+      catchUpCost: getChristmasAdventCatchUpCost(missedDays.length),
+      presents: Number.isSafeInteger(savedPresents) && savedPresents >= 0 ? savedPresents : 0,
+      start: settings.adventStart,
+      end: settings.adventEnd,
+    });
   } catch (error) { next(error); }
+});
+
+app.post("/api/holiday/christmas-advent/catch-up", requireSameOrigin, requireUser, async (req, res, next) => {
+  try {
+    const db = await getDatabase();
+    const session = mongoClient.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" }, { session });
+        const settings = resolveHolidayEventSettings(holiday?.value);
+        const currentDay = christmasAdventDay(settings);
+        if (!settings.christmasEnabled || !currentDay) {
+          throw Object.assign(new Error("The Christmas Advent calendar is not active."), { statusCode: 403 });
+        }
+        const collection = db.collection("player_progress");
+        const record = await collection.findOne({ _id: req.user.id }, { session });
+        let progress = validatePlayerProgress(record?.data ?? {});
+        if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
+        const missedDays = getMissedChristmasAdventDays(progress, currentDay);
+        if (!missedDays.length) {
+          throw Object.assign(new Error("You have no missed Advent rewards to recover."), { statusCode: 400 });
+        }
+        const cost = getChristmasAdventCatchUpCost(missedDays.length);
+        const presents = Number(progress["orbit-christmas-presents"] ?? 0);
+        if (!Number.isSafeInteger(presents) || presents < cost) {
+          throw Object.assign(new Error(`You need ${cost} Christmas presents to recover all missed Advent rewards.`), { statusCode: 400 });
+        }
+        progress = { ...progress, "orbit-christmas-presents": String(presents - cost) };
+        const rewards = [];
+        for (const day of missedDays) {
+          const reward = applyChristmasAdventReward(progress, day);
+          progress = reward.progress;
+          rewards.push({ day, reward: reward.reward });
+        }
+        const rewardEventId = `christmas-advent-catch-up:${req.user.id.toString()}:${currentDay}`;
+        await db.collection("reward_events").insertOne({
+          _id: rewardEventId,
+          userId: req.user.id,
+          source: "christmas-advent-catch-up",
+          days: missedDays,
+          spentPresents: cost,
+          createdAt: new Date(),
+        }, { session });
+        const saved = await writePlayerProgress(collection, req.user.id, progress, null, true, session);
+        if (!saved.progress) throw Object.assign(new Error("Could not save your Advent rewards. Try again."), { statusCode: 409 });
+        return { progress: saved.progress, days: missedDays, cost, rewards, rewardEventId };
+      });
+      await recordSecurityEvent(db, {
+        type: "reward-granted",
+        userId: req.user.id,
+        endpoint: "/api/holiday/christmas-advent/catch-up",
+        rewardEventId: result.rewardEventId,
+        validationResult: "accepted",
+      });
+      res.json(result);
+    } finally { await session.endSession(); }
+  } catch (error) {
+    if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
 });
 
 app.post("/api/holiday/christmas-advent/:day", requireSameOrigin, requireUser, async (req, res, next) => {
@@ -2055,7 +2138,7 @@ app.post("/api/holiday/christmas-advent/:day", requireSameOrigin, requireUser, a
     const holiday = await db.collection("game_settings").findOne({ _id: "holiday_event" });
     const settings = resolveHolidayEventSettings(holiday?.value);
     const currentDay = christmasAdventDay(settings);
-    if (!currentDay || day > currentDay) return res.status(400).json({ error: "That Advent calendar day is not available yet." });
+    if (!currentDay || day !== currentDay) return res.status(400).json({ error: "Only today's Advent reward can be opened for free. Recover missed days with Christmas presents." });
     if (!settings.christmasEnabled) return res.status(403).json({ error: "The Christmas event is not active." });
     const session = mongoClient.startSession();
     try {

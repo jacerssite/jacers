@@ -414,6 +414,52 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     assert.equal(progressRecord.data["orbit-golden-level-1"], "1");
     assert.equal(progressRecord.data["orbit-title-unlock-cadet"], "1");
 
+    const now = new Date();
+    const adventStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 24));
+    const annualDate = (date) => `${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+    settingsById.set("holiday_event", {
+      _id: "holiday_event",
+      value: { christmasEnabled: true, adventStart: annualDate(adventStart), adventEnd: annualDate(now) },
+    });
+    progressRecord = { _id: userId, revision: 1, data: { "orbit-christmas-presents": "199" } };
+    const adventResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-advent`, { headers: { cookie } });
+    assert.equal(adventResponse.status, 200);
+    const advent = await adventResponse.json();
+    assert.equal(advent.day, 25);
+    assert.deepEqual(advent.missedDays, Array.from({ length: 24 }, (_, index) => index + 1));
+    assert.equal(advent.catchUpCost, 200);
+    assert.equal(advent.presents, 199);
+
+    const oldDayResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-advent/1`, {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(oldDayResponse.status, 400);
+    assert.equal(progressRecord.data["orbit-christmas-advent-1"], undefined);
+
+    const insufficientCatchUp = await fetch(`${origin}/api/router?_route=holiday/christmas-advent/catch-up`, {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(insufficientCatchUp.status, 400);
+    assert.equal(progressRecord.data["orbit-christmas-presents"], "199");
+
+    progressRecord.data["orbit-christmas-presents"] = "250";
+    const catchUpResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-advent/catch-up`, {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(catchUpResponse.status, 200);
+    const catchUp = await catchUpResponse.json();
+    assert.deepEqual(catchUp.days, Array.from({ length: 24 }, (_, index) => index + 1));
+    assert.equal(catchUp.cost, 200);
+    assert.equal(rewardEventRecords.at(-1).source, "christmas-advent-catch-up");
+    assert.equal(rewardEventRecords.at(-1).spentPresents, 200);
+    for (const day of catchUp.days) assert.equal(progressRecord.data[`orbit-christmas-advent-${day}`], "1");
+
     progressRecord = null;
     recoveryBackupRecord = {
       userId,

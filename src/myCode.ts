@@ -2292,23 +2292,36 @@ async function showChristmasAdventCalendar() {
     enterAppPage(showChristmasAdventCalendar);
     const menu = document.createElement("main");
     menu.className = "menu-screen christmas-event-screen";
-    menu.innerHTML = `<p class="eyebrow">CHRISTMAS EVENT / ADVENT</p><h1>Advent <em>calendar</em></h1><p class="menu-copy">Open one server-saved reward each day. Earlier days remain available, but future days stay sealed.</p>`;
+    menu.innerHTML = `<p class="eyebrow">CHRISTMAS EVENT / ADVENT</p><h1>Advent <em>calendar</em></h1><p class="menu-copy">Open today's reward for free. Recover all missed days together with Christmas presents; future days stay sealed.</p>`;
     const status = document.createElement("p");
     status.className = "menu-copy";
     const grid = document.createElement("div");
     grid.className = "advent-calendar";
-    menu.append(grid, status, createTextButton("Back to Winter Orbit", showChristmasEvent), createPageCounter());
+    let recoverMissedRewards = async () => {};
+    const catchUp = createTextButton("Recover missed rewards", () => { void recoverMissedRewards(); });
+    catchUp.hidden = true;
+    menu.append(grid, status, catchUp, createTextButton("Back to Winter Orbit", showChristmasEvent), createPageCounter());
     document.body.replaceChildren(menu);
     try {
-        const calendar = await apiRequest<{ day: number; claimedDays: number[]; start: string; end: string }>("/holiday/christmas-advent");
+        const calendar = await apiRequest<{
+            day: number;
+            claimedDays: number[];
+            missedDays: number[];
+            catchUpCost: number;
+            presents: number;
+            start: string;
+            end: string;
+        }>("/holiday/christmas-advent");
         const claimed = new Set(calendar.claimedDays);
         for (let day = 1; day <= 25; day++) {
             const button = document.createElement("button");
             button.type = "button";
-            const available = calendar.day >= day && calendar.day > 0;
-            button.className = `advent-day${claimed.has(day) ? " claimed" : ""}${available ? " available" : ""}`;
+            button.dataset.day = String(day);
+            const available = calendar.day === day && calendar.day > 0;
+            const missed = calendar.missedDays.includes(day);
+            button.className = `advent-day${claimed.has(day) ? " claimed" : ""}${available ? " available" : ""}${missed ? " missed" : ""}`;
             button.disabled = claimed.has(day) || !available;
-            button.innerHTML = `<b>${day}</b><span>${claimed.has(day) ? "OPENED" : available ? "OPEN" : "LOCKED"}</span>`;
+            button.innerHTML = `<b>${day}</b><span>${claimed.has(day) ? "OPENED" : missed ? "MISSED" : available ? "OPEN" : "LOCKED"}</span>`;
             if (!button.disabled) button.addEventListener("click", async () => {
                 button.disabled = true;
                 try {
@@ -2322,6 +2335,41 @@ async function showChristmasAdventCalendar() {
                 } catch (error) { button.disabled = false; status.textContent = error instanceof Error ? error.message : "Could not open that calendar day."; }
             });
             grid.append(button);
+        }
+        if (calendar.missedDays.length) {
+            catchUp.hidden = false;
+            catchUp.textContent = `Recover ${calendar.missedDays.length} missed rewards / ${calendar.catchUpCost} presents`;
+            catchUp.disabled = calendar.presents < calendar.catchUpCost;
+            if (catchUp.disabled) {
+                status.textContent = `You have ${calendar.presents} presents. Collect ${calendar.catchUpCost - calendar.presents} more to recover all missed rewards.`;
+            }
+            recoverMissedRewards = async () => {
+                catchUp.disabled = true;
+                try {
+                    const result = await apiRequest<{
+                        progress: Record<string, string>;
+                        days: number[];
+                        cost: number;
+                        rewards: { day: number; reward: string }[];
+                    }>("/holiday/christmas-advent/catch-up", { method: "POST" });
+                    applySyncedProgress(getLocalAccountProgress(), result.progress);
+                    lastSyncedAccountProgress = serializeAccountProgress(result.progress);
+                    rememberProgressSnapshot(accountIdentity(currentOnlineUser), result.progress);
+                    result.days.forEach((day) => {
+                        const dayButton = grid.querySelector<HTMLButtonElement>(`[data-day="${day}"]`);
+                        if (!dayButton) return;
+                        dayButton.classList.add("claimed");
+                        dayButton.classList.remove("missed");
+                        dayButton.disabled = true;
+                        dayButton.innerHTML = `<b>${day}</b><span>OPENED</span>`;
+                    });
+                    catchUp.hidden = true;
+                    status.textContent = `Recovered ${result.days.length} rewards for ${result.cost} presents: ${result.rewards.map(({ day, reward }) => `Day ${day}: ${reward}`).join("; ")}`;
+                } catch (error) {
+                    catchUp.disabled = false;
+                    status.textContent = error instanceof Error ? error.message : "Could not recover the missed Advent rewards.";
+                }
+            };
         }
         if (!calendar.day) status.textContent = `The Advent calendar opens ${calendar.start} and closes after ${calendar.end}.`;
     } catch (error) {
