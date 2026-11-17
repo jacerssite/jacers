@@ -233,6 +233,8 @@ let accountProgressLoadRetryAt = 0;
 let accountProgressLoadFailed = false;
 let accountRedemptionInFlight = false;
 let lastSyncedAccountProgress = "";
+let completedRouteSavePending = false;
+let retryCompletedRouteSave: (() => void) | null = null;
 let pendingAccountProgressConflictIdentity: string | null = null;
 let loadedAccountProgressFor: string | null = null;
 let onlineSessionVersion = 0;
@@ -827,11 +829,14 @@ const LOCAL_DEVICE_PREFERENCE_KEYS = new Set([
     "orbit-music-track",
     "orbit-reduced-effects",
     "orbit-global-level-cache",
+    "orbit-custom-levels",
     OWNER_CHANGE_SCOPE_KEY,
 ]);
 
 function clearLocalAccountData() {
     offlineOwnerMode = false;
+    completedRouteSavePending = false;
+    retryCompletedRouteSave = null;
     setApiLocalOnlyMode(false);
     localStorage.removeItem(offlineOwnerGrantKey);
     Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -941,6 +946,18 @@ function showAccountProgressLoadWarning(message: string) {
 
 function clearAccountSyncWarning() {
     document.querySelector(".account-sync-warning")?.remove();
+}
+
+function showCompletedRouteSaveWarning(message: string) {
+    showAccountSyncWarning(message);
+    const notice = document.querySelector<HTMLElement>(".account-sync-warning");
+    if (!notice || !retryCompletedRouteSave || notice.querySelector(".route-save-retry")) return;
+    const retry = document.createElement("button");
+    retry.className = "route-save-retry";
+    retry.type = "button";
+    retry.textContent = "Retry route save";
+    retry.addEventListener("click", () => retryCompletedRouteSave?.());
+    notice.insertBefore(retry, notice.querySelector("button"));
 }
 
 async function syncAccountProgress(direction: "load" | "save", force = false) {
@@ -6641,6 +6658,10 @@ async function waitForRunProof(levelName: string, timeoutMs = 3000) {
 function startGame(levelIndex = currentLevel) {
     const level = levels[levelIndex];
     if (!level) return;
+    if (completedRouteSavePending) {
+        showCompletedRouteSaveWarning("Your previous route clear is still waiting to save. Retry the save before starting another route.");
+        return;
+    }
     if (currentOnlineUser && !ownerChangesAreLocal() && loadedAccountProgressFor !== accountIdentity(currentOnlineUser)) {
         showAccountProgressLoadWarning("Your account progress is still syncing. Gameplay is paused until your saved account data is restored.");
         return;
@@ -6732,19 +6753,48 @@ function showWinScreen() {
     const progressSaveStatus = document.createElement("p");
     progressSaveStatus.className = "menu-copy online-service-status";
     progressSaveStatus.setAttribute("role", "status");
+    const routeSaveActions: HTMLButtonElement[] = [];
+    const routeSaveRetry = createTextButton("Retry route save", () => retryCompletedRouteSave?.());
+    routeSaveRetry.hidden = true;
+    const routeSavePending = Boolean(currentOnlineUser && !isChristmasRoute);
     if (currentOnlineUser) {
-        progressSaveStatus.textContent = isChristmasRoute ? "Saving presents and route progress..." : "Saving your route progress...";
-        if (!isChristmasRoute) {
-            void (async () => {
-                await flushPendingAsteroidRewards(level.name);
-                await syncAccountProgress("save", true);
-                progressSaveStatus.textContent = "Route progress saved to your account.";
-            })().catch((error: unknown) => {
-                progressSaveStatus.textContent = `Route progress could not be saved: ${error instanceof Error ? error.message : "online service error"}`;
-                console.error("Could not save completed route progress:", error);
-            });
-        }
+        progressSaveStatus.textContent = isChristmasRoute
+            ? "Saving presents and route progress..."
+            : ownerChangesAreLocal()
+                ? "Local change scope is active; this route clear will not save to your account."
+                : "Saving your route progress...";
     }
+    if (routeSavePending) completedRouteSavePending = true;
+    const addRouteSaveAction = (button: HTMLButtonElement) => {
+        if (routeSavePending) {
+            button.disabled = true;
+            routeSaveActions.push(button);
+        }
+        return button;
+    };
+    const saveCompletedRoute = async () => {
+        if (!routeSavePending || !currentOnlineUser) return;
+        try {
+            if (ownerChangesAreLocal()) {
+                throw new Error("Owner change scope is Local. Change it to Public in the Control Center, then retry this route save.");
+            }
+            await flushPendingAsteroidRewards(level.name);
+            await syncAccountProgress("save", true);
+            completedRouteSavePending = false;
+            retryCompletedRouteSave = null;
+            routeSaveActions.forEach((action) => { action.disabled = false; });
+            routeSaveRetry.hidden = true;
+            progressSaveStatus.textContent = "Route progress saved to your account.";
+            clearAccountSyncWarning();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "online service error";
+            progressSaveStatus.textContent = `Route progress could not be saved: ${message}`;
+            routeSaveRetry.hidden = false;
+            showCompletedRouteSaveWarning(`Route progress is not saved yet: ${message}`);
+            console.error("Could not save completed route progress:", error);
+        }
+    };
+    if (routeSavePending) retryCompletedRouteSave = () => { void saveCompletedRoute(); };
     const screen = document.createElement("main");
     screen.className = "win-screen win-screen-animation";
     const reward = isChristmasLevel(level)
@@ -6754,8 +6804,9 @@ function showWinScreen() {
     if (currentOnlineUser) screen.append(progressSaveStatus);
     if (level.secret) {
         if (canClaimPrestige()) screen.append(createMenuButton("Prestige now", showPrestigeConfirmation));
-        screen.append(createMenuButton("Leave", showLevelMenu));
+        screen.append(addRouteSaveAction(createMenuButton("Leave", showLevelMenu)), routeSaveRetry);
         document.body.replaceChildren(screen);
+        if (routeSavePending) void saveCompletedRoute();
         return;
     }
     const runStatus = document.createElement("p");
@@ -6825,12 +6876,13 @@ function showWinScreen() {
         const required = Math.min(levels[nextLevel].prestigeRequirement ?? 1, prestigeMax);
         const next = createMenuButton(`Next sector needs prestige ${required}`, () => undefined);
         next.disabled = true;
-        screen.append(next);
+        screen.append(addRouteSaveAction(next));
     } else {
-        screen.append(createMenuButton(nextLevel >= 0 ? "Next sector" : "Replay sector", () => nextLevel >= 0 ? startGame(nextLevel) : startGame(currentLevel)));
+        screen.append(addRouteSaveAction(createMenuButton(nextLevel >= 0 ? "Next sector" : "Replay sector", () => nextLevel >= 0 ? startGame(nextLevel) : startGame(currentLevel))));
     }
-    screen.append(createTextButton("Mission select", showLevelMenu), createPageCounter());
+    screen.append(addRouteSaveAction(createTextButton("Mission select", showLevelMenu)), routeSaveRetry, createPageCounter());
     document.body.replaceChildren(screen);
+    if (routeSavePending) void saveCompletedRoute();
 }
 
 async function submitLeaderboardRun(status: HTMLElement, levelName: string, timeMs: number, abilities: string[], submitOwner = false, proofId?: string) {

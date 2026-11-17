@@ -734,6 +734,33 @@ test("startup reconciles concurrent account changes and preserves a recovery bac
   }
 });
 
+test("legacy local workshop routes do not block account route-progress saves", async () => {
+  const user = { username: "Pilot_7", role: "player", appearOffline: false };
+  let savedProgress;
+  const { dom, document, window } = await createPage({
+    "/api/auth/session": { user },
+    "GET /api/account/progress": { progress: {} },
+    "PUT /api/account/progress": ({ init }) => {
+      const body = JSON.parse(init.body);
+      savedProgress = body.progress;
+      return { progress: body.progress };
+    },
+  }, {
+    "jacer-local-owner": "pilot_7",
+    "orbit-level-complete-4": "1",
+    "orbit-custom-levels": JSON.stringify([{ name: "Local Draft" }]),
+  });
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    await waitFor(() => savedProgress, "Account progress was not synced");
+    assert.equal(savedProgress["orbit-level-complete-4"], "1");
+    assert.equal(savedProgress["orbit-custom-levels"], undefined, "Device-only route drafts must not enter the account save");
+    assert.notEqual(window.localStorage.getItem("orbit-custom-levels"), null, "Device-only route drafts should be preserved locally");
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("leaderboard profiles show the player's presence and character", async () => {
   const entry = { id: "entry", userId: "player1", username: "Pilot_7", level: "Vega Outpost", timeMs: 12000, abilities: [] };
   const player = { username: "Pilot_7", role: "player", isOnline: true, shipColor: "#abcdef", avatar: 0, skin: 0, trail: 0, asteroids: 42, specialAsteroids: 2, prestige: 0, routesCleared: 1, title: "Cadet" };
