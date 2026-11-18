@@ -168,6 +168,35 @@ test("main menus, customization, settings, and a mission respond to player actio
   }
 });
 
+test("phone viewport and held touch controls support mission movement", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  assert.match(html, /name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/);
+  const { dom, document, window } = await createPage();
+  try {
+    await waitFor(() => document.querySelector(".home-screen"), "Home screen did not load");
+    clickButton(document, "Launch mission");
+    document.querySelector(".level-button:not([disabled])").click();
+    await waitFor(() => document.querySelector(".game-frame"), "Mission did not start");
+    const right = document.querySelector('.control-button[aria-label="Hold to move right"]');
+    assert.ok(right, "A clearly labeled touch-and-hold direction control should be available");
+    const player = document.querySelector(".player");
+    const readX = () => Number(player.style.transform.match(/translate\((-?[\d.]+)px/)?.[1]);
+    const startingX = readX();
+    const pointerDown = new window.Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.defineProperty(pointerDown, "pointerId", { value: 1 });
+    right.dispatchEvent(pointerDown);
+    await waitFor(() => readX() > startingX + 8, "Holding a touch direction did not move the ship");
+    const releasedX = readX();
+    const pointerUp = new window.Event("pointerup", { bubbles: true });
+    Object.defineProperty(pointerUp, "pointerId", { value: 1 });
+    right.dispatchEvent(pointerUp);
+    await delay(80);
+    assert.equal(readX(), releasedX, "Releasing the touch direction should stop horizontal movement");
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("power-ups have configurable keyboard shortcuts that activate inventory and stay visible in game", async () => {
   const config = structuredClone(DEFAULT_GAME_CONFIG);
   config.powerupRules.oneActiveAtATime = false;

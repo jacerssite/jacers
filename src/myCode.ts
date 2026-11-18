@@ -192,6 +192,7 @@ let starPowerupTimer = 0;
 let powerupUsesThisLevel: Record<PowerupKind, number> = { shield: 0, boost: 0, rapid: 0, cannon: 0, star: 0 };
 let starPowerupElement: HTMLElement | null = null;
 const pressedKeys = new Set<string>();
+const activeTouchControls = new Map<number, string>();
 const DEFAULT_CONTROL_BINDINGS: Record<ControlAction, string> = {
     left: "arrowleft",
     right: "arrowright",
@@ -1428,13 +1429,22 @@ export function startApp() {
     if (!presenceHeartbeatTimer) presenceHeartbeatTimer = globalThis.setInterval(() => void sendPresenceHeartbeat(), 10_000);
     globalThis.addEventListener("keydown", handleKeyDown);
     globalThis.addEventListener("keyup", handleKeyUp);
-    globalThis.addEventListener("blur", () => pressedKeys.clear());
+    globalThis.addEventListener("blur", () => {
+        pressedKeys.clear();
+        activeTouchControls.clear();
+        shootingHeld = false;
+    });
     document.addEventListener("click", unlockMusic, { once: true });
     document.addEventListener("keydown", unlockMusic, { once: true });
     document.addEventListener("click", (event) => {
         if ((event.target as HTMLElement).closest("button, select, summary")) playSound("ui");
     });
     document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+            pressedKeys.clear();
+            activeTouchControls.clear();
+            shootingHeld = false;
+        }
         if (!document.hidden && currentOnlineUser && !offlineOwnerMode) void sendPresenceHeartbeat();
         if (document.hidden && !offlineOwnerMode && currentOnlineUser && loadedAccountProgressFor === accountIdentity(currentOnlineUser)) {
             forceSaveAccountProgress();
@@ -7217,7 +7227,7 @@ function exitSecretBossRoom() {
 
 function createControls() {
     const controls = document.createElement("nav"); controls.className = "controls"; controls.setAttribute("aria-label", "Game controls");
-    controls.append(createButton("left", "←", moveLeft), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createButton("right", "→", moveRight), createHoldButton("shoot", "✦", shoot), createButton("restart", "↻", () => startGame(currentLevel)), createButton("exit", "Exit", showLevelMenu));
+    controls.append(createDirectionalHoldButton("left", "←"), createButton("jump", "↑", jump), createButton("down", "↓", moveDown), createDirectionalHoldButton("right", "→"), createHoldButton("shoot", "✦", shoot), createButton("restart", "↻", () => startGame(currentLevel)), createButton("exit", "Exit", showLevelMenu));
     const hint = document.createElement("small");
     hint.className = "controls-key-hint";
     hint.textContent = `Controls: Left ${formatControlBinding(controlBindings.left)} · Right ${formatControlBinding(controlBindings.right)} · Jump ${formatControlBinding(controlBindings.jump)} · Down ${formatControlBinding(controlBindings.down)} · Shoot ${formatControlBinding(controlBindings.shoot)} · Restart ${formatControlBinding(controlBindings.restart)} · Back ${formatControlBinding(controlBindings.back)} · Shield ${getPowerupControlKey("shield")} · Boost ${getPowerupControlKey("boost")} · Rapid Fire ${getPowerupControlKey("rapid")} · Cannon ${getPowerupControlKey("cannon")}`;
@@ -7247,6 +7257,33 @@ function createPowerupHud() {
 }
 
 function createButton(className: string, text: string, action: () => void) { const button = document.createElement("button"); button.className = `control-button ${className}`; button.type = "button"; button.textContent = text; button.setAttribute("aria-label", className === "exit" ? "Back to mission select" : className === "restart" ? "Restart current level" : className === "jump" ? "Jump" : className === "shoot" ? `Fire cannon (${formatControlBinding("shoot")})` : `Move ${className}`); button.addEventListener("click", () => action()); return button; }
+function createDirectionalHoldButton(direction: "left" | "right", text: string) {
+    const button = document.createElement("button");
+    button.className = `control-button ${direction}`;
+    button.type = "button";
+    button.textContent = text;
+    button.setAttribute("aria-label", `Hold to move ${direction}`);
+    button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        const key = controlKeysFor(direction)[0];
+        activeTouchControls.set(event.pointerId, key);
+        pressedKeys.add(key);
+        button.setPointerCapture?.(event.pointerId);
+    });
+    const release = (event: PointerEvent) => {
+        const key = activeTouchControls.get(event.pointerId);
+        if (!key) return;
+        activeTouchControls.delete(event.pointerId);
+        if (![...activeTouchControls.values()].includes(key)) pressedKeys.delete(key);
+    };
+    button.addEventListener("pointerup", release);
+    button.addEventListener("pointercancel", release);
+    button.addEventListener("lostpointercapture", release);
+    button.addEventListener("click", (event) => {
+        if (event.detail === 0) (direction === "left" ? moveLeft : moveRight)();
+    });
+    return button;
+}
 function createHoldButton(className: string, text: string, action: () => void) { const button = createButton(className, text, action); button.addEventListener("pointerdown", () => { shootingHeld = true; }); ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => button.addEventListener(eventName, () => { shootingHeld = false; })); return button; }
 function handleKeyDown(event: KeyboardEvent) {
     const targetElement = event.target instanceof HTMLElement ? event.target : null;

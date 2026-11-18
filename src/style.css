@@ -414,11 +414,15 @@ body #game-world.flipped-route { background: linear-gradient(180deg, #5b3285 0%,
 @media (max-width: 600px) {
 	header, .game-frame { width: calc(100% - 24px); }
 	header { padding-top: 20px; }
-	.hud { gap: 9px; font-size: .65rem; }
-	.game-frame { height: calc(100vh - 125px); min-height: 420px; }
-	.game-footer { grid-template-columns: 1fr; width: calc(100% - 24px); gap: 8px; }
-	.controls { justify-content: flex-start; max-width: none; }
-	.controls-key-hint { text-align: left; }
+	body:has(.game-frame) header { align-items: flex-start; flex-direction: column; gap: 12px; }
+	.hud { flex-wrap: wrap; gap: 8px 10px; font-size: .65rem; }
+	.powerup-hud { flex-wrap: wrap; }
+	.game-frame { height: clamp(250px, 52dvh, 460px); min-height: 250px; touch-action: manipulation; }
+	.game-footer { grid-template-columns: 1fr; width: calc(100% - 24px); gap: 8px; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+	.controls { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); justify-content: stretch; gap: 7px; width: 100%; max-width: none; }
+	.control-button { width: 100%; min-width: 0; height: 56px; touch-action: none; user-select: none; -webkit-user-select: none; }
+	.control-button.exit { width: 100%; }
+	.controls-key-hint { grid-column: 1 / -1; margin-top: 2px; font-size: .58rem; line-height: 1.5; text-align: left; }
 	.status { font-size: .62rem; }
 	.level-button { min-width: min(260px, 80vw); }
 	.menu-screen { align-content: start; padding: 38px 18px; }
