@@ -1598,17 +1598,25 @@ app.post("/api/rewards/asteroid", requireSameOrigin, requireUser, async (req, re
     try {
       const result = await session.withTransaction(async () => {
         const events = db.collection("reward_events");
+        let duplicateEvent = false;
         try {
           await events.insertOne({ _id: eventId, userId: req.user.id, source: "asteroid", levelName, asteroidIndex, createdAt: now }, { session });
         } catch (error) {
-          if (error?.code === 11000) throw Object.assign(new Error("This asteroid reward has already been claimed."), { statusCode: 409, duplicateReward: true });
-          throw error;
+          if (error?.code !== 11000) throw error;
+          duplicateEvent = true;
         }
         const collection = db.collection("player_progress");
         const record = await collection.findOne({ _id: req.user.id }, { session });
         const progress = validatePlayerProgress(record?.data ?? {});
         if (!progress) throw Object.assign(new Error("Saved player progress is invalid. Contact the owner for help."), { statusCode: 409 });
         const applied = applyTrustedAsteroidReward(progress, { levelName, levelIndex, asteroidIndex });
+        if (duplicateEvent && applied.status === "already-claimed") {
+          return {
+            progress,
+            reward: definition.currency === "presents" ? "present" : definition.currency === "specialClaims" ? "special asteroid" : "asteroid",
+            alreadyClaimed: true,
+          };
+        }
         if (applied.status !== "awarded" || !applied.progress) throw Object.assign(new Error("This asteroid reward has already been claimed."), { statusCode: 409 });
         const rewardKey = definition.currencyKey;
         const current = typeof progress[rewardKey] === "string" && /^\d{1,10}$/.test(progress[rewardKey]) ? Number(progress[rewardKey]) : 0;
@@ -1620,7 +1628,7 @@ app.post("/api/rewards/asteroid", requireSameOrigin, requireUser, async (req, re
         await recordSecurityEvent(db, { type: "reward-granted", userId: req.user.id, endpoint: "/api/rewards/asteroid", rewardEventId: eventId, validationResult: "accepted", oldBalances: { [rewardKey]: current }, proposedBalances: { [rewardKey]: current + 1 } });
         return { progress: saved.progress, reward: definition.currency === "presents" ? "present" : definition.currency === "specialClaims" ? "special asteroid" : "asteroid" };
       });
-      res.status(201).json(result);
+      res.status(result.alreadyClaimed ? 200 : 201).json(result);
     } catch (error) {
       if (Number.isInteger(error?.statusCode)) return res.status(error.statusCode).json({ error: error.message });
       throw error;

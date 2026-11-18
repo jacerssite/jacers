@@ -6803,7 +6803,7 @@ function showWinScreen() {
     screen.innerHTML = `<p class="eyebrow">BEACON REACHED / ${levels[currentLevel].secret ? "SECRET" : `SECTOR 0${currentLevel + 1}`}</p><h1>Claim <em>complete</em></h1><p class="time-result">${formatTime(elapsedMilliseconds)}</p><p class="menu-copy">${reward}</p>`;
     if (currentOnlineUser) screen.append(progressSaveStatus);
     if (level.secret) {
-        if (canClaimPrestige()) screen.append(createMenuButton("Prestige now", showPrestigeConfirmation));
+        if (canClaimPrestige()) screen.append(addRouteSaveAction(createMenuButton("Prestige now", showPrestigeConfirmation)));
         screen.append(addRouteSaveAction(createMenuButton("Leave", showLevelMenu)), routeSaveRetry);
         document.body.replaceChildren(screen);
         if (routeSavePending) void saveCompletedRoute();
@@ -6866,7 +6866,7 @@ function showWinScreen() {
         document.body.replaceChildren(screen);
         return;
     }
-    if (canClaimPrestige()) screen.append(createMenuButton("Prestige now", showPrestigeConfirmation));
+    if (canClaimPrestige()) screen.append(addRouteSaveAction(createMenuButton("Prestige now", showPrestigeConfirmation)));
     if (level.secret) {
         screen.append(createTextButton("Leave", showLevelMenu));
         document.body.replaceChildren(screen);

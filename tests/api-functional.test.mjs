@@ -110,7 +110,11 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
   };
   const rewardEvents = {
     ...generic,
-    async insertOne(document) { rewardEventRecords.push(document); return { insertedId: document._id }; },
+    async insertOne(document) {
+      if (rewardEventRecords.some((record) => record._id === document._id)) throw Object.assign(new Error("duplicate reward event"), { code: 11000 });
+      rewardEventRecords.push(document);
+      return { insertedId: document._id };
+    },
   };
   const settings = {
     ...generic,
@@ -275,6 +279,78 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
 
     role = "player";
     invalidProgress = false;
+    progressRecord = {
+      _id: userId,
+      revision: 1,
+      data: {
+        "orbit-claims": "2",
+        "orbit-special-claims": "3",
+        "orbit-christmas-presents": "4",
+        "orbit-avatar": "2",
+        "orbit-spin-avatar-7": "1",
+      },
+    };
+    const asteroidRewards = [
+      { proofId: "a".repeat(32), level: "Vega Outpost", levelIndex: 0, asteroidIndex: 0, balanceKey: "orbit-claims" },
+      { proofId: "b".repeat(32), level: "Eclipse Vault", levelIndex: 12, asteroidIndex: 0, balanceKey: "orbit-special-claims" },
+      { proofId: "c".repeat(32), level: "Frostbound Passage", levelIndex: 24, asteroidIndex: 0, balanceKey: "orbit-christmas-presents" },
+    ];
+    for (const reward of asteroidRewards) {
+      runProofRecords.push({
+        _id: reward.proofId,
+        userId,
+        levelName: reward.level,
+        startedAt: new Date(Date.now() - 10_000),
+        consumedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const requestReward = () => fetch(`${origin}/api/router?_route=rewards/asteroid`, {
+        method: "POST",
+        headers: { cookie, origin, "content-type": "application/json" },
+        body: JSON.stringify({ level: reward.level, levelIndex: reward.levelIndex, asteroidIndex: reward.asteroidIndex, proofId: reward.proofId }),
+      });
+      const firstReward = await requestReward();
+      assert.equal(firstReward.status, 201);
+      const awardedProgress = (await firstReward.json()).progress;
+      assert.equal(awardedProgress[reward.balanceKey], String(Number(progressRecord.data[reward.balanceKey])));
+      const retryReward = await requestReward();
+      assert.equal(retryReward.status, 200, "a retry after a lost response must confirm the committed reward");
+      const retryBody = await retryReward.json();
+      assert.equal(retryBody.alreadyClaimed, true);
+      assert.equal(retryBody.progress[reward.balanceKey], awardedProgress[reward.balanceKey]);
+      assert.equal(progressRecord.data[reward.balanceKey], awardedProgress[reward.balanceKey]);
+    }
+    const accountProgressResponse = await fetch(`${origin}/api/router?_route=account/progress`, { headers: { cookie } });
+    assert.equal(accountProgressResponse.status, 200);
+    const persistedRewardProgress = (await accountProgressResponse.json()).progress;
+    assert.equal(persistedRewardProgress["orbit-claims"], "3");
+    assert.equal(persistedRewardProgress["orbit-special-claims"], "4");
+    assert.equal(persistedRewardProgress["orbit-christmas-presents"], "5");
+    assert.equal(persistedRewardProgress["orbit-avatar"], "2");
+    assert.equal(persistedRewardProgress["orbit-spin-avatar-7"], "1");
+
+    const savedRouteProgress = {
+      ...persistedRewardProgress,
+      "orbit-level-complete-0": "1",
+      "orbit-level-1": "1",
+      "orbit-best-0": "12000",
+    };
+    const saveRouteResponse = await fetch(`${origin}/api/router?_route=account/progress`, {
+      method: "PUT",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: JSON.stringify({ progress: savedRouteProgress, baseProgress: persistedRewardProgress }),
+    });
+    assert.equal(saveRouteResponse.status, 200);
+    const routeSaveBody = await saveRouteResponse.json();
+    assert.equal(routeSaveBody.progress["orbit-level-complete-0"], "1");
+    assert.equal(routeSaveBody.progress["orbit-level-1"], "1");
+    const reloadRouteProgressResponse = await fetch(`${origin}/api/router?_route=account/progress`, { headers: { cookie } });
+    assert.equal(reloadRouteProgressResponse.status, 200);
+    const reloadedRouteProgress = (await reloadRouteProgressResponse.json()).progress;
+    assert.equal(reloadedRouteProgress["orbit-level-complete-0"], "1");
+    assert.equal(reloadedRouteProgress["orbit-level-1"], "1");
+    assert.equal(reloadedRouteProgress["orbit-best-0"], "12000");
+
     settingsById.set("holiday_event", { _id: "holiday_event", value: { christmasEnabled: true } });
     progressRecord = {
       _id: userId,
@@ -307,6 +383,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     assert.equal(rewardEventRecords.at(-1).cost, 25);
 
     progressRecord.data["orbit-christmas-presents"] = "24";
+    const rewardEventCountBeforeRejectedReset = rewardEventRecords.length;
     const insufficientResetResponse = await fetch(`${origin}/api/router?_route=holiday/christmas-routes/reset-cooldowns`, {
       method: "POST",
       headers: { cookie, origin, "content-type": "application/json" },
@@ -314,7 +391,7 @@ test("staff leaderboard returns player IDs and concurrent best runs keep the fas
     });
     assert.equal(insufficientResetResponse.status, 400);
     assert.equal(progressRecord.data["orbit-christmas-presents"], "24");
-    assert.equal(rewardEventRecords.length, 1);
+    assert.equal(rewardEventRecords.length, rewardEventCountBeforeRejectedReset);
 
     progressRecord.data["orbit-asteroids-24"] = "[0,1]";
     delete progressRecord.data["orbit-level-complete-24"];
