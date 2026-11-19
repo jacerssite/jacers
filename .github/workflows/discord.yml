@@ -1,0 +1,20 @@
+name: Discord Commit Notification
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord Webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          # Wrap ONLY the commit message in single backticks (`)
+          CONTENT="\`$COMMIT_MSG\`"
+          JSON_PAYLOAD=$(jq -n --arg content "$CONTENT" '{content: $content}')
+          
+          curl -H "Content-Type: application/json" -X POST -d "$JSON_PAYLOAD" "$WEBHOOK_URL"
